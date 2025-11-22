@@ -57,6 +57,33 @@ const repo = {
   createUser: async (userData) => {
     return models.User.create(userData);
   },
+
+  saveRefreshToken: async (tokenData) => {
+    // Delete existing refresh tokens for this user
+    await models.AuthToken.destroy({
+      where: { user: tokenData.user },
+    });
+    // Create new refresh token
+    return models.AuthToken.create(tokenData);
+  },
+
+  findRefreshToken: async (token) => {
+    return models.AuthToken.findOne({
+      where: { token },
+    });
+  },
+
+  deleteRefreshToken: async (token) => {
+    return models.AuthToken.destroy({
+      where: { token },
+    });
+  },
+
+  deleteAllUserRefreshTokens: async (userId) => {
+    return models.AuthToken.destroy({
+      where: { user: userId },
+    });
+  },
 };
 
 export default repo;

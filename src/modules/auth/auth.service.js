@@ -8,11 +8,12 @@ import {
   validateForgotPassword,
   validateOtpData,
   validateUserId,
+  validateRefreshToken,
 } from "./auth.validator.js";
 import repo from "./auth.repo.js";
 import companyRepo from "../company/company.repo.js";
 import otpRepo from "./otp.repo.js";
-import { generateJWT } from "../../middlewares/jwt.service.js";
+import { generateJWT, verifyJWT } from "../../middlewares/jwt.service.js";
 import { getRoleService } from "../role/role.service.js";
 import CustomError from "../../utils/custom-error.js";
 import env from "../../config/env.js";
@@ -157,6 +158,72 @@ export const signUpService = async (userData) => {
   return { user: newUser };
 };
 
+export const refreshTokenService = async (refreshTokenData) => {
+  const { error } = validateRefreshToken({ refreshToken: refreshTokenData });
+  if (error) {
+    throw new CustomError(error.details[0].message, 400);
+  }
+
+  const refreshToken = refreshTokenData;
+
+  // Remove Bearer prefix if present
+  const token = refreshToken.replace(/^Bearer\s+/i, "");
+
+  // Verify refresh token
+  let decoded;
+  try {
+    decoded = await verifyJWT(token, jwt.refreshSecret);
+  } catch (error) {
+    if (error.message === "jwt expired") {
+      // Delete expired refresh token from database
+      await repo.deleteRefreshToken(token);
+      throw new CustomError("Refresh token expired. Please login again", 401);
+    }
+    throw new CustomError("Invalid refresh token", 401);
+  }
+
+  // Check if refresh token exists in database
+  const storedToken = await repo.findRefreshToken(token);
+  if (!storedToken) {
+    throw new CustomError("Refresh token not found or revoked", 401);
+  }
+
+  // Get user to check if still exists and get role
+  const user = await repo.findUser(decoded.userId);
+  if (!user) {
+    await repo.deleteRefreshToken(token);
+    throw new CustomError("User not found", 404);
+  }
+
+  // Generate new access token
+  let payload = {
+    userId: user.id,
+  };
+
+  if (user.roleId) {
+    const role = await getRoleService(user.roleId);
+    payload = {
+      userId: user.id,
+      roleData: role,
+    };
+  }
+
+  const newAccessToken = await generateJWT(payload, jwt.accessSecret, {
+    expiresIn: jwt.accessExpiry,
+  });
+
+  return { accessToken: newAccessToken };
+};
+
+export const logoutService = async (userId) => {
+  if (!userId) {
+    throw new CustomError("User ID is required", 400);
+  }
+  // Delete all refresh tokens for the user
+  await repo.deleteAllUserRefreshTokens(userId);
+  return { message: "Logged out successfully" };
+};
+
 export const changePasswordService = async (userData) => {
   const hashedPassword = await hash(userData.newPassword, 10);
   const user = await repo.findUser(userData.userId, true);
@@ -208,5 +275,16 @@ export const signInService = async (userData) => {
     expiresIn: jwt.accessExpiry,
   });
 
-  return { user, accessToken };
+  const refreshToken = await generateJWT(payload, jwt.refreshSecret, {
+    expiresIn: jwt.refreshExpiry,
+  });
+
+  // Store refresh token in database
+  await repo.saveRefreshToken({
+    user: user.id,
+    token: refreshToken.replace("Bearer ", ""),
+    email: user.email,
+  });
+
+  return { user, accessToken, refreshToken };
 };

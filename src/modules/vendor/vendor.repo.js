@@ -76,7 +76,7 @@ const repo = {
     const countQuery = `
       SELECT 
         vc.id,
-        vc.vendorId,
+        vc."vendorId",
         COUNT(DISTINCT c.id) AS "contractCount",
         COUNT(DISTINCT CASE WHEN c.status = 'Accepted' THEN c.id END) AS "approvedContractCount"
       FROM "VendorCompanies" vc

@@ -83,3 +83,13 @@ export const validateOtpData = (userData) => {
   return schema.validate(userData, options);
 };
 
+export const validateRefreshToken = (data) => {
+  const schema = Joi.object({
+    refreshToken: Joi.string().required().messages({
+      "any.required": "Refresh token is required",
+    }),
+  });
+
+  return schema.validate(data, options);
+};
+

@@ -2,8 +2,28 @@ import { Op } from "sequelize";
 import companyRepo from "./company.repo.js";
 import CustomError from "../../utils/custom-error.js";
 
+const natureEnum = ["Domestic", "Interational"];
+const employeesEnum = ["0-10", "10-100", "100-1000", "1000+"];
+const industryEnum = ["Industry1", "Industry2"];
+const currencyEnum = ["INR", "USD", "EUR"];
+
+const validateEnumField = (value, validValues, fieldName) => {
+  if (value && !validValues.includes(value)) {
+    throw new CustomError(
+      `Invalid value '${value}' for field '${fieldName}'. Valid values are: ${validValues.join(", ")}`,
+      400
+    );
+  }
+};
+
 export const createCompanyService = async (companyData, files = []) => {
   try {
+    // Validate enum fields
+    validateEnumField(companyData.nature, natureEnum, "nature");
+    validateEnumField(companyData.numberOfEmployees, employeesEnum, "numberOfEmployees");
+    validateEnumField(companyData.industryType, industryEnum, "industryType");
+    validateEnumField(companyData.typeOfCurrency, currencyEnum, "typeOfCurrency");
+
     if (files.length > 0) {
       companyData.companyLogo = files[0].filename;
     }
@@ -54,6 +74,12 @@ export const updadateCompanyService = async (
   attachmentFiles = []
 ) => {
   try {
+    // Validate enum fields if they are being updated
+    validateEnumField(companyData.nature, natureEnum, "nature");
+    validateEnumField(companyData.numberOfEmployees, employeesEnum, "numberOfEmployees");
+    validateEnumField(companyData.industryType, industryEnum, "industryType");
+    validateEnumField(companyData.typeOfCurrency, currencyEnum, "typeOfCurrency");
+
     for (const file of attachmentFiles) {
       switch (file.fieldname) {
         case "companyLogo":

@@ -6,6 +6,8 @@ import {
   resetPasswordService,
   changePasswordService,
   resetPasswordAutoService,
+  refreshTokenService,
+  logoutService,
 } from "./auth.service.js";
 
 export const resetPassword = async (req, res, next) => {
@@ -79,6 +81,31 @@ export const signInUser = async (req, res, next) => {
     response.user.password = undefined;
     res.status(200).json({
       message: "Successfully signed in",
+      data: response,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const refreshToken = async (req, res, next) => {
+  try {
+    const refreshTokenValue = req.body.refreshToken || req.header("x-refresh-token");
+    const response = await refreshTokenService(refreshTokenValue);
+    res.status(200).json({
+      message: "Token refreshed successfully",
+      data: response,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const logout = async (req, res, next) => {
+  try {
+    const response = await logoutService(req.context?.userId);
+    res.status(200).json({
+      message: "Logged out successfully",
       data: response,
     });
   } catch (error) {
