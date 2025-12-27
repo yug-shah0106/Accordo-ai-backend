@@ -55,8 +55,12 @@ export const getContractsService = async (
     }
 
     if (filters) {
-      const filterData = JSON.parse(decodeURIComponent(filters));
-      queryOptions.where = util.filterUtil(filterData);
+      try {
+        const filterData = JSON.parse(decodeURIComponent(filters));
+        queryOptions.where = util.filterUtil(filterData);
+      } catch (error) {
+        throw new CustomError("Invalid filters format", 400);
+      }
     }
 
     const { rows, count } = await repo.getContracts(queryOptions);
@@ -75,6 +79,8 @@ const stringifyIfObject = (value) => {
   if (value && typeof value === "object") {
     return JSON.stringify(value);
   }
+  // If it's already a string, return it as-is
+  // If it's null or undefined, return it
   return value;
 };
 
@@ -149,13 +155,25 @@ export const updateContractService = async (
   uniqueToken
 ) => {
   try {
+    if (!contractId && !uniqueToken) {
+      throw new CustomError("Either contractId or uniqueToken is required", 400);
+    }
+
     contractData.updatedBy = userId;
     await applyStatusSideEffects(contractId, contractData);
 
     if (uniqueToken) {
-      await repo.updateContractByToken(uniqueToken, contractData);
+      const [affectedRows] = await repo.updateContractByToken(uniqueToken, contractData);
+      if (affectedRows === 0) {
+        throw new CustomError("Contract not found", 404);
+      }
     } else if (contractId) {
-      await repo.updateContract(contractId, contractData);
+      const [affectedRows] = await repo.updateContract(contractId, contractData);
+      if (affectedRows === 0) {
+        throw new CustomError("Contract not found", 404);
+      }
+    } else {
+      throw new CustomError("Either contractId or uniqueToken is required", 400);
     }
 
     const contract = contractId
@@ -163,7 +181,7 @@ export const updateContractService = async (
       : await repo.getContractByToken(uniqueToken);
 
     if (!contract) {
-      return null;
+      throw new CustomError("Contract not found", 404);
     }
 
     const requisitionId = contract.requisitionId;
@@ -186,7 +204,21 @@ export const updateContractService = async (
 
     return contract;
   } catch (error) {
-    throw new CustomError(`Service ${error}`, 400);
+    // If it's already a CustomError, re-throw it
+    if (error instanceof CustomError) {
+      throw error;
+    }
+    // Handle Sequelize validation errors
+    if (error.name === "SequelizeValidationError" || error.name === "SequelizeUniqueConstraintError") {
+      const message = error.errors?.map((e) => e.message).join(", ") || error.message;
+      throw new CustomError(message, 400);
+    }
+    // Handle other Sequelize errors
+    if (error.name?.startsWith("Sequelize")) {
+      throw new CustomError(error.message || "Database error occurred", 400);
+    }
+    // Otherwise, wrap it with a proper error message
+    throw new CustomError(error.message || `Service error: ${String(error)}`, 400);
   }
 };
 

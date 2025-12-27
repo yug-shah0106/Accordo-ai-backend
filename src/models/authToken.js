@@ -4,7 +4,7 @@ export default function authTokenModel(sequelize) {
   class AuthToken extends Model {
     static associate(models) {
       this.belongsTo(models.User, {
-        foreignKey: "user",
+        foreignKey: "user_id",
         as: "User",
         constraints: false,
       });
@@ -13,7 +13,7 @@ export default function authTokenModel(sequelize) {
 
   AuthToken.init(
     {
-      user: DataTypes.INTEGER,
+      user_id: DataTypes.INTEGER,
       token: DataTypes.STRING,
       email: DataTypes.STRING,
       createdAt: DataTypes.DATE,
@@ -30,3 +30,4 @@ export default function authTokenModel(sequelize) {
 
   return AuthToken;
 }
+

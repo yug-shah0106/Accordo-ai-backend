@@ -13,12 +13,6 @@ const userModel = (sequelize) => {
         foreignKey: "roleId",
         as: "Role",
       });
-      this.belongsTo(models.RolePermission, {
-        foreignKey: "roleId",
-        targetKey: "roleId",
-        as: "RolePermission",
-        constraints: false,
-      });
       this.hasMany(models.Contract, {
         foreignKey: "vendorId",
         as: "Contract",

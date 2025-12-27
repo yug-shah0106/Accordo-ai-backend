@@ -1,6 +1,7 @@
+"use strict";
 import { Model, DataTypes } from "sequelize";
 
-export default function vendorCompanyModel(sequelize) {
+const vendorCompanyModel = (sequelize) => {
   class VendorCompany extends Model {
     static associate(models) {
       this.belongsTo(models.User, {
@@ -29,4 +30,7 @@ export default function vendorCompanyModel(sequelize) {
   );
 
   return VendorCompany;
-}
+};
+
+export default vendorCompanyModel;
+

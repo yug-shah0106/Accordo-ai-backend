@@ -74,6 +74,9 @@ const requisitionModel = (sequelize) => {
       pricePriority: DataTypes.STRING,
       deliveryPriority: DataTypes.STRING,
       paymentTermsPriority: DataTypes.STRING,
+      batna: DataTypes.DOUBLE,
+      discountedValue: DataTypes.DOUBLE,
+      maxDiscount: DataTypes.DOUBLE,
     },
     {
       sequelize,

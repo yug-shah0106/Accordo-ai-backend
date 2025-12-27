@@ -60,33 +60,37 @@ export const getVendorsService = async (
   };
 
   if (filters) {
-    const filterData = JSON.parse(decodeURIComponent(filters));
-    const transformedFilters = util.filterUtil(filterData);
-    if (Object.keys(transformedFilters).length) {
-      queryOptions.filters = transformedFilters;
-    }
-
-    const totalContractsFilter = filterData.find((item) => item.filterBy === "totalContracts");
-    const completedContractsFilter = filterData.find(
-      (item) => item.filterBy === "completedContracts"
-    );
-    const vendorStatusFilter = filterData.find((item) => item.filterBy === "vendorStatus");
-
-    const totalRange = parseRange(totalContractsFilter?.value);
-    if (totalRange) {
-      queryOptions.totalContractsRange = totalRange;
-    }
-
-    const completedRange = parseRange(completedContractsFilter?.value);
-    if (completedRange) {
-      queryOptions.completedContractsRange = completedRange;
-    }
-
-    if (Array.isArray(vendorStatusFilter?.value) && vendorStatusFilter.value.length) {
-      const cleaned = vendorStatusFilter.value.filter((val) => typeof val === "string");
-      if (cleaned.length) {
-        queryOptions.vendorStatusList = cleaned;
+    try {
+      const filterData = JSON.parse(decodeURIComponent(filters));
+      const transformedFilters = util.filterUtil(filterData);
+      if (Object.keys(transformedFilters).length) {
+        queryOptions.filters = transformedFilters;
       }
+
+      const totalContractsFilter = filterData.find((item) => item.filterBy === "totalContracts");
+      const completedContractsFilter = filterData.find(
+        (item) => item.filterBy === "completedContracts"
+      );
+      const vendorStatusFilter = filterData.find((item) => item.filterBy === "vendorStatus");
+
+      const totalRange = parseRange(totalContractsFilter?.value);
+      if (totalRange) {
+        queryOptions.totalContractsRange = totalRange;
+      }
+
+      const completedRange = parseRange(completedContractsFilter?.value);
+      if (completedRange) {
+        queryOptions.completedContractsRange = completedRange;
+      }
+
+      if (Array.isArray(vendorStatusFilter?.value) && vendorStatusFilter.value.length) {
+        const cleaned = vendorStatusFilter.value.filter((val) => typeof val === "string");
+        if (cleaned.length) {
+          queryOptions.vendorStatusList = cleaned;
+        }
+      }
+    } catch (error) {
+      throw new CustomError("Invalid filters format", 400);
     }
   }
 

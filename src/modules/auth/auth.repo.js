@@ -23,7 +23,7 @@ const repo = {
           where: {
             for: "forgot_password",
             otp: userData.otp,
-            createdAt: { [Op.lt]: Date.now() + 3600000 },
+            createdAt: { [Op.gt]: new Date(Date.now() - 3600000) },
           },
           order: [["createdAt", "DESC"]],
         },
@@ -41,27 +41,33 @@ const repo = {
   findUserByEmail: async (email) => {
     return models.User.scope("withPassword").findOne({
       where: { email },
-      include: {
-        model: models.Role,
-        as: "Role",
-        attributes: ["name"],
-        include: {
-          model: models.RolePermission,
-          as: "RolePermission",
-          attributes: ["moduleId", "permission"],
+      include: [
+        {
+          model: models.Role,
+          as: "Role",
+          required: false,
+          attributes: ["name"],
+          include: [
+            {
+              model: models.RolePermission,
+              as: "RolePermission",
+              required: false,
+              attributes: ["moduleId", "permission"],
+            },
+          ],
         },
-      },
+      ],
     });
   },
 
-  createUser: async (userData) => {
-    return models.User.create(userData);
+  createUser: async (userData, transaction = null) => {
+    return models.User.create(userData, { transaction });
   },
 
   saveRefreshToken: async (tokenData) => {
     // Delete existing refresh tokens for this user
     await models.AuthToken.destroy({
-      where: { user: tokenData.user },
+      where: { user_id: tokenData.user_id },
     });
     // Create new refresh token
     return models.AuthToken.create(tokenData);
@@ -81,7 +87,7 @@ const repo = {
 
   deleteAllUserRefreshTokens: async (userId) => {
     return models.AuthToken.destroy({
-      where: { user: userId },
+      where: { user_id: userId },
     });
   },
 };

@@ -34,6 +34,9 @@ export const log = async (req, res, next, moduleName, action) => {
 
 export const checkPermission = async (req, res, next, moduleId, permission) => {
   try {
+    if (!req.context || !req.context.userId) {
+      throw new CustomError("Authentication required", 401);
+    }
     const allowed = await checkPermissionService(
       req.context.userId,
       moduleId,

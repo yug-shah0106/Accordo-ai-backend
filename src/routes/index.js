@@ -13,6 +13,8 @@ import customerRoutes from "../modules/customer/customer.routes.js";
 import benchmarkRoutes from "../modules/benchmark/benchmark.routes.js";
 import permissionRoutes from "../modules/permission/permission.routes.js";
 import dashboardRoutes from "../modules/dashboard/dashboard.routes.js";
+import negotiationRoutes from "../modules/negotiation/negotiation.routes.js";
+import chatRoutes from "../modules/chat/chat.routes.js";
 
 const router = Router();
 
@@ -34,5 +36,7 @@ router.use("/customer", customerRoutes);
 router.use("/benchmark", benchmarkRoutes);
 router.use("/permission", permissionRoutes);
 router.use("/dashboard", dashboardRoutes);
+router.use("/negotiation", negotiationRoutes);
+router.use("/chat", chatRoutes);
 
 export default router;

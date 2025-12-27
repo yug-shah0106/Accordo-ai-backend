@@ -17,7 +17,14 @@ export const createRequisition = async (req, res, next) => {
 
 export const getRequisition = async (req, res, next) => {
   try {
-    const data = await getRequisitionService(req.params.requisitionid);
+    const requisitionId = parseInt(req.params.requisitionid, 10);
+    if (isNaN(requisitionId)) {
+      return res.status(400).json({ message: "Invalid requisition ID" });
+    }
+    const data = await getRequisitionService(requisitionId);
+    if (!data) {
+      return res.status(404).json({ message: "Requisition not found" });
+    }
     res.status(200).json({ message: "Requisition", data });
   } catch (error) {
     next(error);

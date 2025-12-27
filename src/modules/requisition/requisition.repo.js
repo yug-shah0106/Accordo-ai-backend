@@ -34,26 +34,34 @@ const repo = {
   },
 
   getRequisition: async (requisitionId) => {
-    return models.Requisition.findByPk(requisitionId, {
-      include: [
-        {
-          model: models.RequisitionProduct,
-          as: "RequisitionProduct",
-          include: {
-            model: models.Product,
-            as: "Product",
+    try {
+      return await models.Requisition.findByPk(Number(requisitionId), {
+        include: [
+          {
+            model: models.RequisitionProduct,
+            as: "RequisitionProduct",
+            required: false,
+            include: {
+              model: models.Product,
+              as: "Product",
+              required: false,
+            },
           },
-        },
-        {
-          model: models.RequisitionAttachment,
-          as: "RequisitionAttachment",
-        },
-        {
-          model: models.Contract,
-          as: "Contract",
-        },
-      ],
-    });
+          {
+            model: models.RequisitionAttachment,
+            as: "RequisitionAttachment",
+            required: false,
+          },
+          {
+            model: models.Contract,
+            as: "Contract",
+            required: false,
+          },
+        ],
+      });
+    } catch (error) {
+      throw new CustomError(`Repository error: ${error.message || error}`, 500);
+    }
   },
 
   getProjectIdsByCompanyId: async (companyId) => {

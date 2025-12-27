@@ -1,6 +1,7 @@
+"use strict";
 import { Model, DataTypes } from "sequelize";
 
-export default function rolePermissionModel(sequelize) {
+const rolePermissionModel = (sequelize) => {
   class RolePermission extends Model {
     static associate(models) {
       this.belongsTo(models.Role, {
@@ -30,4 +31,7 @@ export default function rolePermissionModel(sequelize) {
   );
 
   return RolePermission;
-}
+};
+
+export default rolePermissionModel;
+

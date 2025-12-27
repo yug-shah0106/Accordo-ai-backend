@@ -1,0 +1,20 @@
+{
+  "watch": ["src", "index.js"],
+  "ext": "js,json",
+  "ignore": ["node_modules", "*.test.js", "*.spec.js", "logs", "*.log", ".git"],
+  "exec": "node index.js",
+  "env": {
+    "NODE_ENV": "development"
+  },
+  "delay": 500,
+  "verbose": false,
+  "restartable": "rs",
+  "signal": "SIGTERM",
+  "killTimeout": 5000,
+  "legacyWatch": false,
+  "colours": true
+}
+
+
+
+

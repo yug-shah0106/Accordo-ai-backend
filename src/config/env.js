@@ -10,6 +10,7 @@ dotenv.config({ path: envPath });
 
 export const env = {
   nodeEnv: process.env.NODE_ENV || "development",
+  openaiApiKey: process.env.OPENAI_API_KEY,
   port: Number(process.env.PORT || 8000),
   logLevel: process.env.LOG_LEVEL || "info",
   database: {
@@ -44,6 +45,17 @@ export const env = {
     from: process.env.SMTP_FROM_EMAIL,
   },
   redisUrl: process.env.REDIS_URL,
+  llm: {
+    baseURL: process.env.LLM_BASE_URL || "http://localhost:11434",
+    model: process.env.LLM_MODEL || "llama3.2",
+    timeout: Number(process.env.LLM_TIMEOUT || 60000),
+  },
+  cors: {
+    origin: process.env.CORS_ORIGIN
+      ? process.env.CORS_ORIGIN.split(",").map((origin) => origin.trim())
+      : ["http://localhost:3000", "http://localhost:5173"],
+    credentials: true,
+  },
 };
 
 export default env;

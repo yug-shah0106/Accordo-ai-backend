@@ -1,6 +1,7 @@
+"use strict";
 import { Model, DataTypes } from "sequelize";
 
-export default function userActionModel(sequelize) {
+const userActionModel = (sequelize) => {
   class UserAction extends Model {
     static associate(models) {
       this.belongsTo(models.User, {
@@ -26,4 +27,7 @@ export default function userActionModel(sequelize) {
   );
 
   return UserAction;
-}
+};
+
+export default userActionModel;
+

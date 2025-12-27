@@ -40,7 +40,7 @@ const contractModel = (sequelize) => {
         defaultValue: "Created",
       },
       uniqueToken: DataTypes.STRING,
-      contractDetails: DataTypes.STRING,
+      contractDetails: DataTypes.TEXT,
       finalContractDetails: DataTypes.TEXT,
       openedAt: DataTypes.DATE,
       completedAt: DataTypes.DATE,

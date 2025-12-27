@@ -39,7 +39,12 @@ export const downloadPoService = async (poId) => {
     if (!po) {
       throw new CustomError("Po not found", 404);
     }
-    const lineItems = JSON.parse(po.lineItems || "[]");
+    let lineItems;
+    try {
+      lineItems = JSON.parse(po.lineItems || "[]");
+    } catch (error) {
+      throw new CustomError("Invalid lineItems format in PO", 400);
+    }
     const products = [];
     if (!Array.isArray(lineItems) || !lineItems.length) {
       throw new CustomError("At least one line item is required", 400);
@@ -79,11 +84,15 @@ export const getAllPoService = async (search, page = 1, limit = 10, userId, filt
     }
 
     if (filters) {
-      const filterData = JSON.parse(decodeURIComponent(filters));
-      queryOptions.where = {
-        ...util.filterUtil(filterData),
-        ...queryOptions.where,
-      };
+      try {
+        const filterData = JSON.parse(decodeURIComponent(filters));
+        queryOptions.where = {
+          ...util.filterUtil(filterData),
+          ...queryOptions.where,
+        };
+      } catch (error) {
+        throw new CustomError("Invalid filters format", 400);
+      }
     }
 
     const { rows, count } = await repo.getPos(queryOptions);
@@ -100,10 +109,22 @@ export const getAllPoService = async (search, page = 1, limit = 10, userId, filt
 
 export const createPoService = async (poData) => {
   try {
-    const lineItems =
-      typeof poData.lineItems === "string"
-        ? JSON.parse(poData.lineItems)
-        : poData.lineItems || [];
+    let lineItems;
+    if (typeof poData.lineItems === "string") {
+      try {
+        lineItems = JSON.parse(poData.lineItems);
+        if (!Array.isArray(lineItems)) {
+          throw new CustomError("lineItems must be an array", 400);
+        }
+      } catch (error) {
+        if (error instanceof CustomError) {
+          throw error;
+        }
+        throw new CustomError("Invalid lineItems format", 400);
+      }
+    } else {
+      lineItems = poData.lineItems || [];
+    }
 
     poData.subTotal = 0;
     poData.taxTotal = 0;

@@ -17,6 +17,7 @@ import { generateJWT, verifyJWT } from "../../middlewares/jwt.service.js";
 import { getRoleService } from "../role/role.service.js";
 import CustomError from "../../utils/custom-error.js";
 import env from "../../config/env.js";
+import { sequelize } from "../../config/database.js";
 
 const { smtp, jwt } = env;
 
@@ -133,29 +134,44 @@ export const signUpService = async (userData) => {
     throw new CustomError(`Email ${userData.email} already exists`, 409);
   }
 
-  const username = `${userData.email}`;
-  const hashedPassword = await hash(userData.password, 10);
-  const company = await companyRepo.createCompany();
-  userData.companyId = company.id;
+  const transaction = await sequelize.transaction();
 
-  const newUser = await repo.createUser({
-    ...userData,
-    username,
-    password: hashedPassword,
-  });
+  try {
+    const username = `${userData.email}`;
+    const hashedPassword = await hash(userData.password, 10);
+    const company = await companyRepo.createCompany({}, transaction);
+    userData.companyId = company.id;
 
-  const apiSecret = crypto.randomBytes(32).toString("hex");
-  const payload = {
-    userId: newUser.id,
-    companyId: userData.companyId,
-  };
-  const apiKey = await generateJWT(payload, apiSecret);
-  await companyRepo.updateCompany(userData.companyId, {
-    apiKey: apiKey.replace("Bearer ", ""),
-    apiSecret,
-  });
+    const newUser = await repo.createUser(
+      {
+        ...userData,
+        username,
+        password: hashedPassword,
+      },
+      transaction
+    );
 
-  return { user: newUser };
+    const apiSecret = crypto.randomBytes(32).toString("hex");
+    const payload = {
+      userId: newUser.id,
+      companyId: userData.companyId,
+    };
+    const apiKey = await generateJWT(payload, apiSecret);
+    await companyRepo.updateCompany(
+      userData.companyId,
+      {
+        apiKey: apiKey.replace("Bearer ", ""),
+        apiSecret,
+      },
+      transaction
+    );
+
+    await transaction.commit();
+    return { user: newUser };
+  } catch (error) {
+    await transaction.rollback();
+    throw error;
+  }
 };
 
 export const refreshTokenService = async (refreshTokenData) => {
@@ -281,7 +297,7 @@ export const signInService = async (userData) => {
 
   // Store refresh token in database
   await repo.saveRefreshToken({
-    user: user.id,
+    user_id: user.id,
     token: refreshToken.replace("Bearer ", ""),
     email: user.email,
   });

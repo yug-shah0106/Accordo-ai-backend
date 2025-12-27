@@ -1,6 +1,7 @@
+"use strict";
 import { Model, DataTypes } from "sequelize";
 
-export default function requisitionAttachmentModel(sequelize) {
+const requisitionAttachmentModel = (sequelize) => {
   class RequisitionAttachment extends Model {
     static associate(models) {
       this.belongsTo(models.Requisition, {
@@ -30,4 +31,7 @@ export default function requisitionAttachmentModel(sequelize) {
   );
 
   return RequisitionAttachment;
-}
+};
+
+export default requisitionAttachmentModel;
+

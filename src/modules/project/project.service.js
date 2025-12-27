@@ -62,10 +62,14 @@ export const getProjectsService = async (
     }
 
     if (filters) {
-      const filterData = JSON.parse(decodeURIComponent(filters));
-      const transformed = util.filterUtil(filterData);
-      if (Object.keys(transformed).length) {
-        queryOptions.where = transformed;
+      try {
+        const filterData = JSON.parse(decodeURIComponent(filters));
+        const transformed = util.filterUtil(filterData);
+        if (Object.keys(transformed).length) {
+          queryOptions.where = transformed;
+        }
+      } catch (error) {
+        throw new CustomError("Invalid filters format", 400);
       }
     }
 

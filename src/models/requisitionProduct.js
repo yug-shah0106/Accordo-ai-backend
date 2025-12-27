@@ -1,6 +1,7 @@
+"use strict";
 import { Model, DataTypes } from "sequelize";
 
-export default function requisitionProductModel(sequelize) {
+const requisitionProductModel = (sequelize) => {
   class RequisitionProduct extends Model {
     static associate(models) {
       this.belongsTo(models.Requisition, {
@@ -33,4 +34,7 @@ export default function requisitionProductModel(sequelize) {
   );
 
   return RequisitionProduct;
-}
+};
+
+export default requisitionProductModel;
+

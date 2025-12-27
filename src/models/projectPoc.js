@@ -1,6 +1,7 @@
+"use strict";
 import { Model, DataTypes } from "sequelize";
 
-export default function projectPocModel(sequelize) {
+const projectPocModel = (sequelize) => {
   class ProjectPoc extends Model {
     static associate(models) {
       this.belongsTo(models.Project, {
@@ -35,4 +36,7 @@ export default function projectPocModel(sequelize) {
   );
 
   return ProjectPoc;
-}
+};
+
+export default projectPocModel;
+

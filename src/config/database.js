@@ -4,11 +4,11 @@ import env from "./env.js";
 
 const sslConfig = env.database.ssl
   ? {
-      ssl: {
-        require: true,
-        rejectUnauthorized: env.database.sslRejectUnauthorized,
-      },
-    }
+    ssl: {
+      require: true,
+      rejectUnauthorized: env.database.sslRejectUnauthorized,
+    },
+  }
   : {};
 
 const buildClientConfig = (database) => ({
@@ -19,11 +19,11 @@ const buildClientConfig = (database) => ({
   database,
   ...(env.database.ssl
     ? {
-        ssl: {
-          require: true,
-          rejectUnauthorized: env.database.sslRejectUnauthorized,
-        },
-      }
+      ssl: {
+        require: true,
+        rejectUnauthorized: env.database.sslRejectUnauthorized,
+      },
+    }
     : {}),
 });
 
@@ -39,7 +39,10 @@ export const ensureDatabaseExists = async () => {
     );
 
     if (result.rowCount === 0) {
-      const dbName = env.database.name.replace(/"/g, '""');
+      const dbName = env.database.name;
+      if (!/^[a-zA-Z0-9_-]+$/.test(dbName)) {
+        throw new Error("Invalid database name");
+      }
       await client.query(`CREATE DATABASE "${dbName}"`);
       if (env.database.logging) {
         console.log(`Database ${env.database.name} created successfully.`);
@@ -49,7 +52,7 @@ export const ensureDatabaseExists = async () => {
     console.error("Failed to ensure database exists:", error);
     throw error;
   } finally {
-    await client.end().catch(() => {});
+    await client.end().catch(() => { });
   }
 };
 

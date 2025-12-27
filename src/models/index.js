@@ -17,6 +17,10 @@ import * as rolePermissionModule from "./rolePermission.js";
 import * as userModule from "./user.js";
 import * as userActionModule from "./userAction.js";
 import * as vendorCompanyModule from "./vendorCompany.js";
+import * as negotiationModule from "./negotiation.js";
+import * as negotiationRoundModule from "./negotiationRound.js";
+import * as preferenceModule from "./preference.js";
+import * as chatSessionModule from "./chatSession.js";
 
 const resolveModelFactory = (module) => module.default || module;
 
@@ -29,7 +33,7 @@ models.Role = resolveModelFactory(roleModule)(sequelize);
 models.UserAction = resolveModelFactory(userActionModule)(sequelize);
 models.RolePermission = resolveModelFactory(rolePermissionModule)(sequelize);
 models.Module = resolveModelFactory(moduleModule)(sequelize);
-models.authToken = resolveModelFactory(authTokenModule)(sequelize);
+models.AuthToken = resolveModelFactory(authTokenModule)(sequelize);
 models.Product = resolveModelFactory(productModule)(sequelize);
 models.Company = resolveModelFactory(companyModule)(sequelize);
 models.Project = resolveModelFactory(projectModule)(sequelize);
@@ -39,6 +43,10 @@ models.RequisitionProduct = resolveModelFactory(requisitionProductModule)(sequel
 models.RequisitionAttachment = resolveModelFactory(requisitionAttachmentModule)(sequelize);
 models.Contract = resolveModelFactory(contractModule)(sequelize);
 models.VendorCompany = resolveModelFactory(vendorCompanyModule)(sequelize);
+models.Negotiation = resolveModelFactory(negotiationModule)(sequelize);
+models.NegotiationRound = resolveModelFactory(negotiationRoundModule)(sequelize);
+models.Preference = resolveModelFactory(preferenceModule)(sequelize);
+models.ChatSession = resolveModelFactory(chatSessionModule)(sequelize);
 
 // Maintain legacy aliases
 models.Vendor = models.User;

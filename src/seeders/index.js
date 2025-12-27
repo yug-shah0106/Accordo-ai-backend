@@ -7,6 +7,7 @@ import { seedModules } from "./moduleSeeder.js";
 import { seedSampleProducts } from "./sampleProductSeeder.js";
 import { seedVendors } from "./vendorSeeder.js";
 import { seedDataset } from "./datasetSeeder.js";
+import { seedRequisition6 } from "./requisitionSeeder.js";
 
 const registeredSeeders = [
   { name: "companies", handler: seedCompanies },
@@ -17,6 +18,7 @@ const registeredSeeders = [
   { name: "products-detailed", handler: seedSampleProducts },
   { name: "vendors", handler: seedVendors },
   { name: "dataset", handler: seedDataset },
+  { name: "requisition-6", handler: seedRequisition6 },
 ];
 
 export const runSeeders = async ({ only, skip, transaction } = {}) => {

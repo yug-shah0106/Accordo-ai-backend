@@ -64,14 +64,18 @@ export const getAllUsersService = async (
     }
 
     if (filters) {
-      const filterData = JSON.parse(decodeURIComponent(filters));
-      queryOptions.where = {
-        ...util.filterUtil(filterData),
-        ...queryOptions.where,
-      };
-      const indexRole = filterData.findIndex((item) => item.filterBy === "role");
-      if (indexRole !== -1) {
-        queryOptions.role = filterData[indexRole].value;
+      try {
+        const filterData = JSON.parse(decodeURIComponent(filters));
+        queryOptions.where = {
+          ...util.filterUtil(filterData),
+          ...queryOptions.where,
+        };
+        const indexRole = filterData.findIndex((item) => item.filterBy === "role");
+        if (indexRole !== -1) {
+          queryOptions.role = filterData[indexRole].value;
+        }
+      } catch (error) {
+        throw new CustomError("Invalid filters format", 400);
       }
     }
 

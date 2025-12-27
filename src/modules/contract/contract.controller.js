@@ -10,7 +10,11 @@ import {
 
 export const getContractDetails = async (req, res, next) => {
   try {
-    const contractDetails = await getContractDetailsService(req.query.uniquetoken);
+    const uniqueToken = req.query.uniquetoken;
+    if (!uniqueToken || typeof uniqueToken !== "string" || uniqueToken.trim().length === 0) {
+      return res.status(400).json({ message: "uniqueToken is required" });
+    }
+    const contractDetails = await getContractDetailsService(uniqueToken);
     res.status(200).json({ message: "Contract Details", data: contractDetails });
   } catch (error) {
     next(error);
@@ -31,7 +35,11 @@ export const createContract = async (req, res, next) => {
 
 export const getContract = async (req, res, next) => {
   try {
-    const data = await getContractService(req.params.contractid);
+    const contractId = parseInt(req.params.contractid, 10);
+    if (isNaN(contractId) || contractId <= 0) {
+      return res.status(400).json({ message: "Invalid contract ID" });
+    }
+    const data = await getContractService(contractId);
     res.status(200).json({ message: "Contract", data });
   } catch (error) {
     next(error);
@@ -41,11 +49,26 @@ export const getContract = async (req, res, next) => {
 export const getAllContract = async (req, res, next) => {
   try {
     const { search, page = 1, limit = 10, requisitionid, filters } = req.query;
+    const parsedPage = parseInt(page, 10);
+    const parsedLimit = parseInt(limit, 10);
+    
+    if (isNaN(parsedPage) || parsedPage < 1) {
+      return res.status(400).json({ message: "Invalid page number" });
+    }
+    if (isNaN(parsedLimit) || parsedLimit < 1 || parsedLimit > 100) {
+      return res.status(400).json({ message: "Invalid limit. Must be between 1 and 100" });
+    }
+    
+    const parsedRequisitionId = requisitionid ? parseInt(requisitionid, 10) : null;
+    if (requisitionid && (isNaN(parsedRequisitionId) || parsedRequisitionId <= 0)) {
+      return res.status(400).json({ message: "Invalid requisition ID" });
+    }
+    
     const data = await getContractsService(
       search,
-      Number(page),
-      Number(limit),
-      requisitionid,
+      parsedPage,
+      parsedLimit,
+      parsedRequisitionId,
       filters
     );
     res.status(200).json({ message: "Contracts", ...data });
@@ -73,9 +96,13 @@ export const completeContract = async (req, res, next) => {
 
 export const approveContract = async (req, res, next) => {
   try {
+    const contractId = parseInt(req.params.contractid, 10);
+    if (isNaN(contractId) || contractId <= 0) {
+      return res.status(400).json({ message: "Invalid contract ID" });
+    }
     const userId = resolveUserId(req.context);
     const data = await updateContractService(
-      req.params.contractid,
+      contractId,
       { ...req.body, status: "Approved" },
       userId
     );
@@ -87,13 +114,31 @@ export const approveContract = async (req, res, next) => {
 
 export const updateContract = async (req, res, next) => {
   try {
+    const contractId = parseInt(req.params.contractid, 10);
+    if (isNaN(contractId) || contractId <= 0) {
+      return res.status(400).json({ message: "Invalid contract ID" });
+    }
+    
+    if (!req.context || !req.context.userId) {
+      return res.status(401).json({ message: "Authentication required" });
+    }
+    
     const userId = resolveUserId(req.context);
+    if (!userId) {
+      return res.status(401).json({ message: "User ID not found in context" });
+    }
+    
     const data = await updateContractService(
-      req.params.contractid,
+      contractId,
       req.body,
       userId,
       req.body.uniqueToken
     );
+    
+    if (!data) {
+      return res.status(404).json({ message: "Contract not found" });
+    }
+    
     res.status(200).json({ message: "Contract updated successfully", data });
   } catch (error) {
     next(error);
@@ -102,7 +147,11 @@ export const updateContract = async (req, res, next) => {
 
 export const deleteContract = async (req, res, next) => {
   try {
-    const data = await deleteContractService(req.params.contractid);
+    const contractId = parseInt(req.params.contractid, 10);
+    if (isNaN(contractId) || contractId <= 0) {
+      return res.status(400).json({ message: "Invalid contract ID" });
+    }
+    const data = await deleteContractService(contractId);
     res.status(200).json({ message: "Contract deleted successfully", data });
   } catch (error) {
     next(error);

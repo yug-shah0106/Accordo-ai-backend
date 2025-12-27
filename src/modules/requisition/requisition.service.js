@@ -13,11 +13,22 @@ export const createRequisionService = async (requisitionData, userId, attachment
     });
 
     const productPayload = requisitionData.productData;
-    const products = Array.isArray(productPayload)
-      ? productPayload
-      : productPayload
-      ? JSON.parse(productPayload)
-      : [];
+    let products = [];
+    if (Array.isArray(productPayload)) {
+      products = productPayload;
+    } else if (productPayload) {
+      try {
+        products = JSON.parse(productPayload);
+        if (!Array.isArray(products)) {
+          throw new CustomError("productData must be an array", 400);
+        }
+      } catch (error) {
+        if (error instanceof CustomError) {
+          throw error;
+        }
+        throw new CustomError("Invalid productData format", 400);
+      }
+    }
 
     await Promise.all(
       products.map((product) =>
@@ -46,9 +57,19 @@ export const createRequisionService = async (requisitionData, userId, attachment
 
 export const getRequisitionService = async (requisitionId) => {
   try {
-    return repo.getRequisition(requisitionId);
+    if (!requisitionId || isNaN(requisitionId)) {
+      throw new CustomError("Invalid requisition ID", 400);
+    }
+    const requisition = await repo.getRequisition(Number(requisitionId));
+    if (!requisition) {
+      throw new CustomError("Requisition not found", 404);
+    }
+    return requisition;
   } catch (error) {
-    throw new CustomError(`Service ${error}`, 400);
+    if (error instanceof CustomError) {
+      throw error;
+    }
+    throw new CustomError(`Service ${error.message || error}`, 500);
   }
 };
 
@@ -78,9 +99,10 @@ export const getRequisitionsService = async (
     const companyId = user?.companyId;
 
     if (filters) {
-      const filterData = JSON.parse(decodeURIComponent(filters));
-      queryOptions.where = util.filterUtil(filterData);
-      const vendorFilterIndex = filterData.findIndex((data) => data.filterBy === "totalVendors");
+      try {
+        const filterData = JSON.parse(decodeURIComponent(filters));
+        queryOptions.where = util.filterUtil(filterData);
+        const vendorFilterIndex = filterData.findIndex((data) => data.filterBy === "totalVendors");
       if (
         vendorFilterIndex !== -1 &&
         Array.isArray(filterData[vendorFilterIndex].value) &&
@@ -89,6 +111,9 @@ export const getRequisitionsService = async (
         Number.isInteger(filterData[vendorFilterIndex].value[1])
       ) {
         queryOptions.totalVendors = filterData[vendorFilterIndex].value;
+      }
+      } catch (error) {
+        throw new CustomError("Invalid filters format", 400);
       }
     }
 
@@ -116,11 +141,22 @@ export const updateRequisitionService = async (
 ) => {
   try {
     const productPayload = requisitionData.productData;
-    const products = Array.isArray(productPayload)
-      ? productPayload
-      : productPayload
-      ? JSON.parse(productPayload)
-      : [];
+    let products = [];
+    if (Array.isArray(productPayload)) {
+      products = productPayload;
+    } else if (productPayload) {
+      try {
+        products = JSON.parse(productPayload);
+        if (!Array.isArray(products)) {
+          throw new CustomError("productData must be an array", 400);
+        }
+      } catch (error) {
+        if (error instanceof CustomError) {
+          throw error;
+        }
+        throw new CustomError("Invalid productData format", 400);
+      }
+    }
 
     if (products.length) {
       await repo.deleteRequisitionProduct(requisitionId);
