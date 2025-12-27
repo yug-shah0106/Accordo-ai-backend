@@ -1,0 +1,37 @@
+# Dependencies
+node_modules
+
+# Git
+.git
+.gitignore
+
+# Logs
+logs
+*.log
+npm-debug.log*
+
+# Environment files (will be mounted or passed at runtime)
+.env
+.env.*
+
+# IDE and editor files
+.idea
+.vscode
+*.swp
+*.swo
+.DS_Store
+
+# Tests
+tests
+*.test.js
+*.spec.js
+
+# Documentation
+README.md
+docs
+
+# Docker files (no need to copy into the container)
+Dockerfile
+docker-compose*.yml
+.dockerignore
+
