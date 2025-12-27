@@ -6,3 +6,13 @@ coverage/
 npm-debug.log
 yarn.lock
 .DS_Store
+
+# Diff files (can be very large)
+*.diff
+changes.diff
+*.patch
+
+# Temporary files
+*.tmp
+*.temp
+create-diff.sh
