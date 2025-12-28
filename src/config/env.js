@@ -53,8 +53,8 @@ export const env = {
   cors: {
     origin: process.env.CORS_ORIGIN
       ? process.env.CORS_ORIGIN.split(",").map((origin) => origin.trim())
-      : ["http://localhost:3000", "http://localhost:5173"],
-    credentials: true,
+      : "*",  // Allow all origins by default
+    credentials: process.env.CORS_ORIGIN ? true : false,  // credentials only with specific origins
   },
 };
 

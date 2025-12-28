@@ -38,6 +38,11 @@ export const createExpressApp = () => {
 
   app.use(requestLogger);
 
+  // Root health check for Render/load balancers
+  app.get("/", (req, res) => {
+    res.json({ status: "ok", message: "Accordo API is running" });
+  });
+
   app.use("/api", routes);
 
   app.use(notFoundHandler);

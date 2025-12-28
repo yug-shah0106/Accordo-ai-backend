@@ -74,6 +74,11 @@ export const sequelize = new Sequelize(
 
 export const connectDatabase = async () => {
   await sequelize.authenticate();
+  // Auto-sync models to database (creates tables if they don't exist)
+  await sequelize.sync();
+  // Auto-seed essential data (uses findOrCreate, safe to run multiple times)
+  const { seedAll } = await import("../seeders/index.js");
+  await seedAll();
 };
 
 export default sequelize;
