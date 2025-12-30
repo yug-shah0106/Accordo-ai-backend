@@ -4,6 +4,10 @@ import repo from "./contract.repo.js";
 import requisitionRepo from "../requisition/requisition.repo.js";
 import CustomError from "../../utils/custom-error.js";
 import util from "../common/util.js";
+import models from "../../models/index.js";
+import { createDeal } from "../../services/chatbot.service.js";
+import { sendVendorAttachedEmail, sendStatusChangeEmail } from "../../services/email.service.js";
+import logger from "../../config/logger.js";
 
 export const getContractDetailsService = async (uniqueToken) => {
   try {
@@ -13,15 +17,68 @@ export const getContractDetailsService = async (uniqueToken) => {
   }
 };
 
-export const createContractService = async (contractData) => {
+export const createContractService = async (contractData, options = {}) => {
   try {
-    return repo.createContract({
-      ...contractData,
+    // Extract options
+    const { skipEmail = false, skipChatbot = false } = options;
+
+    // Remove non-model fields from contractData
+    const { skipEmail: _, skipChatbot: __, ...cleanContractData } = contractData;
+
+    // Fetch vendor details
+    const vendor = await models.User.findByPk(cleanContractData.vendorId);
+    if (!vendor) {
+      throw new CustomError("Vendor not found", 404);
+    }
+    if (!vendor.email && !skipEmail) {
+      throw new CustomError("Vendor email is required to send notification", 400);
+    }
+
+    // Fetch requisition details with products and project
+    const requisition = await requisitionRepo.getRequisition(cleanContractData.requisitionId);
+    if (!requisition) {
+      throw new CustomError("Requisition not found", 404);
+    }
+
+    const projectName = requisition.Project?.name || "Project";
+    const requisitionTitle = requisition.title || requisition.name || "Requisition";
+    const vendorName = vendor.name || vendor.email;
+
+    let dealId = null;
+
+    // Create deal in chatbot system (unless skipped)
+    if (!skipChatbot) {
+      logger.info(`Creating chatbot deal for vendor ${vendorName}`);
+      dealId = await createDeal(vendorName, projectName, requisitionTitle);
+    } else {
+      logger.info(`Skipping chatbot deal creation for vendor ${vendorName}`);
+    }
+
+    // Create contract with chatbot deal ID
+    const uniqueToken = crypto.randomBytes(16).toString("hex");
+    const contract = await repo.createContract({
+      ...cleanContractData,
       status: "Created",
-      uniqueToken: crypto.randomBytes(16).toString("hex"),
+      uniqueToken,
+      chatbotDealId: dealId,
     });
+
+    // Send email notification to vendor (unless skipped)
+    if (!skipEmail && vendor.email) {
+      logger.info(`Sending vendor attached email to ${vendor.email}`);
+      await sendVendorAttachedEmail(vendor, requisition, contract, dealId, { skipEmail });
+    } else {
+      logger.info(`Skipping email notification for vendor ${vendor.email || cleanContractData.vendorId}`);
+    }
+
+    logger.info(`Contract created successfully with ID ${contract.id}${dealId ? `, deal ID ${dealId}` : ""}`);
+    return contract;
   } catch (error) {
-    throw new CustomError(error, 400);
+    // Re-throw CustomError as-is
+    if (error instanceof CustomError) {
+      throw error;
+    }
+    throw new CustomError(error.message || String(error), 400);
   }
 };
 
@@ -159,6 +216,18 @@ export const updateContractService = async (
       throw new CustomError("Either contractId or uniqueToken is required", 400);
     }
 
+    // Get the old contract to track status changes
+    const oldContract = contractId
+      ? await repo.getContract(contractId)
+      : await repo.getContractByToken(uniqueToken);
+
+    if (!oldContract) {
+      throw new CustomError("Contract not found", 404);
+    }
+
+    const oldStatus = oldContract.status;
+    const newStatus = contractData.status;
+
     contractData.updatedBy = userId;
     await applyStatusSideEffects(contractId, contractData);
 
@@ -202,6 +271,22 @@ export const updateContractService = async (
       }
     }
 
+    // Send status change email if status changed
+    if (newStatus && oldStatus !== newStatus) {
+      try {
+        const vendor = await models.User.findByPk(contract.vendorId);
+        if (vendor?.email) {
+          logger.info(`Sending status change email to ${vendor.email}: ${oldStatus} -> ${newStatus}`);
+          await sendStatusChangeEmail(vendor, requisition, contract, oldStatus, newStatus);
+        } else {
+          logger.warn(`Cannot send status change email: vendor ${contract.vendorId} has no email`);
+        }
+      } catch (emailError) {
+        // Log error but don't fail the update - status change email is secondary to contract update
+        logger.error(`Failed to send status change email: ${emailError.message}`);
+      }
+    }
+
     return contract;
   } catch (error) {
     // If it's already a CustomError, re-throw it
@@ -225,6 +310,14 @@ export const updateContractService = async (
 export const updateContractStatusService = async (contractData) => {
   try {
     const { uniqueToken, status, finalContractDetails, message, end } = contractData;
+
+    // Get the old contract to track status changes
+    const oldContract = await repo.getContractByToken(uniqueToken);
+    if (!oldContract) {
+      throw new CustomError("Contract not found", 404);
+    }
+    const oldStatus = oldContract.status;
+
     const updateData = {
       status,
       message,
@@ -244,8 +337,30 @@ export const updateContractStatusService = async (contractData) => {
     }
 
     await repo.updateContractByToken(uniqueToken, updateData);
-    return repo.getContractDetails(uniqueToken);
+    const contractDetails = await repo.getContractDetails(uniqueToken);
+
+    // Send status change email if status changed
+    if (status && oldStatus !== status) {
+      try {
+        const vendor = await models.User.findByPk(oldContract.vendorId);
+        if (vendor?.email) {
+          const requisition = await requisitionRepo.getRequisition(oldContract.requisitionId);
+          logger.info(`Sending status change email to ${vendor.email}: ${oldStatus} -> ${status}`);
+          await sendStatusChangeEmail(vendor, requisition, contractDetails, oldStatus, status);
+        } else {
+          logger.warn(`Cannot send status change email: vendor ${oldContract.vendorId} has no email`);
+        }
+      } catch (emailError) {
+        // Log error but don't fail the update - status change email is secondary
+        logger.error(`Failed to send status change email: ${emailError.message}`);
+      }
+    }
+
+    return contractDetails;
   } catch (error) {
+    if (error instanceof CustomError) {
+      throw error;
+    }
     throw new CustomError(`Service ${error}`, 400);
   }
 };

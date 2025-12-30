@@ -56,6 +56,10 @@ export const env = {
       : "*",  // Allow all origins by default
     credentials: process.env.CORS_ORIGIN ? true : false,  // credentials only with specific origins
   },
+  // Frontend URLs for email links
+  vendorPortalUrl: process.env.VENDOR_PORTAL_URL || "http://localhost:3000/vendor",
+  chatbotFrontendUrl: process.env.CHATBOT_FRONTEND_URL || "http://localhost:5173",
+  chatbotApiUrl: process.env.CHATBOT_API_URL || "http://localhost:4000/api",
 };
 
 export default env;

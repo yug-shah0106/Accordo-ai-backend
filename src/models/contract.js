@@ -52,6 +52,11 @@ const contractModel = (sequelize) => {
       quotedAt: DataTypes.DATE,
       benchmarkRating: DataTypes.DOUBLE(5, 2),
       finalRating: DataTypes.DOUBLE(5, 2),
+      chatbotDealId: {
+        type: DataTypes.UUID,
+        allowNull: true,
+        comment: "Reference to the deal ID in the chatbot system",
+      },
     },
     {
       sequelize,

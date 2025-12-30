@@ -23,10 +23,16 @@ export const getContractDetails = async (req, res, next) => {
 
 export const createContract = async (req, res, next) => {
   try {
-    const data = await createContractService({
-      ...req.body,
-      createdBy: req.context.userId,
-    });
+    // Extract options from request body
+    const { skipEmail, skipChatbot, ...contractData } = req.body;
+
+    const data = await createContractService(
+      {
+        ...contractData,
+        createdBy: req.context.userId,
+      },
+      { skipEmail, skipChatbot }
+    );
     res.status(201).json({ message: "Contract created successfully", data });
   } catch (error) {
     next(error);

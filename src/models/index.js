@@ -21,6 +21,7 @@ import * as negotiationModule from "./negotiation.js";
 import * as negotiationRoundModule from "./negotiationRound.js";
 import * as preferenceModule from "./preference.js";
 import * as chatSessionModule from "./chatSession.js";
+import * as emailLogModule from "./emailLog.js";
 
 const resolveModelFactory = (module) => module.default || module;
 
@@ -47,6 +48,7 @@ models.Negotiation = resolveModelFactory(negotiationModule)(sequelize);
 models.NegotiationRound = resolveModelFactory(negotiationRoundModule)(sequelize);
 models.Preference = resolveModelFactory(preferenceModule)(sequelize);
 models.ChatSession = resolveModelFactory(chatSessionModule)(sequelize);
+models.EmailLog = resolveModelFactory(emailLogModule)(sequelize);
 
 // Maintain legacy aliases
 models.Vendor = models.User;
