@@ -2,17 +2,20 @@
   "name": "accordo-backend",
   "version": "1.0.0",
   "description": "Accordo backend rewritten with modular architecture",
-  "main": "index.js",
+  "main": "dist/index.js",
   "type": "module",
   "scripts": {
-    "dev": "nodemon --config nodemon.json",
-    "start": "node index.js",
-    "dev:clean": "bash scripts/restart-dev.sh",
-    "dev:kill": "pkill -f nodemon || true",
-    "lint": "eslint \"src/**/*.js\"",
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev": "ts-node-dev --respawn --transpile-only --esm src/index.ts",
+    "dev:clean": "npm run dev:kill && npm run dev",
+    "dev:kill": "pkill -f nodemon || pkill -f ts-node-dev || true",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "type-check": "tsc --noEmit",
+    "lint": "eslint src/**/*.ts",
     "migrate": "npx sequelize-cli db:migrate",
-    "seed": "node ./scripts/seed.js"
+    "migrate:undo": "npx sequelize-cli db:migrate:undo",
+    "migrate:undo:all": "npx sequelize-cli db:migrate:undo:all",
+    "seed": "ts-node --esm ./scripts/seed.ts"
   },
   "dependencies": {
     "axios": "^1.7.9",
@@ -26,7 +29,7 @@
     "joi": "^17.13.3",
     "jsonwebtoken": "^9.0.2",
     "multer": "^1.4.5-lts.1",
-    "nodemailer": "^6.9.16",
+    "nodemailer": "^7.0.12",
     "openai": "^6.9.1",
     "pdfkit": "^0.16.0",
     "pg": "^8.16.3",
@@ -34,15 +37,30 @@
     "toobusy-js": "^0.5.1",
     "winston": "^3.17.0",
     "winston-daily-rotate-file": "^5.0.0",
-    "yargs": "^17.7.2"
+    "yargs": "^17.7.2",
+    "zod": "^4.3.4"
   },
   "devDependencies": {
+    "@types/bcrypt": "^5.0.2",
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.0",
+    "@types/jsonwebtoken": "^9.0.7",
+    "@types/multer": "^1.4.12",
+    "@types/node": "^22.10.2",
+    "@types/nodemailer": "^6.4.17",
+    "@types/pg": "^8.11.10",
+    "@types/toobusy-js": "^0.5.4",
+    "@types/uuid": "^10.0.0",
+    "@typescript-eslint/eslint-plugin": "^8.18.2",
+    "@typescript-eslint/parser": "^8.18.2",
     "eslint": "^8.57.0",
     "eslint-config-standard": "^17.1.0",
     "eslint-plugin-import": "^2.29.1",
     "eslint-plugin-n": "^16.6.2",
     "eslint-plugin-promise": "^6.3.1",
-    "nodemon": "^3.1.10",
-    "sequelize-cli": "^6.6.2"
+    "sequelize-cli": "^6.6.2",
+    "ts-node": "^10.9.2",
+    "ts-node-dev": "^2.0.0",
+    "typescript": "^5.7.2"
   }
 }
