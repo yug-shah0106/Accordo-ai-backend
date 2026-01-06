@@ -126,7 +126,7 @@ export async function generateNextVendorMessage(
       userId: userId || 0, // Use 0 for system/autopilot
     });
 
-    const { message: accordoMessage, decision } = processResult;
+    const { accordoMessage, decision } = processResult;
 
     // Reload deal to get updated status
     const updatedDealData = await chatbotService.getDealService(dealId);

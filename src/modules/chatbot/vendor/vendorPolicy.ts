@@ -42,6 +42,17 @@ export function getScenarioPolicy(
         minAcceptableTerms: 'Net 30', // Won't budge on terms
       };
 
+    case 'MEDIUM':
+      // Balanced vendor: moderate concessions, reasonable floor price
+      return {
+        minPrice: basePrice * 0.90, // Willing to go 10% below base
+        startPrice: basePrice * 1.12, // Starts 12% above base
+        preferredTerms: 'Net 30',
+        concessionStep: basePrice * 0.02, // 2% concessions
+        maxRounds: 7, // Moderate negotiation length
+        minAcceptableTerms: 'Net 60', // Moderate term flexibility
+      };
+
     case 'SOFT':
       // Flexible vendor: reasonable concessions, lower floor price
       return {

@@ -8,11 +8,12 @@
 /**
  * Vendor Scenarios
  *
- * - HARD: Resistant to concessions, makes small price reductions only
- * - SOFT: Willing to negotiate, makes reasonable concessions
- * - WALK_AWAY: Inflexible, unlikely to make concessions
+ * - HARD: Very resistant to concessions, makes minimal price reductions
+ * - MEDIUM: Moderately flexible, balanced negotiation approach
+ * - SOFT: Willing to negotiate, makes reasonable concessions quickly
+ * - WALK_AWAY: Inflexible, unlikely to make concessions, may terminate negotiation
  */
-export type VendorScenario = 'HARD' | 'SOFT' | 'WALK_AWAY';
+export type VendorScenario = 'HARD' | 'MEDIUM' | 'SOFT' | 'WALK_AWAY';
 
 /**
  * Vendor negotiation policy/constraints

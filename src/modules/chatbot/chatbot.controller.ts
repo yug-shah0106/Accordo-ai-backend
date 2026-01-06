@@ -130,10 +130,15 @@ export const processVendorMessage = async (
       `Vendor message processed for deal ${dealId}: ${result.decision.action}`
     );
 
+    // Fetch updated deal and all messages to return to frontend
+    const dealWithMessages = await chatbotService.getDealService(dealId);
+
     res.status(200).json({
       message: 'Message processed successfully',
       data: {
-        message: result.message,
+        deal: dealWithMessages.deal,
+        messages: dealWithMessages.messages,
+        latestMessage: result.message,
         decision: result.decision,
         explainability: result.explainability,
       },
@@ -157,7 +162,13 @@ export const resetDeal = async (
     const deal = await chatbotService.resetDealService(dealId);
 
     logger.info(`Deal reset: ${dealId} by user ${req.context.userId}`);
-    res.status(200).json({ message: 'Deal reset successfully', data: deal });
+    res.status(200).json({
+      message: 'Deal reset successfully',
+      data: {
+        deal,
+        messages: [], // Messages are cleared on reset
+      }
+    });
   } catch (error) {
     next(error);
   }
@@ -176,7 +187,7 @@ export const getDealConfig = async (
     const { dealId } = req.params;
     const config = await chatbotService.getDealConfigService(dealId);
 
-    res.status(200).json({ message: 'Config retrieved successfully', data: config });
+    res.status(200).json({ message: 'Config retrieved successfully', data: { config } });
   } catch (error) {
     next(error);
   }
@@ -457,7 +468,7 @@ export const runDemo = async (
       throw new CustomError('Scenario is required', 400);
     }
 
-    const validScenarios = ['HARD', 'SOFT', 'WALK_AWAY'];
+    const validScenarios = ['HARD', 'MEDIUM', 'SOFT', 'WALK_AWAY'];
     if (!validScenarios.includes(scenario)) {
       throw new CustomError(
         `Invalid scenario: ${scenario}. Must be one of: ${validScenarios.join(', ')}`,

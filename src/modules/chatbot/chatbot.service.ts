@@ -209,10 +209,43 @@ export const createDealService = async (
  * Process a vendor message in INSIGHTS (demo) mode
  * Extracts offer, makes decision, generates counter
  */
+/**
+ * Generate Accordo response text based on decision
+ */
+const generateAccordoResponseText = (decision: Decision, config: NegotiationConfig): string => {
+  const { action, counterOffer, utilityScore } = decision;
+
+  switch (action) {
+    case 'ACCEPT':
+      return `I'm pleased to accept your offer. We have a deal at $${counterOffer?.unit_price || 'agreed'} with ${counterOffer?.payment_terms || 'agreed'} payment terms. Thank you for the negotiation.`;
+
+    case 'COUNTER':
+      const targetPrice = config.parameters.unit_price.target;
+      const priceText = counterOffer?.unit_price
+        ? `$${counterOffer.unit_price}`
+        : `$${targetPrice}`;
+      const termsText = counterOffer?.payment_terms || 'Net 60';
+      return `Thank you for your offer. Based on our analysis, I'd like to counter with ${priceText} and ${termsText} payment terms. This would give us a utility score of ${((utilityScore || 0) * 100).toFixed(0)}%.`;
+
+    case 'WALK_AWAY':
+      return `I appreciate your time, but unfortunately the current offer doesn't meet our minimum requirements. The utility score of ${((utilityScore || 0) * 100).toFixed(0)}% falls below our walkaway threshold. We'll need to conclude this negotiation.`;
+
+    case 'ESCALATE':
+      return `This negotiation has reached a point where I need to escalate it to a human decision-maker for review. Thank you for your patience.`;
+
+    case 'ASK_CLARIFY':
+      return `I need some clarification on your offer. Could you please provide more details about the pricing and payment terms?`;
+
+    default:
+      return `Thank you for your message. Our analysis shows a utility score of ${((utilityScore || 0) * 100).toFixed(0)}%.`;
+  }
+};
+
 export const processVendorMessageService = async (
   input: ProcessMessageInput
 ): Promise<{
   message: ChatbotMessage;
+  accordoMessage: ChatbotMessage;
   decision: Decision;
   explainability: Explainability;
 }> => {
@@ -250,14 +283,30 @@ export const processVendorMessageService = async (
     // Compute explainability
     const explainability = computeExplainability(config, extractedOffer, decision);
 
-    // Save message with engine outputs
-    const messageId = uuidv4();
+    // Save VENDOR message
+    const vendorMessageId = uuidv4();
     const message = await models.ChatbotMessage.create({
-      id: messageId,
+      id: vendorMessageId,
       dealId: input.dealId,
       role: input.role,
       content: input.content,
       extractedOffer: extractedOffer as any,
+      engineDecision: null,
+      decisionAction: null,
+      utilityScore: null,
+      counterOffer: null,
+      explainabilityJson: null,
+    });
+
+    // Generate and save ACCORDO response message
+    const accordoResponseText = generateAccordoResponseText(decision, config);
+    const accordoMessageId = uuidv4();
+    const accordoMessage = await models.ChatbotMessage.create({
+      id: accordoMessageId,
+      dealId: input.dealId,
+      role: 'ACCORDO',
+      content: accordoResponseText,
+      extractedOffer: null,
       engineDecision: decision as any,
       decisionAction: decision.action,
       utilityScore: decision.utilityScore,
@@ -284,7 +333,7 @@ export const processVendorMessageService = async (
       `Processed vendor message for deal ${input.dealId}: ${decision.action} (utility: ${decision.utilityScore})`
     );
 
-    return { message, decision, explainability };
+    return { message, accordoMessage, decision, explainability };
   } catch (error) {
     if (error instanceof CustomError) throw error;
     throw new CustomError(
@@ -361,7 +410,7 @@ export const listDealsService = async (
       offset,
       order: [['createdAt', 'DESC']],
       include: [
-        { model: models.Requisition, as: 'Requisition', attributes: ['id', 'title'] },
+        { model: models.Requisition, as: 'Requisition', attributes: ['id', 'subject', 'rfqId'] },
         { model: models.Contract, as: 'Contract', attributes: ['id', 'status'] },
         { model: models.User, as: 'User', attributes: ['id', 'name', 'email'] },
         { model: models.User, as: 'Vendor', attributes: ['id', 'name', 'email'] },
@@ -431,7 +480,7 @@ export const archiveDealService = async (dealId: string): Promise<ChatbotDeal> =
 };
 
 /**
- * Unarchive a deal
+ * Unarchive a deal (also clears deletedAt to fully recover)
  */
 export const unarchiveDealService = async (dealId: string): Promise<ChatbotDeal> => {
   try {
@@ -440,7 +489,8 @@ export const unarchiveDealService = async (dealId: string): Promise<ChatbotDeal>
       throw new CustomError('Deal not found', 404);
     }
 
-    await deal.update({ archivedAt: null });
+    // Clear both archived and deleted flags to fully recover the deal
+    await deal.update({ archivedAt: null, deletedAt: null });
     logger.info(`Unarchived deal ${dealId}`);
     return deal;
   } catch (error) {
@@ -469,7 +519,7 @@ export const softDeleteDealService = async (dealId: string): Promise<ChatbotDeal
 };
 
 /**
- * Restore a soft-deleted deal
+ * Restore a soft-deleted deal (also clears archivedAt to fully recover)
  */
 export const restoreDealService = async (dealId: string): Promise<ChatbotDeal> => {
   try {
@@ -478,7 +528,8 @@ export const restoreDealService = async (dealId: string): Promise<ChatbotDeal> =
       throw new CustomError('Deal not found', 404);
     }
 
-    await deal.update({ deletedAt: null });
+    // Clear both deleted and archived flags to fully recover the deal
+    await deal.update({ deletedAt: null, archivedAt: null });
     logger.info(`Restored deal ${dealId}`);
     return deal;
   } catch (error) {
@@ -730,7 +781,7 @@ export const runDemoService = async (
         userId: 0, // System user for autopilot
       });
 
-      const { message: accordoMessage, decision } = processResult;
+      const { accordoMessage, decision } = processResult;
 
       logger.info('[RunDemo] Accordo message generated', {
         dealId,
