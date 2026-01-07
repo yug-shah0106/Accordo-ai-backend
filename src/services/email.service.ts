@@ -1,5 +1,6 @@
 import nodemailer from 'nodemailer';
 import type { Transporter } from 'nodemailer';
+import sendmailPackage from 'sendmail';
 import env from '../config/env.js';
 import logger from '../config/logger.js';
 import models from '../models/index.js';
@@ -9,14 +10,34 @@ import type { VendorCompany } from '../models/vendorCompany.js';
 import type { Product } from '../models/product.js';
 import type { EmailType, EmailStatus, EmailMetadata } from '../models/emailLog.js';
 
-const { smtp } = env;
+// Define sendmail types (since @types/sendmail doesn't export these properly)
+interface SendmailOptions {
+  from: string;
+  to: string;
+  subject: string;
+  html?: string;
+  text?: string;
+}
+
+type SendmailCallback = (err: Error | null, reply: any) => void;
+type SendmailFunction = (options: SendmailOptions, callback: SendmailCallback) => void;
+
+const { smtp, emailProvider, nodeEnv } = env;
+
+// Log the email provider being used on startup
+logger.info(`Email service initialized with provider: ${emailProvider}`, {
+  provider: emailProvider,
+  isDevelopment: nodeEnv === 'development',
+  smtpHost: smtp.host || 'not configured',
+  devPort: smtp.devPort,
+});
 
 /**
  * Build nodemailer transporter
  */
-const buildTransporter = (): Transporter => {
+const buildNodemailerTransporter = (): Transporter => {
   if (!smtp.host || !smtp.user) {
-    throw new Error('SMTP configuration missing');
+    throw new Error('SMTP configuration missing for nodemailer');
   }
   return nodemailer.createTransport({
     host: smtp.host,
@@ -27,6 +48,19 @@ const buildTransporter = (): Transporter => {
       pass: smtp.pass,
     },
   });
+};
+
+/**
+ * Build sendmail function
+ */
+const buildSendmailFunction = (): SendmailFunction => {
+  const options: any = {
+    silent: false,
+    // In development, use devPort for local SMTP testing (MailHog/Mailpit)
+    ...(nodeEnv === 'development' && smtp.devPort ? { devPort: smtp.devPort, devHost: 'localhost' } : {}),
+  };
+
+  return sendmailPackage(options) as SendmailFunction;
 };
 
 /**
@@ -232,19 +266,73 @@ Thank you for your continued partnership.
 };
 
 /**
- * Send email with retry logic
+ * Unified email options interface
+ */
+interface EmailOptions {
+  from: string;
+  to: string;
+  subject: string;
+  html: string;
+  text: string;
+}
+
+/**
+ * Send email using nodemailer
+ */
+const sendWithNodemailer = async (mailOptions: EmailOptions): Promise<{ messageId: string }> => {
+  const transporter = buildNodemailerTransporter();
+  const info = await transporter.sendMail(mailOptions);
+  return { messageId: info.messageId };
+};
+
+/**
+ * Send email using sendmail
+ */
+const sendWithSendmail = async (mailOptions: EmailOptions): Promise<{ messageId: string }> => {
+  const sendmail = buildSendmailFunction();
+
+  return new Promise((resolve, reject) => {
+    const sendmailOptions: SendmailOptions = {
+      from: mailOptions.from,
+      to: mailOptions.to,
+      subject: mailOptions.subject,
+      html: mailOptions.html,
+      text: mailOptions.text,
+    };
+
+    sendmail(sendmailOptions, (err: Error | null, reply: any) => {
+      if (err) {
+        reject(err);
+      } else {
+        // Sendmail doesn't return a messageId like nodemailer, generate one
+        const messageId = `<${Date.now()}.${Math.random().toString(36).substr(2, 9)}@sendmail>`;
+        resolve({ messageId });
+      }
+    });
+  });
+};
+
+/**
+ * Send email with retry logic (supports both providers)
  */
 const sendEmailWithRetry = async (
-  mailOptions: nodemailer.SendMailOptions,
+  mailOptions: EmailOptions,
   maxRetries = 3
-): Promise<nodemailer.SentMessageInfo> => {
-  const transporter = buildTransporter();
+): Promise<{ messageId: string }> => {
   let lastError: Error | null = null;
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      const info = await transporter.sendMail(mailOptions);
+      let info: { messageId: string };
+
+      if (emailProvider === 'sendmail') {
+        info = await sendWithSendmail(mailOptions);
+      } else {
+        info = await sendWithNodemailer(mailOptions);
+      }
+
       logger.info('Email sent successfully', {
+        provider: emailProvider,
         to: mailOptions.to,
         subject: mailOptions.subject,
         messageId: info.messageId,
@@ -254,6 +342,7 @@ const sendEmailWithRetry = async (
     } catch (error) {
       lastError = error as Error;
       logger.warn(`Email send attempt ${attempt} failed`, {
+        provider: emailProvider,
         to: mailOptions.to,
         subject: mailOptions.subject,
         error: (error as Error).message,
@@ -335,8 +424,8 @@ export const sendVendorAttachedEmail = async (
       ? `${env.chatbotFrontendUrl}/conversation/deals/${chatbotDealId}`
       : undefined;
 
-    const mailOptions = {
-      from: smtp.from,
+    const mailOptions: EmailOptions = {
+      from: smtp.from || 'noreply@accordo.ai',
       to: vendor.email,
       subject: `New Requisition Assignment: ${requisitionData.title}`,
       html: generateVendorAttachedEmailHTML(vendorName, requisitionData, portalLink, chatbotLink),
@@ -410,8 +499,8 @@ export const sendStatusChangeEmail = async (
     const requisitionTitle = (requisition as any).title || 'Untitled Requisition';
     const portalLink = `${env.vendorPortalUrl}/contracts/${contract.uniqueToken}`;
 
-    const mailOptions = {
-      from: smtp.from,
+    const mailOptions: EmailOptions = {
+      from: smtp.from || 'noreply@accordo.ai',
       to: vendor.email,
       subject: `Contract Status Update: ${requisitionTitle}`,
       html: generateStatusChangeEmailHTML(vendorName, requisitionTitle, oldStatus, newStatus, portalLink),
