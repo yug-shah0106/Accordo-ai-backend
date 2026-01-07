@@ -27,6 +27,7 @@ import { initChatbotTemplateModel, ChatbotTemplate } from './chatbotTemplate.js'
 import { initChatbotTemplateParameterModel, ChatbotTemplateParameter } from './chatbotTemplateParameter.js';
 import { initChatbotDealModel, ChatbotDeal } from './chatbotDeal.js';
 import { initChatbotMessageModel, ChatbotMessage } from './chatbotMessage.js';
+import { initNegotiationTrainingDataModel, NegotiationTrainingData } from './negotiationTrainingData.js';
 
 // Type definitions for the models collection
 export interface Models {
@@ -56,6 +57,7 @@ export interface Models {
   ChatbotTemplateParameter: typeof ChatbotTemplateParameter;
   ChatbotDeal: typeof ChatbotDeal;
   ChatbotMessage: typeof ChatbotMessage;
+  NegotiationTrainingData: typeof NegotiationTrainingData;
   // Legacy aliases
   Vendor: typeof User;
   vendorCompany: typeof VendorCompany;
@@ -89,6 +91,7 @@ const models: Models = {
   ChatbotTemplateParameter: initChatbotTemplateParameterModel(sequelize),
   ChatbotDeal: initChatbotDealModel(sequelize),
   ChatbotMessage: initChatbotMessageModel(sequelize),
+  NegotiationTrainingData: initNegotiationTrainingDataModel(sequelize),
   // Maintain legacy aliases
   Vendor: null as unknown as typeof User,
   vendorCompany: null as unknown as typeof VendorCompany,
@@ -134,6 +137,7 @@ export {
   ChatbotTemplateParameter,
   ChatbotDeal,
   ChatbotMessage,
+  NegotiationTrainingData,
   sequelize,
 };
 

@@ -107,6 +107,17 @@ chatbotRouter.post(
   controller.createSystemMessage
 );
 
+/**
+ * Generate dynamic scenario suggestions (AI-powered)
+ * POST /api/chatbot/deals/:dealId/suggest-counters
+ */
+chatbotRouter.post(
+  '/deals/:dealId/suggest-counters',
+  authMiddleware,
+  validateParams(dealIdSchema),
+  controller.suggestCounters
+);
+
 // ==================== Conversation Mode (CONVERSATION) ====================
 
 /**

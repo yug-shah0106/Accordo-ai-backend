@@ -525,3 +525,45 @@ export const resumeDeal = async (
     next(error);
   }
 };
+
+/**
+ * Generate dynamic scenario suggestions
+ * POST /api/chatbot/deals/:dealId/suggest-counters
+ *
+ * Uses AI to analyze the conversation and generate contextually relevant
+ * counter-offer suggestions for each scenario type (HARD, MEDIUM, SOFT, WALK_AWAY).
+ *
+ * Request: dealId in params
+ * Response: {
+ *   "message": "Scenario suggestions generated successfully",
+ *   "data": {
+ *     "HARD": ["suggestion1", "suggestion2", "suggestion3", "suggestion4"],
+ *     "MEDIUM": ["suggestion1", "suggestion2", "suggestion3", "suggestion4"],
+ *     "SOFT": ["suggestion1", "suggestion2", "suggestion3", "suggestion4"],
+ *     "WALK_AWAY": ["suggestion1", "suggestion2", "suggestion3", "suggestion4"]
+ *   }
+ * }
+ */
+export const suggestCounters = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const { dealId } = req.params;
+    const userId = req.context.userId;
+
+    const suggestions = await chatbotService.generateScenarioSuggestionsService(dealId, userId);
+
+    logger.info(`[SuggestCounters] Generated scenario suggestions for deal: ${dealId}`, {
+      userId,
+    });
+
+    res.status(200).json({
+      message: 'Scenario suggestions generated successfully',
+      data: suggestions,
+    });
+  } catch (error) {
+    next(error);
+  }
+};

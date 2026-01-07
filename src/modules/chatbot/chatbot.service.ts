@@ -9,6 +9,7 @@ import { computeExplainability, totalUtility, type NegotiationConfig } from './e
 import type { Offer, Decision, Explainability } from './engine/types.js';
 import type { ChatbotDeal } from '../../models/chatbotDeal.js';
 import type { ChatbotMessage } from '../../models/chatbotMessage.js';
+import { chatCompletion } from '../../services/llm.service.js';
 
 export interface CreateDealInput {
   title: string;
@@ -918,6 +919,182 @@ export const resumeDealService = async (dealId: string): Promise<ChatbotDeal> =>
 
     throw new CustomError(
       `Failed to resume deal: ${error instanceof Error ? error.message : String(error)}`,
+      500
+    );
+  }
+};
+
+/**
+ * Generate AI-powered scenario suggestions
+ *
+ * Analyzes the conversation history and negotiation context to generate
+ * contextually relevant counter-offer suggestions for each scenario type.
+ *
+ * @param dealId - The deal UUID
+ * @returns Object with scenario suggestions: { HARD: [...], MEDIUM: [...], SOFT: [...], WALK_AWAY: [...] }
+ */
+export const generateScenarioSuggestionsService = async (
+  dealId: string,
+  userId: number
+): Promise<Record<string, string[]>> => {
+  try {
+    // Get deal with messages and config
+    const deal = await models.ChatbotDeal.findOne({
+      where: { id: dealId },
+      include: [
+        {
+          model: models.ChatbotMessage,
+          as: 'Messages',
+          where: { role: { [Op.in]: ['VENDOR', 'ACCORDO'] } },
+          required: false,
+          order: [['createdAt', 'ASC']],
+        },
+      ],
+    });
+
+    if (!deal) {
+      throw new CustomError('Deal not found', 404);
+    }
+
+    // Get negotiation config
+    const config = deal.negotiationConfigJson as NegotiationConfig;
+    if (!config) {
+      throw new CustomError('Deal has no negotiation config', 400);
+    }
+
+    // Get last vendor message for context
+    const messages = (deal as any).Messages || [];
+    const lastVendorMessage = messages.filter((m: ChatbotMessage) => m.role === 'VENDOR').pop();
+
+    // Build conversation context
+    const conversationContext = messages
+      .map((m: ChatbotMessage) => `${m.role}: ${m.content}`)
+      .join('\n');
+
+    // Generate suggestions using LLM
+    const prompt = `You are a procurement negotiation assistant. Analyze this negotiation and generate 4 counter-offer suggestions for each scenario type.
+
+NEGOTIATION CONTEXT:
+Deal: ${deal.title}
+Current Round: ${deal.round}
+Status: ${deal.status}
+
+NEGOTIATION CONFIG:
+Target Price: $${config.price.target}
+Min Price: $${config.price.min}
+Max Price: $${config.price.max}
+Ideal Payment Terms: ${config.terms.ideal}
+Acceptable Payment Terms: ${config.terms.acceptable}
+
+CONVERSATION HISTORY:
+${conversationContext || 'No messages yet'}
+
+LAST VENDOR MESSAGE:
+${lastVendorMessage ? lastVendorMessage.content : 'None'}
+
+Generate 4 counter-offer suggestions for EACH of these scenarios:
+1. HARD: Aggressive, push for best price, short payment terms
+2. MEDIUM: Balanced approach, reasonable price, moderate terms
+3. SOFT: Flexible, focus on relationship, longer terms acceptable
+4. WALK_AWAY: Unreasonable offers that signal walking away
+
+Format your response as JSON only (no markdown, no explanation):
+{
+  "HARD": ["offer1", "offer2", "offer3", "offer4"],
+  "MEDIUM": ["offer1", "offer2", "offer3", "offer4"],
+  "SOFT": ["offer1", "offer2", "offer3", "offer4"],
+  "WALK_AWAY": ["offer1", "offer2", "offer3", "offer4"]
+}
+
+Each offer should be a short message (under 50 chars) like "We can do $92 Net 30" or "Best I can offer is $88 Net 60".`;
+
+    const llmResponse = await chatCompletion(
+      [{ role: 'user', content: prompt }],
+      { temperature: 0.7, maxTokens: 1000 }
+    );
+
+    // Parse LLM response
+    let suggestions: Record<string, string[]>;
+    let generationSource: 'llm' | 'fallback' = 'llm';
+
+    try {
+      // Clean response - remove markdown code blocks if present
+      const cleanedResponse = llmResponse.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+      suggestions = JSON.parse(cleanedResponse);
+    } catch (parseError) {
+      logger.error('[ScenarioSuggestions] Failed to parse LLM response', {
+        dealId,
+        llmResponse,
+        error: parseError,
+      });
+
+      generationSource = 'fallback';
+
+      // Fallback to default suggestions
+      suggestions = {
+        HARD: [
+          `We can do $${config.price.min} ${config.terms.ideal}`,
+          `Best I can offer is $${config.price.min + 2} ${config.terms.ideal}`,
+          `Final: $${config.price.min + 5} ${config.terms.ideal}`,
+          `Absolute limit: $${config.price.min + 8} ${config.terms.ideal}`,
+        ],
+        MEDIUM: [
+          `We can do $${config.price.target - 5} ${config.terms.acceptable}`,
+          `How about $${config.price.target - 8} ${config.terms.acceptable}?`,
+          `We're open to $${config.price.target - 12} Net 90`,
+          `Final offer: $${config.price.target - 15} Net 90`,
+        ],
+        SOFT: [
+          `We can do $${config.price.target} ${config.terms.acceptable}`,
+          `How about $${config.price.target - 2} Net 90?`,
+          `We're willing to go to $${config.price.target - 5} Net 90`,
+          `Final offer: $${config.price.target - 8} Net 90`,
+        ],
+        WALK_AWAY: [
+          `We can do $${config.price.max} ${config.terms.ideal}`,
+          `Best I can offer is $${config.price.max - 2} ${config.terms.ideal}`,
+          `Our final offer is $${config.price.max + 10} ${config.terms.ideal} - take it or leave it`,
+          `Sorry, we can't go lower than $${config.price.max + 10}`,
+        ],
+      };
+    }
+
+    logger.info('[ScenarioSuggestions] Generated suggestions', { dealId, round: deal.round });
+
+    // Log to training data for future LLM fine-tuning
+    try {
+      await models.NegotiationTrainingData.create({
+        dealId: deal.id,
+        userId,
+        round: deal.round,
+        suggestionsJson: suggestions,
+        conversationContext,
+        configSnapshot: config,
+        llmModel: process.env.LLM_MODEL || 'llama3.2',
+        generationSource,
+      });
+
+      logger.info('[ScenarioSuggestions] Training data logged', {
+        dealId,
+        round: deal.round,
+        generationSource
+      });
+    } catch (loggingError) {
+      // Don't fail the request if logging fails
+      logger.error('[ScenarioSuggestions] Failed to log training data', {
+        dealId,
+        error: loggingError,
+      });
+    }
+
+    return suggestions;
+  } catch (error) {
+    if (error instanceof CustomError) {
+      throw error;
+    }
+
+    throw new CustomError(
+      `Failed to generate scenario suggestions: ${error instanceof Error ? error.message : String(error)}`,
       500
     );
   }
