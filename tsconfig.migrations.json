@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "CommonJS",
+    "moduleResolution": "Node",
+    "outDir": "./dist-migrations",
+    "rootDir": ".",
+    "noEmit": false,
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false
+  },
+  "include": ["migrations/**/*", "sequelize.config.cjs"],
+  "exclude": ["node_modules", "dist", "src"]
+}
