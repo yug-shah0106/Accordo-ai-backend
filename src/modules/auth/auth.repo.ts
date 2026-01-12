@@ -31,6 +31,8 @@ interface UserData {
   roleId?: number;
   userType: 'admin' | 'customer' | 'vendor';
   status: string;
+  approvalLevel?: 'NONE' | 'L1' | 'L2' | 'L3';
+  approvalLimit?: number | null;
 }
 
 const repo = {

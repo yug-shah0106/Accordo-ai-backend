@@ -15,6 +15,9 @@ import type { Role } from './role.js';
 const userTypeEnum = ['admin', 'customer', 'vendor'] as const;
 export type UserType = (typeof userTypeEnum)[number];
 
+const approvalLevelEnum = ['NONE', 'L1', 'L2', 'L3'] as const;
+export type ApprovalLevel = (typeof approvalLevelEnum)[number];
+
 export class User extends Model<
   InferAttributes<User>,
   InferCreationAttributes<User>
@@ -29,6 +32,8 @@ export class User extends Model<
   declare companyId: ForeignKey<number> | null;
   declare roleId: ForeignKey<number> | null;
   declare status: string;
+  declare approvalLevel: CreationOptional<ApprovalLevel>;
+  declare approvalLimit: number | null;
   declare createdAt: CreationOptional<Date>;
   declare updatedAt: CreationOptional<Date>;
 
@@ -93,6 +98,16 @@ export default function userModel(sequelize: Sequelize): typeof User {
       status: {
         type: DataTypes.STRING,
         defaultValue: 'active',
+      },
+      approvalLevel: {
+        type: DataTypes.ENUM(...approvalLevelEnum),
+        allowNull: false,
+        defaultValue: 'NONE',
+      },
+      approvalLimit: {
+        type: DataTypes.DECIMAL(15, 2),
+        allowNull: true,
+        defaultValue: null,
       },
       createdAt: DataTypes.DATE,
       updatedAt: DataTypes.DATE,

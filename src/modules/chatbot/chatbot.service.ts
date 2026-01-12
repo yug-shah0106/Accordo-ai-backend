@@ -986,6 +986,12 @@ export const generateScenarioSuggestionsService = async (
       .map((m: ChatbotMessage) => `${m.role}: ${m.content}`)
       .join('\n');
 
+    // Extract config values with fallbacks
+    const priceConfig = config.parameters?.unit_price || { anchor: 100, target: 90, max_acceptable: 120, concession_step: 2 };
+    const termsConfig = config.parameters?.payment_terms || { options: ['Net 30', 'Net 60', 'Net 90'] as const };
+    const idealTerms = termsConfig.options?.[0] || 'Net 30';
+    const acceptableTerms = termsConfig.options?.[1] || 'Net 60';
+
     // Generate suggestions using LLM
     const prompt = `You are a procurement negotiation assistant. Analyze this negotiation and generate 4 counter-offer suggestions for each scenario type.
 
@@ -995,11 +1001,11 @@ Current Round: ${deal.round}
 Status: ${deal.status}
 
 NEGOTIATION CONFIG:
-Target Price: $${config.price.target}
-Min Price: $${config.price.min}
-Max Price: $${config.price.max}
-Ideal Payment Terms: ${config.terms.ideal}
-Acceptable Payment Terms: ${config.terms.acceptable}
+Target Price: $${priceConfig.target}
+Min Price: $${priceConfig.anchor}
+Max Price: $${priceConfig.max_acceptable}
+Ideal Payment Terms: ${idealTerms}
+Acceptable Payment Terms: ${acceptableTerms}
 
 CONVERSATION HISTORY:
 ${conversationContext || 'No messages yet'}
@@ -1048,28 +1054,28 @@ Each offer should be a short message (under 50 chars) like "We can do $92 Net 30
       // Fallback to default suggestions
       suggestions = {
         HARD: [
-          `We can do $${config.price.min} ${config.terms.ideal}`,
-          `Best I can offer is $${config.price.min + 2} ${config.terms.ideal}`,
-          `Final: $${config.price.min + 5} ${config.terms.ideal}`,
-          `Absolute limit: $${config.price.min + 8} ${config.terms.ideal}`,
+          `We can do $${priceConfig.anchor} ${idealTerms}`,
+          `Best I can offer is $${priceConfig.anchor + 2} ${idealTerms}`,
+          `Final: $${priceConfig.anchor + 5} ${idealTerms}`,
+          `Absolute limit: $${priceConfig.anchor + 8} ${idealTerms}`,
         ],
         MEDIUM: [
-          `We can do $${config.price.target - 5} ${config.terms.acceptable}`,
-          `How about $${config.price.target - 8} ${config.terms.acceptable}?`,
-          `We're open to $${config.price.target - 12} Net 90`,
-          `Final offer: $${config.price.target - 15} Net 90`,
+          `We can do $${priceConfig.target - 5} ${acceptableTerms}`,
+          `How about $${priceConfig.target - 8} ${acceptableTerms}?`,
+          `We're open to $${priceConfig.target - 12} Net 90`,
+          `Final offer: $${priceConfig.target - 15} Net 90`,
         ],
         SOFT: [
-          `We can do $${config.price.target} ${config.terms.acceptable}`,
-          `How about $${config.price.target - 2} Net 90?`,
-          `We're willing to go to $${config.price.target - 5} Net 90`,
-          `Final offer: $${config.price.target - 8} Net 90`,
+          `We can do $${priceConfig.target} ${acceptableTerms}`,
+          `How about $${priceConfig.target - 2} Net 90?`,
+          `We're willing to go to $${priceConfig.target - 5} Net 90`,
+          `Final offer: $${priceConfig.target - 8} Net 90`,
         ],
         WALK_AWAY: [
-          `We can do $${config.price.max} ${config.terms.ideal}`,
-          `Best I can offer is $${config.price.max - 2} ${config.terms.ideal}`,
-          `Our final offer is $${config.price.max + 10} ${config.terms.ideal} - take it or leave it`,
-          `Sorry, we can't go lower than $${config.price.max + 10}`,
+          `We can do $${priceConfig.max_acceptable} ${idealTerms}`,
+          `Best I can offer is $${priceConfig.max_acceptable - 2} ${idealTerms}`,
+          `Our final offer is $${priceConfig.max_acceptable + 10} ${idealTerms} - take it or leave it`,
+          `Sorry, we can't go lower than $${priceConfig.max_acceptable + 10}`,
         ],
       };
     }

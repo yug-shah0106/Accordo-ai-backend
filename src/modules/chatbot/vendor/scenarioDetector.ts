@@ -142,6 +142,7 @@ export function detectVendorScenario(messages: ChatbotMessage[]): ScenarioDetect
 export function getScenarioDescription(scenario: VendorScenario): string {
   const descriptions: Record<VendorScenario, string> = {
     HARD: 'Resistant to concessions. Makes small price reductions only. Likely to hold firm on terms.',
+    MEDIUM: 'Balanced approach. Open to negotiation with moderate concessions on both sides.',
     SOFT: 'Willing to negotiate. Makes reasonable concessions on both price and terms.',
     WALK_AWAY: 'Inflexible. Take it or leave it attitude. Unlikely to make concessions.',
   };
@@ -155,6 +156,7 @@ export function getScenarioDescription(scenario: VendorScenario): string {
 export function getScenarioEmoji(scenario: VendorScenario): string {
   const emojis: Record<VendorScenario, string> = {
     HARD: '🔒', // Lock (difficult to move)
+    MEDIUM: '⚖️', // Balance (moderate approach)
     SOFT: '🤝', // Handshake (collaborative)
     WALK_AWAY: '🚪', // Door (ready to leave)
   };

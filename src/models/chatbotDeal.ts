@@ -32,6 +32,7 @@ export class ChatbotDeal extends Model<
   declare latestDecisionAction: string | null;
   declare latestUtility: number | null;
   declare convoStateJson: object | null;
+  declare negotiationConfigJson: object | null;
   declare templateId: ForeignKey<string> | null;
   declare requisitionId: ForeignKey<number> | null;
   declare contractId: ForeignKey<number> | null;
@@ -137,6 +138,11 @@ export function initChatbotDealModel(sequelize: Sequelize): typeof ChatbotDeal {
         type: DataTypes.JSONB,
         allowNull: true,
         field: 'convo_state_json',
+      },
+      negotiationConfigJson: {
+        type: DataTypes.JSONB,
+        allowNull: true,
+        field: 'negotiation_config_json',
       },
       templateId: {
         type: DataTypes.UUID,

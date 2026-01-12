@@ -256,6 +256,7 @@ async function checkEmailService(): Promise<ServiceStatus> {
         socket.on('connect', () => {
           const latency = Date.now() - start;
           socket.destroy();
+          const webPort = env.smtp.mailhogWebPort || 5004;
           resolve({
             name: 'email',
             status: 'healthy',
@@ -264,7 +265,7 @@ async function checkEmailService(): Promise<ServiceStatus> {
             details: {
               provider: 'sendmail',
               devPort: port,
-              webUI: `http://localhost:8025`,
+              webUI: `http://localhost:${webPort}`,
             },
           });
         });

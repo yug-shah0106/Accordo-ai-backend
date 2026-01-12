@@ -24,8 +24,24 @@ const statusEnum = [
   'NegotiationStarted',
 ] as const;
 
+const approvalStatusEnum = [
+  'NOT_SUBMITTED',
+  'PENDING_L1',
+  'APPROVED_L1',
+  'PENDING_L2',
+  'APPROVED_L2',
+  'PENDING_L3',
+  'APPROVED_L3',
+  'FULLY_APPROVED',
+  'REJECTED',
+] as const;
+
+const approvalLevelEnum = ['L1', 'L2', 'L3'] as const;
+
 export type RequisitionCurrency = (typeof currencyEnum)[number];
 export type RequisitionStatus = (typeof statusEnum)[number];
+export type RequisitionApprovalStatus = (typeof approvalStatusEnum)[number];
+export type RequisitionApprovalLevel = (typeof approvalLevelEnum)[number];
 
 export class Requisition extends Model<
   InferAttributes<Requisition>,
@@ -61,6 +77,12 @@ export class Requisition extends Model<
   declare batna: number | null;
   declare discountedValue: number | null;
   declare maxDiscount: number | null;
+  declare approvalStatus: RequisitionApprovalStatus;
+  declare currentApprovalLevel: RequisitionApprovalLevel | null;
+  declare totalEstimatedAmount: number | null;
+  declare requiredApprovalLevel: RequisitionApprovalLevel | null;
+  declare submittedForApprovalAt: Date | null;
+  declare submittedByUserId: ForeignKey<number> | null;
   declare createdAt: CreationOptional<Date>;
 
   // Associations
@@ -133,6 +155,36 @@ export default function requisitionModel(sequelize: Sequelize): typeof Requisiti
       batna: DataTypes.DOUBLE,
       discountedValue: DataTypes.DOUBLE,
       maxDiscount: DataTypes.DOUBLE,
+      approvalStatus: {
+        type: DataTypes.ENUM(...approvalStatusEnum),
+        allowNull: false,
+        defaultValue: 'NOT_SUBMITTED',
+      },
+      currentApprovalLevel: {
+        type: DataTypes.ENUM(...approvalLevelEnum),
+        allowNull: true,
+        defaultValue: null,
+      },
+      totalEstimatedAmount: {
+        type: DataTypes.DECIMAL(15, 2),
+        allowNull: true,
+        defaultValue: null,
+      },
+      requiredApprovalLevel: {
+        type: DataTypes.ENUM(...approvalLevelEnum),
+        allowNull: true,
+        defaultValue: null,
+      },
+      submittedForApprovalAt: {
+        type: DataTypes.DATE,
+        allowNull: true,
+        defaultValue: null,
+      },
+      submittedByUserId: {
+        type: DataTypes.INTEGER,
+        allowNull: true,
+        defaultValue: null,
+      },
       createdAt: DataTypes.DATE,
     },
     {

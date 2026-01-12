@@ -36,6 +36,7 @@ import vendorBidModel, { VendorBid } from './vendorBid.js';
 import bidComparisonModel, { BidComparison } from './bidComparison.js';
 import vendorSelectionModel, { VendorSelection } from './vendorSelection.js';
 import vendorNotificationModel, { VendorNotification } from './vendorNotification.js';
+import { initApprovalModel, Approval } from './approval.js';
 
 // Type definitions for the models collection
 export interface Models {
@@ -74,6 +75,7 @@ export interface Models {
   BidComparison: typeof BidComparison;
   VendorSelection: typeof VendorSelection;
   VendorNotification: typeof VendorNotification;
+  Approval: typeof Approval;
   // Legacy aliases
   Vendor: typeof User;
   vendorCompany: typeof VendorCompany;
@@ -116,6 +118,7 @@ const models: Models = {
   BidComparison: bidComparisonModel(sequelize),
   VendorSelection: vendorSelectionModel(sequelize),
   VendorNotification: vendorNotificationModel(sequelize),
+  Approval: initApprovalModel(sequelize),
   // Maintain legacy aliases
   Vendor: null as unknown as typeof User,
   vendorCompany: null as unknown as typeof VendorCompany,
@@ -170,6 +173,7 @@ export {
   BidComparison,
   VendorSelection,
   VendorNotification,
+  Approval,
   sequelize,
 };
 

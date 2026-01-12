@@ -65,7 +65,11 @@ export async function captureVendorBid(dealId: string): Promise<CaptureVendorBid
   }
 
   // Get vendor info
-  const vendor = await User.findByPk(deal.Contract.vendorId);
+  const vendorId = deal.Contract.vendorId;
+  if (!vendorId) {
+    throw new CustomError('Contract has no vendor assigned', 400);
+  }
+  const vendor = await User.findByPk(vendorId);
   if (!vendor) {
     throw new CustomError('Vendor not found', 404);
   }
@@ -278,10 +282,18 @@ export async function generateAndSendComparison(
   }
 
   // Get procurement owner
+  if (!requisition.createdBy) {
+    throw new CustomError('Requisition has no owner', 400);
+  }
   const owner = await User.findByPk(requisition.createdBy);
   if (!owner) {
     throw new CustomError('Requisition owner not found', 404);
   }
+  if (!owner.email) {
+    throw new CustomError('Requisition owner has no email', 400);
+  }
+  const ownerEmail = owner.email;
+  const ownerName = owner.name || owner.email;
 
   // Get top bids
   const topBidsResult = await getTopBids(requisitionId, 3);
@@ -292,10 +304,10 @@ export async function generateAndSendComparison(
   // Generate PDF
   const pdfPath = await generateComparisonPDF({
     requisition: {
-      rfqId: requisition.rfqId,
-      subject: requisition.subject,
+      rfqId: requisition.rfqId || `RFQ-${requisitionId}`,
+      subject: requisition.subject || 'Untitled Requisition',
       projectName: (requisition as any).Project?.projectName || 'Unknown Project',
-      category: requisition.category,
+      category: requisition.category || 'General',
       deliveryDate: requisition.deliveryDate,
       negotiationClosureDate: requisition.negotiationClosureDate,
       totalVendors: status.totalVendors,
@@ -327,7 +339,7 @@ export async function generateAndSendComparison(
     topBidsJson: topBidsResult.bids,
     pdfUrl: pdfPath,
     sentToUserId: owner.id,
-    sentToEmail: owner.email,
+    sentToEmail: ownerEmail,
     emailStatus: 'PENDING',
     generatedAt: new Date(),
   });
@@ -336,12 +348,12 @@ export async function generateAndSendComparison(
   let emailSent = false;
   try {
     await sendComparisonEmail({
-      recipientEmail: owner.email,
-      recipientName: owner.name || owner.email,
+      recipientEmail: ownerEmail,
+      recipientName: ownerName,
       requisitionId,
-      requisitionTitle: requisition.subject,
+      requisitionTitle: requisition.subject || 'Untitled Requisition',
       projectName: (requisition as any).Project?.projectName || 'Unknown Project',
-      rfqId: requisition.rfqId,
+      rfqId: requisition.rfqId || `RFQ-${requisitionId}`,
       topBids: topBidsResult.bids,
       totalVendors: status.totalVendors,
       completedVendors: status.completedVendors,
@@ -455,7 +467,7 @@ export async function selectVendor(
     const po = await Po.create({
       contractId: selectedBid.contractId,
       requisitionId,
-      companyId: requisition.Project?.companyId || null,
+      companyId: (requisition as any).Project?.companyId || null,
       vendorId: selectedBid.vendorId,
       lineItems: null,
       subTotal: selectedBid.finalPrice,
@@ -499,7 +511,7 @@ export async function selectVendor(
         await sendVendorWonEmail({
           recipientEmail: vendor.email,
           vendorName: vendor.name || vendor.email,
-          requisitionTitle: requisition.subject,
+          requisitionTitle: requisition.subject || 'Untitled Requisition',
           projectName: (requisition as any).Project?.projectName || 'Unknown Project',
           selectedPrice: Number(selectedBid.finalPrice),
           chatSummary: selectedBid.chatSummaryNarrative,
@@ -508,7 +520,7 @@ export async function selectVendor(
         await sendVendorLostEmail({
           recipientEmail: vendor.email,
           vendorName: vendor.name || vendor.email,
-          requisitionTitle: requisition.subject,
+          requisitionTitle: requisition.subject || 'Untitled Requisition',
           projectName: (requisition as any).Project?.projectName || 'Unknown Project',
           bidPrice: Number(bid.finalPrice),
           winningPrice: Number(selectedBid.finalPrice),

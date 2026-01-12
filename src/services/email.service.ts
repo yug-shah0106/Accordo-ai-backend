@@ -268,12 +268,20 @@ Thank you for your continued partnership.
 /**
  * Unified email options interface
  */
+interface EmailAttachment {
+  filename: string;
+  content?: Buffer;
+  path?: string;
+  contentType?: string;
+}
+
 interface EmailOptions {
   from: string;
   to: string;
   subject: string;
   html: string;
   text: string;
+  attachments?: EmailAttachment[];
 }
 
 /**
@@ -556,28 +564,520 @@ export const sendStatusChangeEmail = async (
 };
 
 /**
- * Generic send email function - exported for use by other modules
+ * Email input options for object-based signature
  */
-export const sendEmail = async (
+interface SendEmailInput {
+  to: string;
+  subject: string;
+  html: string;
+  text?: string;
+  attachments?: EmailAttachment[];
+}
+
+/**
+ * Generic send email function - exported for use by other modules
+ * Supports both positional arguments and object-based input
+ */
+export async function sendEmail(options: SendEmailInput): Promise<{ messageId: string }>;
+export async function sendEmail(
   to: string,
   subject: string,
   html: string,
   text?: string,
-  attachments?: Array<{ filename: string; path: string }>
-): Promise<{ messageId: string }> => {
-  const mailOptions: EmailOptions = {
-    from: smtp.from || 'noreply@accordo.ai',
-    to,
-    subject,
-    html,
-    text: text || '',
-    attachments,
-  };
+  attachments?: EmailAttachment[]
+): Promise<{ messageId: string }>;
+export async function sendEmail(
+  toOrOptions: string | SendEmailInput,
+  subject?: string,
+  html?: string,
+  text?: string,
+  attachments?: EmailAttachment[]
+): Promise<{ messageId: string }> {
+  let mailOptions: EmailOptions;
+
+  if (typeof toOrOptions === 'object') {
+    // Object-based signature
+    mailOptions = {
+      from: smtp.from || 'noreply@accordo.ai',
+      to: toOrOptions.to,
+      subject: toOrOptions.subject,
+      html: toOrOptions.html,
+      text: toOrOptions.text || '',
+      attachments: toOrOptions.attachments,
+    };
+  } else {
+    // Positional arguments signature
+    mailOptions = {
+      from: smtp.from || 'noreply@accordo.ai',
+      to: toOrOptions,
+      subject: subject!,
+      html: html!,
+      text: text || '',
+      attachments,
+    };
+  }
 
   return sendEmailWithRetry(mailOptions);
-};
+}
 
 /**
  * Log email to database - exported for use by other modules
  */
 export { logEmail };
+
+// ==========================================
+// APPROVAL EMAIL TEMPLATES AND FUNCTIONS
+// ==========================================
+
+/**
+ * Generate approval pending email HTML
+ */
+const generateApprovalPendingEmailHTML = (
+  approverName: string,
+  requisitionData: {
+    title: string;
+    projectName: string;
+    submittedBy: string;
+    amount: number;
+    approvalLevel: string;
+    dueDate?: Date;
+    priority: string;
+  },
+  approvalLink: string
+): string => {
+  const priorityColors: Record<string, string> = {
+    LOW: '#6c757d',
+    MEDIUM: '#0066cc',
+    HIGH: '#ffc107',
+    URGENT: '#dc3545',
+  };
+  const priorityColor = priorityColors[requisitionData.priority] || '#6c757d';
+
+  return `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>Approval Required</title>
+    </head>
+    <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
+      <div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px;">
+        <h1 style="color: #0066cc; margin-top: 0;">Approval Required - ${requisitionData.approvalLevel}</h1>
+        <p>Dear ${approverName},</p>
+        <p>A requisition requires your approval:</p>
+
+        <div style="background-color: white; padding: 15px; border-radius: 5px; margin: 20px 0;">
+          <h2 style="color: #333; margin-top: 0;">Requisition Details</h2>
+          <p><strong>Title:</strong> ${requisitionData.title}</p>
+          <p><strong>Project:</strong> ${requisitionData.projectName}</p>
+          <p><strong>Submitted By:</strong> ${requisitionData.submittedBy}</p>
+          <p><strong>Amount:</strong> $${requisitionData.amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+          <p><strong>Approval Level:</strong> <span style="background-color: #0066cc; color: white; padding: 2px 8px; border-radius: 3px;">${requisitionData.approvalLevel}</span></p>
+          <p><strong>Priority:</strong> <span style="background-color: ${priorityColor}; color: white; padding: 2px 8px; border-radius: 3px;">${requisitionData.priority}</span></p>
+          ${requisitionData.dueDate ? `<p><strong>Due Date:</strong> ${requisitionData.dueDate.toLocaleDateString()}</p>` : ''}
+        </div>
+
+        <div style="margin: 30px 0; text-align: center;">
+          <a href="${approvalLink}" style="display: inline-block; background-color: #28a745; color: white; padding: 14px 32px; text-decoration: none; border-radius: 5px; font-weight: bold; font-size: 16px;">Review & Approve</a>
+        </div>
+
+        <p style="color: #666; font-size: 14px; margin-top: 30px;">
+          Please review the requisition and take action at your earliest convenience.
+        </p>
+      </div>
+    </body>
+    </html>
+  `;
+};
+
+/**
+ * Generate approval pending email plain text
+ */
+const generateApprovalPendingEmailText = (
+  approverName: string,
+  requisitionData: {
+    title: string;
+    projectName: string;
+    submittedBy: string;
+    amount: number;
+    approvalLevel: string;
+    dueDate?: Date;
+    priority: string;
+  },
+  approvalLink: string
+): string => {
+  return `
+Approval Required - ${requisitionData.approvalLevel}
+
+Dear ${approverName},
+
+A requisition requires your approval:
+
+Requisition Details:
+- Title: ${requisitionData.title}
+- Project: ${requisitionData.projectName}
+- Submitted By: ${requisitionData.submittedBy}
+- Amount: $${requisitionData.amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+- Approval Level: ${requisitionData.approvalLevel}
+- Priority: ${requisitionData.priority}
+${requisitionData.dueDate ? `- Due Date: ${requisitionData.dueDate.toLocaleDateString()}` : ''}
+
+Review & Approve: ${approvalLink}
+
+Please review the requisition and take action at your earliest convenience.
+  `;
+};
+
+/**
+ * Generate approval approved email HTML
+ */
+const generateApprovalApprovedEmailHTML = (
+  recipientName: string,
+  requisitionData: {
+    title: string;
+    projectName: string;
+    amount: number;
+    approvalLevel: string;
+    approvedBy: string;
+    nextLevel?: string;
+  },
+  portalLink: string
+): string => {
+  return `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>Requisition Approved</title>
+    </head>
+    <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
+      <div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px;">
+        <h1 style="color: #28a745; margin-top: 0;">Requisition Approved - ${requisitionData.approvalLevel}</h1>
+        <p>Dear ${recipientName},</p>
+        <p>Good news! A requisition has been approved.</p>
+
+        <div style="background-color: white; padding: 15px; border-radius: 5px; margin: 20px 0;">
+          <h2 style="color: #333; margin-top: 0;">Approval Details</h2>
+          <p><strong>Title:</strong> ${requisitionData.title}</p>
+          <p><strong>Project:</strong> ${requisitionData.projectName}</p>
+          <p><strong>Amount:</strong> $${requisitionData.amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+          <p><strong>Approved By:</strong> ${requisitionData.approvedBy}</p>
+          <p><strong>Approval Level:</strong> <span style="background-color: #28a745; color: white; padding: 2px 8px; border-radius: 3px;">${requisitionData.approvalLevel} APPROVED</span></p>
+          ${requisitionData.nextLevel ? `<p><strong>Next Step:</strong> Pending ${requisitionData.nextLevel} Approval</p>` : '<p><strong>Status:</strong> <span style="background-color: #28a745; color: white; padding: 2px 8px; border-radius: 3px;">FULLY APPROVED</span></p>'}
+        </div>
+
+        <div style="margin: 30px 0;">
+          <a href="${portalLink}" style="display: inline-block; background-color: #0066cc; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; font-weight: bold;">View Requisition</a>
+        </div>
+      </div>
+    </body>
+    </html>
+  `;
+};
+
+/**
+ * Generate approval approved email plain text
+ */
+const generateApprovalApprovedEmailText = (
+  recipientName: string,
+  requisitionData: {
+    title: string;
+    projectName: string;
+    amount: number;
+    approvalLevel: string;
+    approvedBy: string;
+    nextLevel?: string;
+  },
+  portalLink: string
+): string => {
+  return `
+Requisition Approved - ${requisitionData.approvalLevel}
+
+Dear ${recipientName},
+
+Good news! A requisition has been approved.
+
+Approval Details:
+- Title: ${requisitionData.title}
+- Project: ${requisitionData.projectName}
+- Amount: $${requisitionData.amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+- Approved By: ${requisitionData.approvedBy}
+- Approval Level: ${requisitionData.approvalLevel} APPROVED
+${requisitionData.nextLevel ? `- Next Step: Pending ${requisitionData.nextLevel} Approval` : '- Status: FULLY APPROVED'}
+
+View Requisition: ${portalLink}
+  `;
+};
+
+/**
+ * Generate approval rejected email HTML
+ */
+const generateApprovalRejectedEmailHTML = (
+  recipientName: string,
+  requisitionData: {
+    title: string;
+    projectName: string;
+    amount: number;
+    approvalLevel: string;
+    rejectedBy: string;
+    reason: string;
+  },
+  portalLink: string
+): string => {
+  return `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>Requisition Rejected</title>
+    </head>
+    <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
+      <div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px;">
+        <h1 style="color: #dc3545; margin-top: 0;">Requisition Rejected</h1>
+        <p>Dear ${recipientName},</p>
+        <p>Unfortunately, a requisition has been rejected.</p>
+
+        <div style="background-color: white; padding: 15px; border-radius: 5px; margin: 20px 0;">
+          <h2 style="color: #333; margin-top: 0;">Rejection Details</h2>
+          <p><strong>Title:</strong> ${requisitionData.title}</p>
+          <p><strong>Project:</strong> ${requisitionData.projectName}</p>
+          <p><strong>Amount:</strong> $${requisitionData.amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+          <p><strong>Rejected By:</strong> ${requisitionData.rejectedBy}</p>
+          <p><strong>Approval Level:</strong> <span style="background-color: #dc3545; color: white; padding: 2px 8px; border-radius: 3px;">${requisitionData.approvalLevel} REJECTED</span></p>
+
+          <div style="background-color: #f8d7da; border: 1px solid #f5c6cb; border-radius: 5px; padding: 15px; margin-top: 15px;">
+            <h3 style="color: #721c24; margin-top: 0;">Rejection Reason:</h3>
+            <p style="color: #721c24; margin-bottom: 0;">${requisitionData.reason}</p>
+          </div>
+        </div>
+
+        <div style="margin: 30px 0;">
+          <a href="${portalLink}" style="display: inline-block; background-color: #0066cc; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; font-weight: bold;">View Requisition</a>
+        </div>
+
+        <p style="color: #666; font-size: 14px; margin-top: 30px;">
+          You may revise and resubmit the requisition after addressing the concerns mentioned above.
+        </p>
+      </div>
+    </body>
+    </html>
+  `;
+};
+
+/**
+ * Generate approval rejected email plain text
+ */
+const generateApprovalRejectedEmailText = (
+  recipientName: string,
+  requisitionData: {
+    title: string;
+    projectName: string;
+    amount: number;
+    approvalLevel: string;
+    rejectedBy: string;
+    reason: string;
+  },
+  portalLink: string
+): string => {
+  return `
+Requisition Rejected
+
+Dear ${recipientName},
+
+Unfortunately, a requisition has been rejected.
+
+Rejection Details:
+- Title: ${requisitionData.title}
+- Project: ${requisitionData.projectName}
+- Amount: $${requisitionData.amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+- Rejected By: ${requisitionData.rejectedBy}
+- Approval Level: ${requisitionData.approvalLevel} REJECTED
+
+Rejection Reason:
+${requisitionData.reason}
+
+View Requisition: ${portalLink}
+
+You may revise and resubmit the requisition after addressing the concerns mentioned above.
+  `;
+};
+
+/**
+ * Send approval pending email to approver
+ */
+export const sendApprovalPendingEmail = async (
+  approverEmail: string,
+  approverName: string,
+  approverId: number,
+  requisitionData: {
+    id: number;
+    title: string;
+    projectName: string;
+    submittedBy: string;
+    amount: number;
+    approvalLevel: string;
+    dueDate?: Date;
+    priority: string;
+  },
+  approvalId: string
+): Promise<void> => {
+  try {
+    const approvalLink = `${env.vendorPortalUrl}/approvals/${approvalId}`;
+
+    const mailOptions: EmailOptions = {
+      from: smtp.from || 'noreply@accordo.ai',
+      to: approverEmail,
+      subject: `[${requisitionData.priority}] Approval Required: ${requisitionData.title}`,
+      html: generateApprovalPendingEmailHTML(approverName, requisitionData, approvalLink),
+      text: generateApprovalPendingEmailText(approverName, requisitionData, approvalLink),
+    };
+
+    const info = await sendEmailWithRetry(mailOptions);
+
+    await logEmail(
+      approverEmail,
+      approverId,
+      mailOptions.subject,
+      'other', // Using 'other' for approval emails
+      'sent',
+      undefined,
+      requisitionData.id,
+      {
+        emailSubType: 'approval_pending',
+        approvalLevel: requisitionData.approvalLevel,
+        approvalId,
+        amount: requisitionData.amount,
+        priority: requisitionData.priority,
+      },
+      undefined,
+      info.messageId,
+      0
+    );
+  } catch (error) {
+    logger.error('Failed to send approval pending email', {
+      approverEmail,
+      requisitionId: requisitionData.id,
+      error: (error as Error).message,
+    });
+    throw error;
+  }
+};
+
+/**
+ * Send approval approved email
+ */
+export const sendApprovalApprovedEmail = async (
+  recipientEmail: string,
+  recipientName: string,
+  recipientId: number,
+  requisitionData: {
+    id: number;
+    title: string;
+    projectName: string;
+    amount: number;
+    approvalLevel: string;
+    approvedBy: string;
+    nextLevel?: string;
+  }
+): Promise<void> => {
+  try {
+    const portalLink = `${env.vendorPortalUrl}/requisitions/${requisitionData.id}`;
+
+    const mailOptions: EmailOptions = {
+      from: smtp.from || 'noreply@accordo.ai',
+      to: recipientEmail,
+      subject: `Requisition Approved (${requisitionData.approvalLevel}): ${requisitionData.title}`,
+      html: generateApprovalApprovedEmailHTML(recipientName, requisitionData, portalLink),
+      text: generateApprovalApprovedEmailText(recipientName, requisitionData, portalLink),
+    };
+
+    const info = await sendEmailWithRetry(mailOptions);
+
+    await logEmail(
+      recipientEmail,
+      recipientId,
+      mailOptions.subject,
+      'other',
+      'sent',
+      undefined,
+      requisitionData.id,
+      {
+        emailSubType: 'approval_approved',
+        approvalLevel: requisitionData.approvalLevel,
+        approvedBy: requisitionData.approvedBy,
+        nextLevel: requisitionData.nextLevel,
+      },
+      undefined,
+      info.messageId,
+      0
+    );
+  } catch (error) {
+    logger.error('Failed to send approval approved email', {
+      recipientEmail,
+      requisitionId: requisitionData.id,
+      error: (error as Error).message,
+    });
+    throw error;
+  }
+};
+
+/**
+ * Send approval rejected email
+ */
+export const sendApprovalRejectedEmail = async (
+  recipientEmail: string,
+  recipientName: string,
+  recipientId: number,
+  requisitionData: {
+    id: number;
+    title: string;
+    projectName: string;
+    amount: number;
+    approvalLevel: string;
+    rejectedBy: string;
+    reason: string;
+  }
+): Promise<void> => {
+  try {
+    const portalLink = `${env.vendorPortalUrl}/requisitions/${requisitionData.id}`;
+
+    const mailOptions: EmailOptions = {
+      from: smtp.from || 'noreply@accordo.ai',
+      to: recipientEmail,
+      subject: `Requisition Rejected (${requisitionData.approvalLevel}): ${requisitionData.title}`,
+      html: generateApprovalRejectedEmailHTML(recipientName, requisitionData, portalLink),
+      text: generateApprovalRejectedEmailText(recipientName, requisitionData, portalLink),
+    };
+
+    const info = await sendEmailWithRetry(mailOptions);
+
+    await logEmail(
+      recipientEmail,
+      recipientId,
+      mailOptions.subject,
+      'other',
+      'sent',
+      undefined,
+      requisitionData.id,
+      {
+        emailSubType: 'approval_rejected',
+        approvalLevel: requisitionData.approvalLevel,
+        rejectedBy: requisitionData.rejectedBy,
+        reason: requisitionData.reason,
+      },
+      undefined,
+      info.messageId,
+      0
+    );
+  } catch (error) {
+    logger.error('Failed to send approval rejected email', {
+      recipientEmail,
+      requisitionId: requisitionData.id,
+      error: (error as Error).message,
+    });
+    throw error;
+  }
+};

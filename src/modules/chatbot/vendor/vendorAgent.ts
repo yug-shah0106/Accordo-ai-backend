@@ -235,6 +235,10 @@ function buildFallbackVendorMessage(
       if (r === 0) return `Our standard pricing is $${p} with ${t} payment terms. This reflects our quality and market position.`;
       return `We can adjust slightly to $${p} with ${t}, but that's as competitive as we can be.`;
     },
+    MEDIUM: (r, p, t) => {
+      if (r === 0) return `Thank you for reaching out. We can offer $${p} with ${t} payment terms. We're open to discussion.`;
+      return `We've reviewed your request. How about $${p} with ${t}? We can be flexible on some terms.`;
+    },
     SOFT: (r, p, t) => {
       if (r === 0) return `Thanks for your interest! We can offer $${p} with ${t} payment terms. Let's work together to find a solution.`;
       return `I appreciate your offer. We can do $${p} with ${t}. How does that sound?`;
