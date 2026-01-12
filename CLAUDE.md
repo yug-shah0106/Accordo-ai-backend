@@ -122,19 +122,68 @@ export class User extends Model<
 ## Configuration
 
 Copy `.env.example` to `.env`. Key settings:
-- `PORT=8000` (default)
+- `PORT=5002` (default) - Backend API server port
 - `DB_*` - PostgreSQL connection
 - `JWT_*` - Authentication tokens
 - `LLM_BASE_URL`, `LLM_MODEL` - Ollama configuration (default: llama3.2)
 - **Email Configuration**:
   - `EMAIL_PROVIDER` - Email provider to use: 'nodemailer', 'sendmail', or leave blank for auto-detection
   - `SMTP_*` - SMTP configuration (host, port, user, pass, from) for nodemailer
-  - `SENDMAIL_DEV_PORT` - Port for local SMTP testing with MailHog/Mailpit (default: 1025)
-- `VENDOR_PORTAL_URL` - Frontend vendor portal URL (default: http://localhost:3000/vendor)
-- `CHATBOT_FRONTEND_URL` - Chatbot frontend URL (default: http://localhost:5173)
-- `CHATBOT_API_URL` - Chatbot backend API URL (default: http://localhost:4000/api)
+  - `SENDMAIL_DEV_PORT` - Port for local SMTP testing with MailHog/Mailpit (default: 5004)
+  - `MAILHOG_WEB_PORT` - MailHog web UI port (default: 5005)
+- `VENDOR_PORTAL_URL` - Frontend vendor portal URL (default: http://localhost:5001/vendor)
+- `CHATBOT_FRONTEND_URL` - Chatbot frontend URL (default: http://localhost:5001)
+- `CHATBOT_API_URL` - Chatbot backend API URL (default: http://localhost:5002/api)
+- `EMBEDDING_SERVICE_URL` - Python embedding service URL (default: http://localhost:5003)
 
 Database auto-creates if it doesn't exist. Models auto-sync on startup.
+
+### Port Configuration (January 2026)
+
+All services are configured to run on sequential ports starting from 5001:
+
+> **Note**: Port 5000 is reserved by macOS AirPlay Receiver. Frontend uses port 5001.
+
+| Service | Port | Environment Variable | Description |
+|---------|------|---------------------|-------------|
+| Frontend | 5001 | `VITE_DEV_PORT` | React/Vite frontend application |
+| Backend API | 5002 | `PORT` | Express.js backend server |
+| Embedding Service | 5003 | `EMBEDDING_SERVICE_PORT` | Python FastAPI embedding service |
+| MailHog SMTP | 5004 | `SENDMAIL_DEV_PORT` | Email testing SMTP server |
+| MailHog Web UI | 5005 | `MAILHOG_WEB_PORT` | Email testing web interface |
+
+**External Services (unchanged):**
+| Service | Port | Notes |
+|---------|------|-------|
+| PostgreSQL | 5432 | Standard PostgreSQL port |
+| Redis | 6379 | Standard Redis port |
+| Ollama LLM | 11434 | Standard Ollama port |
+
+**Starting Services:**
+```bash
+# Start MailHog with new ports
+docker run -d -p 5004:1025 -p 5005:8025 mailhog/mailhog
+
+# Start embedding service (runs on 5003)
+cd embedding-service && python main.py
+
+# Start backend (runs on 5002)
+npm run dev
+
+# Frontend (separate repo - runs on port 5001)
+cd ../Accordo-ai-frontend && npm run dev
+```
+
+**Frontend Configuration:**
+For the frontend (separate repository), update `.env.local`:
+```bash
+VITE_BACKEND_URL=http://localhost:5002
+VITE_FRONTEND_URL=http://localhost:5001
+VITE_ASSEST_URL=http://localhost:5002
+VITE_DEV_PORT=5001
+```
+
+The frontend uses `VITE_DEV_PORT` environment variable for port configuration.
 
 ### Email Provider Configuration
 
@@ -151,7 +200,7 @@ The email service supports two providers with automatic detection:
 
 **Sendmail** (System sendmail):
 - Works without SMTP configuration
-- In development mode, uses `devPort` to send to MailHog/Mailpit on localhost:1025
+- In development mode, uses `devPort` to send to MailHog/Mailpit on localhost:5003
 - In production, uses system's sendmail binary
 - Best for local testing and simple deployments
 - Example: `EMAIL_PROVIDER=sendmail`
@@ -159,14 +208,15 @@ The email service supports two providers with automatic detection:
 **Local Testing with MailHog/Mailpit**:
 ```bash
 # Run MailHog (captures emails for testing)
-docker run -d -p 1025:1025 -p 8025:8025 mailhog/mailhog
+docker run -d -p 5003:1025 -p 5004:8025 mailhog/mailhog
 
 # Set in .env
 EMAIL_PROVIDER=sendmail
-SENDMAIL_DEV_PORT=1025
+SENDMAIL_DEV_PORT=5003
+MAILHOG_WEB_PORT=5004
 NODE_ENV=development
 
-# View emails at http://localhost:8025
+# View emails at http://localhost:5004
 ```
 
 ### Vendor Email Notifications
@@ -193,7 +243,7 @@ On contract status changes, vendors receive status update emails automatically.
 
 **Provider Logging**: Logs which provider is being used on startup and per email sent.
 
-**Local Development**: When using sendmail in development mode, emails are sent to MailHog (port 1025) for testing without requiring SMTP credentials.
+**Local Development**: When using sendmail in development mode, emails are sent to MailHog (port 5003) for testing without requiring SMTP credentials.
 
 **Email Types**:
 - `vendor_attached` - Sent when a vendor is first attached to a requisition
@@ -223,12 +273,13 @@ Query functions: `getEmailLogsForContract(contractId)`, `getEmailLogsForRecipien
 
 **Setup**:
 ```bash
-# Run MailHog via Docker
-docker run -d --name mailhog -p 1025:1025 -p 8025:8025 mailhog/mailhog
+# Run MailHog via Docker (maps container ports to host ports 5003/5004)
+docker run -d --name mailhog -p 5003:1025 -p 5004:8025 mailhog/mailhog
 
-# Configure .env
+# Configure .env (defaults work out of the box)
 EMAIL_PROVIDER=sendmail
-SENDMAIL_DEV_PORT=1025
+SENDMAIL_DEV_PORT=5003
+MAILHOG_WEB_PORT=5004
 NODE_ENV=development
 
 # Start backend
@@ -238,7 +289,7 @@ npm run dev
 **Verify**:
 - Server logs show: `Email service initialized with provider: sendmail`
 - Create contract or update status to trigger emails
-- View captured emails at http://localhost:8025
+- View captured emails at http://localhost:5004
 - Check EmailLogs table for audit trail
 
 **Stop MailHog**:
@@ -478,7 +529,7 @@ The Vector module provides semantic search, RAG (Retrieval-Augmented Generation)
                       ▼
          ┌────────────────────────┐
          │  Python Embedding      │
-         │  Microservice (8001)   │
+         │  Microservice (5002)   │
          │  (bge-large-en-v1.5)   │
          └────────────┬───────────┘
                       │
@@ -530,13 +581,13 @@ The Vector module provides semantic search, RAG (Retrieval-Augmented Generation)
 cd embedding-service
 python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
-python main.py  # Runs on port 8001
+python main.py  # Runs on port 5002
 ```
 
 Or with Docker:
 ```bash
 docker build -t accordo-embedding-service .
-docker run -p 8001:8001 accordo-embedding-service
+docker run -p 5002:5002 accordo-embedding-service
 ```
 
 ### API Endpoints (`/api/vector`)
@@ -568,7 +619,7 @@ docker run -p 8001:8001 accordo-embedding-service
 **Environment Variables**:
 ```bash
 # Embedding Service
-EMBEDDING_SERVICE_URL=http://localhost:8001
+EMBEDDING_SERVICE_URL=http://localhost:5002
 EMBEDDING_MODEL=BAAI/bge-large-en-v1.5
 EMBEDDING_DIMENSION=1024
 EMBEDDING_TIMEOUT=30000
@@ -713,7 +764,7 @@ if (deal.status !== 'NEGOTIATING') {
 **Embedding service not available**:
 ```bash
 # Check if Python service is running
-curl http://localhost:8001/health
+curl http://localhost:5002/health
 
 # Check logs
 cd embedding-service && python main.py
@@ -891,7 +942,7 @@ if (['ACCEPTED', 'WALKED_AWAY', 'ESCALATED'].includes(finalStatus)) {
 ```bash
 # PDF Storage
 PDF_STORAGE_PATH=./uploads/pdfs
-PDF_BASE_URL=http://localhost:8000/pdfs
+PDF_BASE_URL=http://localhost:5001/pdfs
 
 # Scheduler
 ENABLE_DEADLINE_SCHEDULER=true
@@ -932,8 +983,8 @@ The API documentation is powered by Swagger/OpenAPI 3.0, providing interactive d
 
 | Endpoint | Description |
 |----------|-------------|
-| `http://localhost:8000/api-docs` | Swagger UI - Interactive API explorer |
-| `http://localhost:8000/api-docs.json` | OpenAPI 3.0 JSON specification |
+| `http://localhost:5001/api-docs` | Swagger UI - Interactive API explorer |
+| `http://localhost:5001/api-docs.json` | OpenAPI 3.0 JSON specification |
 
 ### Architecture
 
@@ -1070,18 +1121,18 @@ To document a new endpoint, add JSDoc annotations in `src/modules/swagger.docs.t
 
 **Development**:
 1. Start the server: `npm run dev`
-2. Open browser: `http://localhost:8000/api-docs`
+2. Open browser: `http://localhost:5001/api-docs`
 3. Click "Authorize" and enter JWT token
 4. Test endpoints directly from the UI
 
 **Check Service Health**:
 ```bash
 # Simple health check
-curl http://localhost:8000/api/health
+curl http://localhost:5001/api/health
 
 # Comprehensive service health
-curl http://localhost:8000/api/health/services | jq .
+curl http://localhost:5001/api/health/services | jq .
 
 # Download OpenAPI spec
-curl http://localhost:8000/api-docs.json > openapi.json
+curl http://localhost:5001/api-docs.json > openapi.json
 ```

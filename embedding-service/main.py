@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 MODEL_NAME = os.getenv("EMBEDDING_MODEL", "BAAI/bge-large-en-v1.5")
 EMBEDDING_DIMENSION = 1024
 MAX_BATCH_SIZE = int(os.getenv("MAX_BATCH_SIZE", "32"))
-PORT = int(os.getenv("EMBEDDING_SERVICE_PORT", "8001"))
+PORT = int(os.getenv("EMBEDDING_SERVICE_PORT", "5003"))
 
 # Global model instance
 model: Optional[SentenceTransformer] = None

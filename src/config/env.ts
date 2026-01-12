@@ -39,6 +39,7 @@ export interface SMTPConfig {
   pass?: string;
   from?: string;
   devPort?: number;
+  mailhogWebPort?: number;
 }
 
 export type EmailProvider = 'nodemailer' | 'sendmail';
@@ -83,12 +84,13 @@ export interface EnvironmentConfig {
   vendorPortalUrl: string;
   chatbotFrontendUrl: string;
   chatbotApiUrl: string;
+  backendUrl: string;
 }
 
 export const env: EnvironmentConfig = {
   nodeEnv: process.env.NODE_ENV || 'development',
   openaiApiKey: process.env.OPENAI_API_KEY,
-  port: Number(process.env.PORT || 8000),
+  port: Number(process.env.PORT || 5002),
   logLevel: process.env.LOG_LEVEL || 'info',
   database: {
     host: process.env.DB_HOST || '127.0.0.1',
@@ -128,7 +130,8 @@ export const env: EnvironmentConfig = {
     user: process.env.SMTP_USER,
     pass: process.env.SMTP_PASS,
     from: process.env.SMTP_FROM_EMAIL,
-    devPort: process.env.SENDMAIL_DEV_PORT ? Number(process.env.SENDMAIL_DEV_PORT) : 1025,
+    devPort: process.env.SENDMAIL_DEV_PORT ? Number(process.env.SENDMAIL_DEV_PORT) : 5004,
+    mailhogWebPort: process.env.MAILHOG_WEB_PORT ? Number(process.env.MAILHOG_WEB_PORT) : 5005,
   },
   redisUrl: process.env.REDIS_URL,
   llm: {
@@ -138,7 +141,7 @@ export const env: EnvironmentConfig = {
     timeout: Number(process.env.LLM_TIMEOUT || 60000),
   },
   vector: {
-    embeddingServiceUrl: process.env.EMBEDDING_SERVICE_URL || 'http://localhost:8001',
+    embeddingServiceUrl: process.env.EMBEDDING_SERVICE_URL || 'http://localhost:5003',
     embeddingModel: process.env.EMBEDDING_MODEL || 'BAAI/bge-large-en-v1.5',
     embeddingDimension: Number(process.env.EMBEDDING_DIMENSION || 1024),
     embeddingTimeout: Number(process.env.EMBEDDING_TIMEOUT || 30000),
@@ -153,9 +156,10 @@ export const env: EnvironmentConfig = {
       : '*',
     credentials: process.env.CORS_ORIGIN ? true : false,
   },
-  vendorPortalUrl: process.env.VENDOR_PORTAL_URL || 'http://localhost:3000/vendor',
-  chatbotFrontendUrl: process.env.CHATBOT_FRONTEND_URL || 'http://localhost:5173',
-  chatbotApiUrl: process.env.CHATBOT_API_URL || 'http://localhost:4000/api',
+  vendorPortalUrl: process.env.VENDOR_PORTAL_URL || 'http://localhost:5001/vendor',
+  chatbotFrontendUrl: process.env.CHATBOT_FRONTEND_URL || 'http://localhost:5001',
+  chatbotApiUrl: process.env.CHATBOT_API_URL || 'http://localhost:5002/api',
+  backendUrl: process.env.BACKEND_URL || `http://localhost:${process.env.PORT || 5002}`,
 };
 
 export default env;
