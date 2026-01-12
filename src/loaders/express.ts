@@ -3,17 +3,32 @@ import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import toobusy from 'toobusy-js';
+import swaggerUi from 'swagger-ui-express';
 import env from '../config/env.js';
+import swaggerSpec from '../config/swagger.js';
 import { requestLogger } from '../middlewares/request-logger.js';
 import { errorHandler, notFoundHandler } from '../middlewares/error-handler.js';
 import routes from '../routes/index.js';
+import logger from '../config/logger.js';
 
 export const createExpressApp = (): Application => {
   const app = express();
 
   app.set('trust proxy', 1);
 
-  app.use(helmet());
+  // Helmet with CSP adjustments for Swagger UI
+  app.use(
+    helmet({
+      contentSecurityPolicy: {
+        directives: {
+          defaultSrc: ["'self'"],
+          styleSrc: ["'self'", "'unsafe-inline'"],
+          scriptSrc: ["'self'", "'unsafe-inline'"],
+          imgSrc: ["'self'", 'data:', 'https:'],
+        },
+      },
+    })
+  );
   app.use(cors(env.cors));
 
   app.use(
@@ -42,6 +57,32 @@ export const createExpressApp = (): Application => {
   app.get('/', (_req: Request, res: Response) => {
     res.json({ status: 'ok', message: 'Accordo API is running' });
   });
+
+  // Swagger UI documentation
+  app.use(
+    '/api-docs',
+    swaggerUi.serve,
+    swaggerUi.setup(swaggerSpec, {
+      explorer: true,
+      customCss: '.swagger-ui .topbar { display: none }',
+      customSiteTitle: 'Accordo AI API Documentation',
+      swaggerOptions: {
+        persistAuthorization: true,
+        displayRequestDuration: true,
+        filter: true,
+        showExtensions: true,
+        showCommonExtensions: true,
+      },
+    })
+  );
+
+  // Swagger JSON endpoint
+  app.get('/api-docs.json', (_req: Request, res: Response) => {
+    res.setHeader('Content-Type', 'application/json');
+    res.send(swaggerSpec);
+  });
+
+  logger.info(`Swagger UI available at http://localhost:${env.port}/api-docs`);
 
   app.use('/api', routes);
 

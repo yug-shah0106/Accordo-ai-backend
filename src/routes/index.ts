@@ -1,4 +1,4 @@
-import { Router, Request, Response } from 'express';
+import { Router } from 'express';
 import authRoutes from '../modules/auth/auth.routes.js';
 import companyRoutes from '../modules/company/company.routes.js';
 import requisitionRoutes from '../modules/requisition/requisition.routes.js';
@@ -18,12 +18,12 @@ import chatRoutes from '../modules/chat/chat.routes.js';
 import chatbotRoutes from '../modules/chatbot/chatbot.routes.js';
 import vectorRoutes from '../modules/vector/vector.routes.js';
 import bidComparisonRoutes from '../modules/bidComparison/bidComparison.routes.js';
+import healthRoutes from '../modules/health/health.routes.js';
 
 const router = Router();
 
-router.get('/health', (_req: Request, res: Response) => {
-  res.json({ status: 'ok' });
-});
+// Health check routes (comprehensive)
+router.use('/health', healthRoutes);
 
 router.use('/auth', authRoutes);
 router.use('/company', companyRoutes);

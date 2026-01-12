@@ -921,3 +921,167 @@ indexes: [
   { fields: ['requisitionId'] },   // Wrong (would cause "column not found")
 ]
 ```
+
+## Swagger API Documentation (January 2026)
+
+### Overview
+
+The API documentation is powered by Swagger/OpenAPI 3.0, providing interactive documentation for all backend endpoints with health monitoring for all services.
+
+### Access Points
+
+| Endpoint | Description |
+|----------|-------------|
+| `http://localhost:8000/api-docs` | Swagger UI - Interactive API explorer |
+| `http://localhost:8000/api-docs.json` | OpenAPI 3.0 JSON specification |
+
+### Architecture
+
+**Configuration Files**:
+- `src/config/swagger.ts` - OpenAPI specification with schemas, security, and tags
+- `src/modules/swagger.docs.ts` - JSDoc annotations for all API endpoints
+- `src/modules/health/` - Comprehensive health monitoring module
+
+**Integration** (`src/loaders/express.ts`):
+- Swagger UI served at `/api-docs` with custom styling
+- Helmet CSP adjusted to allow Swagger UI inline scripts/styles
+- JSON spec available at `/api-docs.json`
+
+### Health Monitoring Endpoints (`/api/health`)
+
+**Endpoints**:
+- `GET /api/health` - Simple health check (for load balancers)
+- `GET /api/health/services` - Comprehensive service health with latency metrics
+- `GET /api/health/ready` - Kubernetes readiness probe
+- `GET /api/health/live` - Kubernetes liveness probe
+
+**Services Monitored**:
+| Service | Check Method | Details |
+|---------|--------------|---------|
+| Database (PostgreSQL) | `sequelize.authenticate()` | Host, database name, dialect |
+| LLM (Ollama) | `GET /api/tags` | Model availability, available models list |
+| Embedding Service | `GET /health` | Device (GPU/CPU), model, dimension |
+| Redis | `redis.ping()` | Host, port, connection status |
+| Email (MailHog/SMTP) | TCP connection test | Provider, dev port, web UI URL |
+
+**Response Format**:
+```typescript
+{
+  status: 'healthy' | 'unhealthy' | 'degraded',
+  timestamp: string,
+  version: string,
+  uptime: number,
+  environment: string,
+  services: [
+    {
+      name: string,
+      status: 'healthy' | 'unhealthy' | 'degraded',
+      latency: number,  // milliseconds
+      message: string,
+      details: object
+    }
+  ]
+}
+```
+
+**Status Logic**:
+- `healthy` - All services operational
+- `degraded` - Some services have issues but core functionality works
+- `unhealthy` - Critical services (database) are down
+
+### Swagger Documentation Features
+
+**Security**:
+- JWT Bearer authentication configured
+- Token persistence across requests (via `persistAuthorization: true`)
+
+**API Tags** (categorization):
+- Health - Service health monitoring
+- Auth - Authentication and authorization
+- Chatbot - Negotiation chatbot and deal management
+- Bid Comparison - Vendor bid comparison and selection
+- Vector - Vector search and RAG operations
+- Requisition - Purchase requisition management
+- Contract - Contract management
+- Vendor - Vendor operations
+- Company - Company management
+- User - User management
+- Product - Product catalog
+- Dashboard - Dashboard analytics
+
+**Schemas Defined**:
+- `Error` - Standard error response
+- `SuccessResponse` - Standard success response
+- `ServiceHealth` - Individual service health status
+- `HealthResponse` - Full health report
+- `Deal` - Negotiation deal object
+- `Message` - Chat message object
+- `VendorBid` - Vendor bid details
+- `BidComparison` - Comparison report
+
+### Configuration
+
+**Dependencies**:
+- `swagger-jsdoc` (^6.2.8) - JSDoc to OpenAPI conversion
+- `swagger-ui-express` (^5.0.1) - Swagger UI middleware
+
+**Helmet CSP Configuration** (for Swagger UI):
+```typescript
+helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      scriptSrc: ["'self'", "'unsafe-inline'"],
+      imgSrc: ["'self'", 'data:', 'https:'],
+    },
+  },
+})
+```
+
+### Adding New API Documentation
+
+To document a new endpoint, add JSDoc annotations in `src/modules/swagger.docs.ts`:
+
+```typescript
+/**
+ * @swagger
+ * /api/your-endpoint:
+ *   post:
+ *     summary: Brief description
+ *     tags: [YourTag]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               field: { type: string }
+ *     responses:
+ *       200:
+ *         description: Success response
+ */
+```
+
+### Usage
+
+**Development**:
+1. Start the server: `npm run dev`
+2. Open browser: `http://localhost:8000/api-docs`
+3. Click "Authorize" and enter JWT token
+4. Test endpoints directly from the UI
+
+**Check Service Health**:
+```bash
+# Simple health check
+curl http://localhost:8000/api/health
+
+# Comprehensive service health
+curl http://localhost:8000/api/health/services | jq .
+
+# Download OpenAPI spec
+curl http://localhost:8000/api-docs.json > openapi.json
+```
