@@ -554,3 +554,30 @@ export const sendStatusChangeEmail = async (
     throw error;
   }
 };
+
+/**
+ * Generic send email function - exported for use by other modules
+ */
+export const sendEmail = async (
+  to: string,
+  subject: string,
+  html: string,
+  text?: string,
+  attachments?: Array<{ filename: string; path: string }>
+): Promise<{ messageId: string }> => {
+  const mailOptions: EmailOptions = {
+    from: smtp.from || 'noreply@accordo.ai',
+    to,
+    subject,
+    html,
+    text: text || '',
+    attachments,
+  };
+
+  return sendEmailWithRetry(mailOptions);
+};
+
+/**
+ * Log email to database - exported for use by other modules
+ */
+export { logEmail };

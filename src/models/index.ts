@@ -28,6 +28,14 @@ import { initChatbotTemplateParameterModel, ChatbotTemplateParameter } from './c
 import { initChatbotDealModel, ChatbotDeal } from './chatbotDeal.js';
 import { initChatbotMessageModel, ChatbotMessage } from './chatbotMessage.js';
 import { initNegotiationTrainingDataModel, NegotiationTrainingData } from './negotiationTrainingData.js';
+import { initMessageEmbeddingModel, MessageEmbedding } from './messageEmbedding.js';
+import { initDealEmbeddingModel, DealEmbedding } from './dealEmbedding.js';
+import { initNegotiationPatternModel, NegotiationPattern } from './negotiationPattern.js';
+import { initVectorMigrationStatusModel, VectorMigrationStatus } from './vectorMigrationStatus.js';
+import vendorBidModel, { VendorBid } from './vendorBid.js';
+import bidComparisonModel, { BidComparison } from './bidComparison.js';
+import vendorSelectionModel, { VendorSelection } from './vendorSelection.js';
+import vendorNotificationModel, { VendorNotification } from './vendorNotification.js';
 
 // Type definitions for the models collection
 export interface Models {
@@ -58,6 +66,14 @@ export interface Models {
   ChatbotDeal: typeof ChatbotDeal;
   ChatbotMessage: typeof ChatbotMessage;
   NegotiationTrainingData: typeof NegotiationTrainingData;
+  MessageEmbedding: typeof MessageEmbedding;
+  DealEmbedding: typeof DealEmbedding;
+  NegotiationPattern: typeof NegotiationPattern;
+  VectorMigrationStatus: typeof VectorMigrationStatus;
+  VendorBid: typeof VendorBid;
+  BidComparison: typeof BidComparison;
+  VendorSelection: typeof VendorSelection;
+  VendorNotification: typeof VendorNotification;
   // Legacy aliases
   Vendor: typeof User;
   vendorCompany: typeof VendorCompany;
@@ -92,6 +108,14 @@ const models: Models = {
   ChatbotDeal: initChatbotDealModel(sequelize),
   ChatbotMessage: initChatbotMessageModel(sequelize),
   NegotiationTrainingData: initNegotiationTrainingDataModel(sequelize),
+  MessageEmbedding: initMessageEmbeddingModel(sequelize),
+  DealEmbedding: initDealEmbeddingModel(sequelize),
+  NegotiationPattern: initNegotiationPatternModel(sequelize),
+  VectorMigrationStatus: initVectorMigrationStatusModel(sequelize),
+  VendorBid: vendorBidModel(sequelize),
+  BidComparison: bidComparisonModel(sequelize),
+  VendorSelection: vendorSelectionModel(sequelize),
+  VendorNotification: vendorNotificationModel(sequelize),
   // Maintain legacy aliases
   Vendor: null as unknown as typeof User,
   vendorCompany: null as unknown as typeof VendorCompany,
@@ -138,6 +162,14 @@ export {
   ChatbotDeal,
   ChatbotMessage,
   NegotiationTrainingData,
+  MessageEmbedding,
+  DealEmbedding,
+  NegotiationPattern,
+  VectorMigrationStatus,
+  VendorBid,
+  BidComparison,
+  VendorSelection,
+  VendorNotification,
   sequelize,
 };
 

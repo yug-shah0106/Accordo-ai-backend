@@ -10,6 +10,7 @@ import type { Offer, Decision, Explainability } from './engine/types.js';
 import type { ChatbotDeal } from '../../models/chatbotDeal.js';
 import type { ChatbotMessage } from '../../models/chatbotMessage.js';
 import { chatCompletion } from '../../services/llm.service.js';
+import { captureVendorBid, checkAndTriggerComparison } from '../bidComparison/bidComparison.service.js';
 
 export interface CreateDealInput {
   title: string;
@@ -333,6 +334,20 @@ export const processVendorMessageService = async (
     logger.info(
       `Processed vendor message for deal ${input.dealId}: ${decision.action} (utility: ${decision.utilityScore})`
     );
+
+    // Hook: Capture vendor bid when deal reaches terminal state
+    if (['ACCEPTED', 'WALKED_AWAY', 'ESCALATED'].includes(finalStatus)) {
+      try {
+        await captureVendorBid(deal.id);
+        if (deal.requisitionId) {
+          await checkAndTriggerComparison(deal.requisitionId);
+        }
+        logger.info(`Captured vendor bid for deal ${deal.id} with status ${finalStatus}`);
+      } catch (bidError) {
+        // Log but don't fail the message processing
+        logger.error(`Failed to capture vendor bid: ${(bidError as Error).message}`);
+      }
+    }
 
     return { message, accordoMessage, decision, explainability };
   } catch (error) {

@@ -3,6 +3,7 @@ import logger from './config/logger.js';
 import { connectDatabase } from './config/database.js';
 import createExpressApp from './loaders/express.js';
 import './models/index.js';
+import { startDeadlineScheduler, stopDeadlineScheduler } from './modules/bidComparison/scheduler/deadlineChecker.js';
 
 interface ErrorWithStack extends Error {
   stack?: string;
@@ -58,6 +59,23 @@ process.on('uncaughtException', (error: ErrorWithStack) => {
     app.listen(env.port, () => {
       logger.info(`Server listening on http://localhost:${env.port}`);
       console.info(`Server listening on http://localhost:${env.port}`);
+
+      // Start deadline scheduler for bid comparison
+      startDeadlineScheduler();
+      logger.info('Deadline scheduler started');
+    });
+
+    // Graceful shutdown
+    process.on('SIGTERM', () => {
+      logger.info('SIGTERM received, shutting down gracefully');
+      stopDeadlineScheduler();
+      process.exit(0);
+    });
+
+    process.on('SIGINT', () => {
+      logger.info('SIGINT received, shutting down gracefully');
+      stopDeadlineScheduler();
+      process.exit(0);
     });
   } catch (error) {
     const err = error as ErrorWithStack;

@@ -50,6 +50,17 @@ export interface LLMConfig {
   timeout: number;
 }
 
+export interface VectorConfig {
+  embeddingServiceUrl: string;
+  embeddingModel: string;
+  embeddingDimension: number;
+  embeddingTimeout: number;
+  defaultTopK: number;
+  similarityThreshold: number;
+  enableRealTimeVectorization: boolean;
+  migrationBatchSize: number;
+}
+
 export interface CORSConfig {
   origin: string | string[];
   credentials: boolean;
@@ -67,6 +78,7 @@ export interface EnvironmentConfig {
   smtp: SMTPConfig;
   redisUrl?: string;
   llm: LLMConfig;
+  vector: VectorConfig;
   cors: CORSConfig;
   vendorPortalUrl: string;
   chatbotFrontendUrl: string;
@@ -124,6 +136,16 @@ export const env: EnvironmentConfig = {
     model: process.env.LLM_MODEL || 'llama3.2',
     negotiationModel: process.env.LLM_NEGOTIATION_MODEL,
     timeout: Number(process.env.LLM_TIMEOUT || 60000),
+  },
+  vector: {
+    embeddingServiceUrl: process.env.EMBEDDING_SERVICE_URL || 'http://localhost:8001',
+    embeddingModel: process.env.EMBEDDING_MODEL || 'BAAI/bge-large-en-v1.5',
+    embeddingDimension: Number(process.env.EMBEDDING_DIMENSION || 1024),
+    embeddingTimeout: Number(process.env.EMBEDDING_TIMEOUT || 30000),
+    defaultTopK: Number(process.env.VECTOR_DEFAULT_TOP_K || 5),
+    similarityThreshold: Number(process.env.VECTOR_SIMILARITY_THRESHOLD || 0.7),
+    enableRealTimeVectorization: process.env.ENABLE_REALTIME_VECTORIZATION !== 'false',
+    migrationBatchSize: Number(process.env.VECTOR_MIGRATION_BATCH_SIZE || 100),
   },
   cors: {
     origin: process.env.CORS_ORIGIN

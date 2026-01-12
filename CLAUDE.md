@@ -453,3 +453,471 @@ These changes enable the frontend to:
 3. **User Behavior**: Track which scenarios and suggestions users select
 4. **Outcome Correlation**: Analyze which suggestions lead to successful deals
 5. **Model Comparison**: A/B test different LLM models
+
+## Vector & RAG System (January 2026)
+
+### Overview
+
+The Vector module provides semantic search, RAG (Retrieval-Augmented Generation), and vectorization capabilities for the negotiation system. It uses HuggingFace's `BAAI/bge-large-en-v1.5` model (1024 dimensions) for embeddings and PostgreSQL with in-memory vector storage.
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Accordo Backend (Node.js)                │
+└─────────────────────┬───────────────────────────────────────┘
+                      │
+         ┌────────────┼────────────┐
+         │            │            │
+         ▼            ▼            ▼
+   Real-time      Batch Job    Query Service
+   Queue          (Migration)  (RAG/Search)
+         │            │            │
+         └────────────┼────────────┘
+                      │
+                      ▼
+         ┌────────────────────────┐
+         │  Python Embedding      │
+         │  Microservice (8001)   │
+         │  (bge-large-en-v1.5)   │
+         └────────────┬───────────┘
+                      │
+                      ▼
+         ┌────────────────────────┐
+         │  PostgreSQL + Arrays   │
+         │  (Vector Storage)      │
+         └────────────────────────┘
+```
+
+### Key Components
+
+**Module Location**: `src/modules/vector/`
+
+**Files**:
+- `vector.types.ts` - TypeScript interfaces for all vector operations
+- `embedding.client.ts` - HTTP client for Python embedding service
+- `vector.service.ts` - Core vectorization, search, and RAG logic
+- `vector.controller.ts` - Express route handlers
+- `vector.routes.ts` - API route definitions
+- `vectorization.queue.ts` - In-memory queue for real-time processing
+- `migration.job.ts` - Batch migration for historical data
+- `index.ts` - Module exports
+
+**Models** (`src/models/`):
+- `messageEmbedding.ts` - Embeddings for individual messages
+- `dealEmbedding.ts` - Embeddings for deal summaries
+- `negotiationPattern.ts` - Learned negotiation patterns
+- `vectorMigrationStatus.ts` - Migration progress tracking
+
+### Python Embedding Microservice
+
+**Location**: `embedding-service/`
+
+**Files**:
+- `main.py` - FastAPI application
+- `requirements.txt` - Python dependencies
+- `Dockerfile` - Container configuration
+- `README.md` - Service documentation
+
+**Endpoints**:
+- `GET /health` - Health check with GPU/device info
+- `POST /embed` - Single text embedding
+- `POST /embed/batch` - Batch embeddings (up to 100)
+- `POST /similarity` - Compute cosine similarity
+
+**Running the Service**:
+```bash
+cd embedding-service
+python -m venv venv && source venv/bin/activate
+pip install -r requirements.txt
+python main.py  # Runs on port 8001
+```
+
+Or with Docker:
+```bash
+docker build -t accordo-embedding-service .
+docker run -p 8001:8001 accordo-embedding-service
+```
+
+### API Endpoints (`/api/vector`)
+
+**Search Endpoints**:
+- `POST /search/messages` - Find similar negotiation messages
+- `POST /search/deals` - Find similar completed deals
+- `POST /search/patterns` - Find relevant negotiation patterns
+
+**RAG Endpoints**:
+- `POST /context/:dealId` - Build AI context for a deal
+- `POST /rag/:dealId` - Get RAG context for system prompt augmentation
+
+**Embedding Endpoints**:
+- `POST /embed/message/:messageId` - Manually vectorize a message
+- `POST /embed/deal/:dealId` - Manually vectorize a deal
+
+**Migration Endpoints**:
+- `POST /migrate` - Start historical data migration
+- `GET /migrate/status` - Get migration progress
+- `POST /migrate/cancel` - Cancel running migration
+
+**Statistics**:
+- `GET /health` - Embedding service health
+- `GET /stats` - Vector database statistics
+
+### Configuration
+
+**Environment Variables**:
+```bash
+# Embedding Service
+EMBEDDING_SERVICE_URL=http://localhost:8001
+EMBEDDING_MODEL=BAAI/bge-large-en-v1.5
+EMBEDDING_DIMENSION=1024
+EMBEDDING_TIMEOUT=30000
+
+# Vector Search
+VECTOR_DEFAULT_TOP_K=5
+VECTOR_SIMILARITY_THRESHOLD=0.7
+
+# Processing
+ENABLE_REALTIME_VECTORIZATION=true
+VECTOR_MIGRATION_BATCH_SIZE=100
+```
+
+### Data Flow
+
+**Real-Time Vectorization**:
+1. Message created in chatbot
+2. `onMessageCreated()` hook enqueues vectorization task
+3. Queue processes task asynchronously
+4. Embedding generated via Python service
+5. Stored in `message_embeddings` table
+6. Deal embeddings updated on completion
+
+**RAG Context Building**:
+1. Vendor sends message
+2. `buildRAGContext()` called
+3. Query embedded and searched against:
+   - Similar successful deals
+   - Relevant negotiation patterns
+   - Past Accordo responses
+4. Context injected into LLM system prompt
+5. Enhanced response generated
+
+### Database Schema
+
+**message_embeddings**:
+- `id` (UUID) - Primary key
+- `message_id` (UUID) - FK to chatbot_messages
+- `deal_id` (UUID) - FK to chatbot_deals
+- `embedding` (FLOAT[]) - 1024-dimensional vector
+- `content_text` (TEXT) - Original embedded text
+- `content_type` (ENUM) - message | offer_extract | decision
+- `role` (ENUM) - VENDOR | ACCORDO | SYSTEM
+- `outcome`, `utility_score`, `decision_action` - Metadata
+- Indexed on: deal_id, message_id, role, outcome, created_at
+
+**deal_embeddings**:
+- `id` (UUID) - Primary key
+- `deal_id` (UUID) - FK to chatbot_deals
+- `embedding` (FLOAT[]) - 1024-dimensional vector
+- `embedding_type` (ENUM) - summary | pattern | outcome
+- `final_status`, `total_rounds`, `final_utility` - Deal metrics
+- `anchor_price`, `target_price`, `final_price` - Pricing data
+- Indexed on: deal_id, embedding_type, final_status, final_utility
+
+**negotiation_patterns**:
+- `id` (UUID) - Primary key
+- `embedding` (FLOAT[]) - Pattern vector
+- `pattern_type` (ENUM) - successful_negotiation | failed_negotiation | etc.
+- `pattern_name` (STRING) - Human-readable name
+- `avg_utility`, `success_rate`, `sample_count` - Statistics
+- `example_deal_ids` (UUID[]) - Reference deals
+- `is_active` (BOOLEAN) - Pattern status
+
+**vector_migration_status**:
+- Tracks batch migration progress
+- Fields: status, total_records, processed_records, failed_records
+- Processing rate and estimated time remaining
+
+### Usage Examples
+
+**Search Similar Messages**:
+```typescript
+import { vectorService } from './modules/vector/index.js';
+
+const results = await vectorService.searchSimilarMessages(
+  "I can offer $95 per unit with Net 60 terms",
+  {
+    topK: 5,
+    similarityThreshold: 0.7,
+    filters: {
+      role: 'ACCORDO',
+      decisionAction: 'COUNTER'
+    }
+  }
+);
+```
+
+**Build RAG Context**:
+```typescript
+const ragContext = await vectorService.buildRAGContext(
+  dealId,
+  "The vendor is offering $100 with Net 30 terms"
+);
+
+// Use in LLM prompt
+const enhancedPrompt = `${systemPrompt}${ragContext.systemPromptAddition}`;
+```
+
+**Manual Vectorization**:
+```typescript
+import { onMessageCreated, onDealCompleted } from './modules/vector/index.js';
+
+// After message creation
+await onMessageCreated(message, deal);
+
+// After deal completion
+await onDealCompleted(dealId);
+```
+
+### Integration with Chatbot
+
+The vector module integrates with the chatbot service to:
+
+1. **Enhance Responses**: RAG context provides relevant past negotiations
+2. **Track Patterns**: Successful negotiations are analyzed for patterns
+3. **Improve Suggestions**: Similar scenarios inform counter-offer generation
+4. **Train Models**: Vectorized data feeds future model fine-tuning
+
+**Hook Integration** (add to chatbot.service.ts):
+```typescript
+import { onMessageCreated, onDealCompleted } from '../vector/index.js';
+
+// After creating a message
+await onMessageCreated(newMessage, deal);
+
+// After deal status changes to ACCEPTED/WALKED_AWAY
+if (deal.status !== 'NEGOTIATING') {
+  await onDealCompleted(deal.id);
+}
+```
+
+### Performance Considerations
+
+- **Embedding latency**: ~10-50ms (GPU) / ~100-300ms (CPU)
+- **Batch processing**: Up to 100 texts per request
+- **Search latency**: <100ms with in-memory similarity computation
+- **Migration rate**: ~10-50 records/second depending on hardware
+
+### Troubleshooting
+
+**Embedding service not available**:
+```bash
+# Check if Python service is running
+curl http://localhost:8001/health
+
+# Check logs
+cd embedding-service && python main.py
+```
+
+**Slow search performance**:
+- Reduce `topK` parameter
+- Add more specific filters
+- Consider implementing HNSW index for large datasets
+
+**Migration failures**:
+- Check `vector_migration_status` table for errors
+- Resume failed migrations with `resumeMigration(id)`
+- Reduce batch size if memory issues
+
+## Vendor Bid Comparison System (January 2026)
+
+### Overview
+
+The Bid Comparison System tracks multiple vendor negotiations per requisition, compares final offers, generates PDF reports with charts, and enables procurement owners to select winning vendors with full audit trail.
+
+### Architecture (`src/modules/bidComparison/`)
+
+**Key Files**:
+- `bidComparison.service.ts` - Core business logic for bid capture, comparison, and selection
+- `bidComparison.controller.ts` - Express route handlers for comparison endpoints
+- `bidComparison.routes.ts` - API route definitions
+- `bidComparison.validator.ts` - Request validation schemas
+- `bidComparison.types.ts` - TypeScript interfaces
+- `pdf/pdfGenerator.ts` - PDFKit-based report generation with bar charts
+- `pdf/chartRenderer.ts` - Horizontal bar chart rendering
+- `summary/summaryGenerator.ts` - LLM-generated negotiation summaries
+- `scheduler/deadlineChecker.ts` - Cron job for deadline-triggered comparisons
+
+### Database Models
+
+**VendorBid** (`vendor_bids` table):
+Stores final bid information from completed vendor negotiations.
+- `id` (UUID) - Primary key
+- `requisitionId` (INTEGER) - FK to Requisitions
+- `contractId` (INTEGER) - FK to Contracts
+- `dealId` (UUID) - FK to chatbot_deals
+- `vendorId` (INTEGER) - FK to Users
+- `finalPrice` (DECIMAL) - Final negotiated total price
+- `unitPrice` (DECIMAL) - Final negotiated unit price
+- `paymentTerms` (STRING) - Payment terms (e.g., "Net 30")
+- `deliveryDate` (DATE) - Promised delivery date
+- `utilityScore` (DECIMAL) - Final utility score (0-1)
+- `bidStatus` (ENUM) - PENDING | COMPLETED | EXCLUDED | SELECTED | REJECTED
+- `dealStatus` (ENUM) - NEGOTIATING | ACCEPTED | WALKED_AWAY | ESCALATED
+- `chatSummaryMetrics` (JSONB) - Structured metrics from negotiation
+- `chatSummaryNarrative` (TEXT) - LLM-generated narrative summary
+- `chatLink` (STRING) - URL to view full chat history
+- Indexes: requisition_id, vendor_id, bid_status, final_price, deal_id, contract_id
+
+**BidComparison** (`bid_comparisons` table):
+Tracks comparison reports sent to procurement owners.
+- `id` (UUID) - Primary key
+- `requisitionId` (INTEGER) - FK to Requisitions
+- `triggeredBy` (ENUM) - ALL_COMPLETED | DEADLINE_REACHED | MANUAL
+- `totalVendors` (INTEGER) - Total vendors attached to requisition
+- `completedVendors` (INTEGER) - Vendors who completed negotiations
+- `excludedVendors` (INTEGER) - Vendors excluded (walked away)
+- `topBidsJson` (JSONB) - Array of top bids with vendor details
+- `pdfUrl` (STRING) - Path to generated PDF report
+- `sentToUserId` (INTEGER) - FK to Users (procurement owner)
+- `sentToEmail` (STRING) - Email address comparison was sent to
+- `emailStatus` (ENUM) - PENDING | SENT | FAILED
+- `emailLogId` (INTEGER) - FK to EmailLogs for audit
+- Indexes: requisition_id, triggered_by, generated_at, email_status
+
+**VendorSelection** (`vendor_selections` table):
+Full audit trail for vendor selection decisions.
+- `id` (UUID) - Primary key
+- `requisitionId` (INTEGER) - FK to Requisitions
+- `comparisonId` (UUID) - FK to bid_comparisons
+- `selectedVendorId` (INTEGER) - FK to Users (winning vendor)
+- `selectedBidId` (UUID) - FK to vendor_bids
+- `selectedPrice` (DECIMAL) - Final price of selected bid
+- `selectedByUserId` (INTEGER) - FK to Users (decision maker)
+- `selectionReason` (TEXT) - Optional reason for selection
+- `selectionMethod` (ENUM) - EMAIL_LINK | PORTAL | API
+- `poId` (INTEGER) - FK to Pos (auto-generated PO)
+- Indexes: requisition_id (unique), selected_vendor_id, selected_by_user_id, selected_at
+
+**VendorNotification** (`vendor_notifications` table):
+Track post-selection notifications to all vendors.
+- `id` (UUID) - Primary key
+- `selectionId` (UUID) - FK to vendor_selections
+- `vendorId` (INTEGER) - FK to Users
+- `bidId` (UUID) - FK to vendor_bids
+- `notificationType` (ENUM) - SELECTION_WON | SELECTION_LOST
+- `emailLogId` (INTEGER) - FK to EmailLogs
+- `emailStatus` (ENUM) - PENDING | SENT | FAILED
+- Indexes: selection_id, vendor_id, notification_type, email_status
+
+### API Endpoints (`/api/bid-comparison`)
+
+**Comparison Operations**:
+- `GET /:requisitionId` - Get comparison status for a requisition
+- `GET /:requisitionId/bids` - List all bids for a requisition
+- `GET /:requisitionId/pdf` - Download comparison PDF report
+- `POST /:requisitionId/generate` - Manually trigger comparison generation
+
+**Selection Operations**:
+- `POST /:requisitionId/select/:bidId` - Select winning vendor
+- `GET /:requisitionId/selection` - Get selection details
+
+### Trigger Mechanisms
+
+**Automatic Triggers**:
+1. **All Vendors Complete**: When all attached vendors complete negotiations (ACCEPTED, WALKED_AWAY, or ESCALATED), comparison is automatically generated
+2. **Deadline Reached**: Hourly cron job checks `negotiationClosureDate` and triggers comparison for expired requisitions
+
+**Manual Trigger**:
+- Procurement owner can manually request comparison via `POST /api/bid-comparison/:requisitionId/generate`
+
+### PDF Report Generation
+
+**PDFKit Features**:
+- Header with requisition details (title, company, date)
+- Horizontal bar chart comparing vendor prices (lowest to highest)
+- Color-coded bars (top 3 highlighted in different colors)
+- Detailed table with: Vendor name, Final price, Unit price, Payment terms, Delivery date, Utility score, Chat summary link
+- Footer with generation timestamp
+
+**Chart Configuration**:
+- Y-axis: Vendor names
+- X-axis: Price scale
+- Colors: Gold (#FFD700) for rank 1, Silver (#C0C0C0) for rank 2, Bronze (#CD7F32) for rank 3
+
+### Post-Selection Workflow
+
+When a vendor is selected:
+1. **Create VendorSelection record** with full audit details
+2. **Update requisition status** to 'Awarded'
+3. **Auto-generate Purchase Order** for selected vendor
+4. **Send WIN notification** to selected vendor
+5. **Send LOST notifications** to all other participating vendors
+6. **Update bid statuses** - SELECTED for winner, REJECTED for others
+
+### Email Templates
+
+**Comparison Email** (sent to procurement owner):
+- Summary table with top bids
+- Quick approve buttons (links to selection endpoint)
+- PDF attachment with full comparison
+- Link to detailed portal view
+
+**Win/Loss Notifications** (sent to vendors):
+- Clear outcome message
+- Deal summary (price, terms)
+- Next steps for winning vendor (PO details)
+- Professional closure for losing vendors
+
+### Integration with Chatbot
+
+**Hook Integration** (`chatbot.service.ts`):
+```typescript
+// After deal status changes to terminal state
+if (['ACCEPTED', 'WALKED_AWAY', 'ESCALATED'].includes(finalStatus)) {
+  await bidComparisonService.captureVendorBid(deal.id);
+  await bidComparisonService.checkAndTriggerComparison(deal.requisitionId);
+}
+```
+
+**Bid Capture**:
+- Extracts final offer details from completed deal
+- Generates chat summary (metrics + LLM narrative)
+- Creates VendorBid record linked to deal
+
+### Configuration
+
+**Environment Variables**:
+```bash
+# PDF Storage
+PDF_STORAGE_PATH=./uploads/pdfs
+PDF_BASE_URL=http://localhost:8000/pdfs
+
+# Scheduler
+ENABLE_DEADLINE_SCHEDULER=true
+DEADLINE_CHECK_INTERVAL=0 * * * *  # Every hour (cron expression)
+```
+
+### Dependencies
+
+- `pdfkit` (^0.16.0) - PDF generation
+- `node-cron` (^3.0.3) - Deadline scheduling
+
+### Technical Notes
+
+**Sequelize ENUM Bug Workaround**:
+ENUM fields in the 4 new models do not include `comment` properties due to a Sequelize bug that generates invalid SQL when altering ENUM columns with comments:
+```sql
+-- Bug produces invalid SQL with USING after COMMENT
+ALTER TABLE ... ALTER COLUMN ... TYPE enum  ; COMMENT ON COLUMN ... USING (cast);
+```
+Solution: Removed `comment` property from all ENUM field definitions in vendorBid.ts, bidComparison.ts, vendorSelection.ts, and vendorNotification.ts.
+
+**Index Field Naming**:
+With `underscored: true` option, index fields use snake_case (database column names):
+```typescript
+indexes: [
+  { fields: ['requisition_id'] },  // Correct (snake_case)
+  { fields: ['requisitionId'] },   // Wrong (would cause "column not found")
+]
+```
