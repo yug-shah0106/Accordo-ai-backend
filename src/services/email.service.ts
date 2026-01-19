@@ -428,8 +428,9 @@ export const sendVendorAttachedEmail = async (
     };
 
     const portalLink = `${env.vendorPortalUrl}/contracts/${contract.uniqueToken}`;
-    const chatbotLink = chatbotDealId
-      ? `${env.chatbotFrontendUrl}/conversation/deals/${chatbotDealId}`
+    // Build hierarchical chatbot URL: /chatbot/requisitions/{rfqId}/vendors/{vendorId}/deals/{dealId}
+    const chatbotLink = chatbotDealId && contract.vendorId && (requisition as any).id
+      ? `${env.chatbotFrontendUrl}/chatbot/requisitions/${(requisition as any).id}/vendors/${contract.vendorId}/deals/${chatbotDealId}`
       : undefined;
 
     const mailOptions: EmailOptions = {
@@ -1079,5 +1080,312 @@ export const sendApprovalRejectedEmail = async (
       error: (error as Error).message,
     });
     throw error;
+  }
+};
+
+// ==========================================
+// DEAL CREATED EMAIL (Chatbot Negotiation)
+// ==========================================
+
+/**
+ * Input data for deal created email
+ */
+interface DealCreatedEmailData {
+  dealId: string;
+  dealTitle: string;
+  requisitionId: number;
+  rfqNumber: string;
+  requisitionTitle: string;
+  projectName: string;
+  vendorId: number;
+  vendorName: string;
+  vendorEmail: string;
+  negotiationDeadline?: Date;
+  products: Array<{
+    name: string;
+    quantity: number;
+    targetPrice: number;
+    unit?: string;
+  }>;
+  priceConfig?: {
+    targetUnitPrice: number;
+    maxAcceptablePrice: number;
+  };
+  paymentTerms?: {
+    minDays: number;
+    maxDays: number;
+  };
+  deliveryDate?: string;
+}
+
+/**
+ * Generate HTML email for deal created notification
+ */
+const generateDealCreatedEmailHTML = (
+  data: DealCreatedEmailData,
+  chatbotLink: string
+): string => {
+  const productsHTML = data.products
+    .map(
+      (p) => `
+    <tr>
+      <td style="padding: 12px; border: 1px solid #e5e7eb;">${p.name}</td>
+      <td style="padding: 12px; border: 1px solid #e5e7eb; text-align: center;">${p.quantity}${p.unit ? ` ${p.unit}` : ''}</td>
+      <td style="padding: 12px; border: 1px solid #e5e7eb; text-align: right;">$${p.targetPrice.toFixed(2)}</td>
+    </tr>
+  `
+    )
+    .join('');
+
+  const totalValue = data.products.reduce((sum, p) => sum + p.quantity * p.targetPrice, 0);
+
+  return `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>New Negotiation Deal Created</title>
+    </head>
+    <body style="font-family: 'Segoe UI', Arial, sans-serif; line-height: 1.6; color: #1f2937; max-width: 650px; margin: 0 auto; padding: 20px; background-color: #f3f4f6;">
+      <div style="background-color: white; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
+        <!-- Header -->
+        <div style="background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%); padding: 30px; text-align: center;">
+          <h1 style="color: white; margin: 0; font-size: 24px; font-weight: 600;">New Negotiation Invitation</h1>
+          <p style="color: rgba(255,255,255,0.9); margin: 10px 0 0 0; font-size: 14px;">You've been invited to negotiate on a new deal</p>
+        </div>
+
+        <!-- Content -->
+        <div style="padding: 30px;">
+          <p style="font-size: 16px; margin-bottom: 20px;">Dear <strong>${data.vendorName}</strong>,</p>
+
+          <p style="margin-bottom: 25px;">You have been invited to participate in a negotiation for the following requisition. Please review the details below and click the button to start the negotiation process.</p>
+
+          <!-- Deal Summary Card -->
+          <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 20px; margin-bottom: 25px;">
+            <h2 style="color: #1e40af; margin: 0 0 15px 0; font-size: 18px; font-weight: 600;">Deal Summary</h2>
+            <table style="width: 100%;">
+              <tr>
+                <td style="padding: 8px 0; color: #64748b; width: 140px;">Deal Title:</td>
+                <td style="padding: 8px 0; font-weight: 500;">${data.dealTitle}</td>
+              </tr>
+              <tr>
+                <td style="padding: 8px 0; color: #64748b;">RFQ Number:</td>
+                <td style="padding: 8px 0; font-weight: 500;">${data.rfqNumber}</td>
+              </tr>
+              <tr>
+                <td style="padding: 8px 0; color: #64748b;">Project:</td>
+                <td style="padding: 8px 0; font-weight: 500;">${data.projectName}</td>
+              </tr>
+              <tr>
+                <td style="padding: 8px 0; color: #64748b;">Estimated Value:</td>
+                <td style="padding: 8px 0; font-weight: 500; color: #059669;">$${totalValue.toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
+              </tr>
+              ${data.deliveryDate ? `
+              <tr>
+                <td style="padding: 8px 0; color: #64748b;">Delivery By:</td>
+                <td style="padding: 8px 0; font-weight: 500;">${new Date(data.deliveryDate).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}</td>
+              </tr>
+              ` : ''}
+              ${data.negotiationDeadline ? `
+              <tr>
+                <td style="padding: 8px 0; color: #64748b;">Negotiation Deadline:</td>
+                <td style="padding: 8px 0; font-weight: 500; color: #dc2626;">${new Date(data.negotiationDeadline).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}</td>
+              </tr>
+              ` : ''}
+            </table>
+          </div>
+
+          <!-- Products Table -->
+          <h3 style="color: #374151; margin: 0 0 15px 0; font-size: 16px; font-weight: 600;">Products Required</h3>
+          <table style="width: 100%; border-collapse: collapse; margin-bottom: 25px;">
+            <thead>
+              <tr style="background-color: #f1f5f9;">
+                <th style="padding: 12px; border: 1px solid #e5e7eb; text-align: left; font-weight: 600; color: #475569;">Product</th>
+                <th style="padding: 12px; border: 1px solid #e5e7eb; text-align: center; font-weight: 600; color: #475569;">Quantity</th>
+                <th style="padding: 12px; border: 1px solid #e5e7eb; text-align: right; font-weight: 600; color: #475569;">Target Price</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${productsHTML}
+            </tbody>
+            <tfoot>
+              <tr style="background-color: #f8fafc;">
+                <td colspan="2" style="padding: 12px; border: 1px solid #e5e7eb; text-align: right; font-weight: 600;">Total Estimated Value:</td>
+                <td style="padding: 12px; border: 1px solid #e5e7eb; text-align: right; font-weight: 600; color: #059669;">$${totalValue.toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
+              </tr>
+            </tfoot>
+          </table>
+
+          ${data.paymentTerms ? `
+          <!-- Payment Terms -->
+          <div style="background-color: #fef3c7; border: 1px solid #fcd34d; border-radius: 8px; padding: 15px; margin-bottom: 25px;">
+            <p style="margin: 0; color: #92400e; font-size: 14px;">
+              <strong>Payment Terms:</strong> Preferred ${data.paymentTerms.minDays}-${data.paymentTerms.maxDays} days
+            </p>
+          </div>
+          ` : ''}
+
+          <!-- CTA Button -->
+          <div style="text-align: center; margin: 30px 0;">
+            <a href="${chatbotLink}" style="display: inline-block; background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%); color: white; padding: 16px 40px; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 16px; box-shadow: 0 4px 14px rgba(37, 99, 235, 0.4);">Start Negotiation</a>
+          </div>
+
+          <p style="color: #64748b; font-size: 14px; margin-top: 25px; text-align: center;">
+            Click the button above to access the negotiation platform and submit your offer.
+          </p>
+
+          ${data.negotiationDeadline ? `
+          <div style="background-color: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; padding: 15px; margin-top: 20px; text-align: center;">
+            <p style="margin: 0; color: #991b1b; font-size: 14px;">
+              <strong>Important:</strong> This negotiation link will expire on ${new Date(data.negotiationDeadline).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}
+            </p>
+          </div>
+          ` : ''}
+        </div>
+
+        <!-- Footer -->
+        <div style="background-color: #f8fafc; padding: 20px 30px; border-top: 1px solid #e2e8f0;">
+          <p style="color: #64748b; font-size: 12px; margin: 0; text-align: center;">
+            This email was sent by Accordo AI Procurement Platform.<br>
+            If you have questions, please contact your procurement representative.
+          </p>
+        </div>
+      </div>
+    </body>
+    </html>
+  `;
+};
+
+/**
+ * Generate plain text email for deal created notification
+ */
+const generateDealCreatedEmailText = (
+  data: DealCreatedEmailData,
+  chatbotLink: string
+): string => {
+  const productsText = data.products
+    .map((p) => `  - ${p.name}: Qty ${p.quantity}, Target Price $${p.targetPrice.toFixed(2)}`)
+    .join('\n');
+
+  const totalValue = data.products.reduce((sum, p) => sum + p.quantity * p.targetPrice, 0);
+
+  return `
+NEW NEGOTIATION INVITATION
+===========================
+
+Dear ${data.vendorName},
+
+You have been invited to participate in a negotiation for the following requisition.
+
+DEAL SUMMARY
+------------
+Deal Title: ${data.dealTitle}
+RFQ Number: ${data.rfqNumber}
+Project: ${data.projectName}
+Estimated Value: $${totalValue.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+${data.deliveryDate ? `Delivery By: ${new Date(data.deliveryDate).toLocaleDateString()}` : ''}
+${data.negotiationDeadline ? `Negotiation Deadline: ${new Date(data.negotiationDeadline).toLocaleDateString()}` : ''}
+
+PRODUCTS REQUIRED
+-----------------
+${productsText}
+
+Total Estimated Value: $${totalValue.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+
+${data.paymentTerms ? `Payment Terms: Preferred ${data.paymentTerms.minDays}-${data.paymentTerms.maxDays} days` : ''}
+
+START NEGOTIATION
+-----------------
+Click the link below to access the negotiation platform and submit your offer:
+${chatbotLink}
+
+${data.negotiationDeadline ? `IMPORTANT: This negotiation link will expire on ${new Date(data.negotiationDeadline).toLocaleDateString()}` : ''}
+
+---
+This email was sent by Accordo AI Procurement Platform.
+If you have questions, please contact your procurement representative.
+  `;
+};
+
+/**
+ * Send deal created email to vendor
+ * Called when a new chatbot deal is created from the wizard
+ */
+export const sendDealCreatedEmail = async (
+  data: DealCreatedEmailData
+): Promise<{ success: boolean; messageId?: string; error?: string }> => {
+  try {
+    // Build the new hierarchical chatbot URL
+    const chatbotLink = `${env.chatbotFrontendUrl}/chatbot/requisitions/${data.requisitionId}/vendors/${data.vendorId}/deals/${data.dealId}`;
+
+    const mailOptions: EmailOptions = {
+      from: smtp.from || 'noreply@accordo.ai',
+      to: data.vendorEmail,
+      subject: `Negotiation Invitation: ${data.dealTitle} (${data.rfqNumber})`,
+      html: generateDealCreatedEmailHTML(data, chatbotLink),
+      text: generateDealCreatedEmailText(data, chatbotLink),
+    };
+
+    const info = await sendEmailWithRetry(mailOptions);
+
+    await logEmail(
+      data.vendorEmail,
+      data.vendorId,
+      mailOptions.subject,
+      'other',
+      'sent',
+      undefined,
+      data.requisitionId,
+      {
+        emailSubType: 'deal_created',
+        dealId: data.dealId,
+        dealTitle: data.dealTitle,
+        rfqNumber: data.rfqNumber,
+        chatbotLink,
+      },
+      undefined,
+      info.messageId,
+      0
+    );
+
+    logger.info('Deal created email sent successfully', {
+      dealId: data.dealId,
+      vendorEmail: data.vendorEmail,
+      requisitionId: data.requisitionId,
+      messageId: info.messageId,
+    });
+
+    return { success: true, messageId: info.messageId };
+  } catch (error) {
+    const errorMessage = (error as Error).message;
+
+    logger.error('Failed to send deal created email', {
+      dealId: data.dealId,
+      vendorEmail: data.vendorEmail,
+      requisitionId: data.requisitionId,
+      error: errorMessage,
+    });
+
+    await logEmail(
+      data.vendorEmail,
+      data.vendorId,
+      `Negotiation Invitation: ${data.dealTitle}`,
+      'other',
+      'failed',
+      undefined,
+      data.requisitionId,
+      {
+        emailSubType: 'deal_created',
+        dealId: data.dealId,
+        dealTitle: data.dealTitle,
+      },
+      errorMessage,
+      undefined,
+      2
+    );
+
+    // Return error instead of throwing - deal should still be created even if email fails
+    return { success: false, error: errorMessage };
   }
 };

@@ -5,6 +5,7 @@ import {
   getCompaniesService,
   updadateCompanyService,
   deleteCompanyService,
+  getAddressesService,
 } from './company.service.js';
 
 export const createCompany = async (
@@ -81,6 +82,23 @@ export const deleteCompany = async (
   try {
     const data = await deleteCompanyService(Number(req.params.companyid));
     res.status(200).json({ message: 'Company deleted successfully', data });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Get delivery addresses for the current user
+ * Aggregates addresses from company and projects
+ */
+export const getAddresses = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const data = await getAddressesService(req.context.userId);
+    res.status(200).json({ message: 'Delivery addresses', data });
   } catch (error) {
     next(error);
   }

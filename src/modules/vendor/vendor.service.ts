@@ -82,6 +82,7 @@ export const createVendorService = async (
 
 /**
  * Get all vendors with filtering and pagination
+ * Admin users (userType === 'admin') see all vendors across all companies
  */
 export const getVendorsService = async (
   userId: number,
@@ -144,6 +145,30 @@ export const getVendorsService = async (
   }
 
   const user = await userRepo.getUserProfile(userId);
+
+  // Admin users see all vendors across all companies
+  const isAdmin = user?.userType === 'admin';
+
+  if (isAdmin) {
+    // For admin users, get all vendors from all companies
+    const { response, vendorCount } = await repo.getAllVendorsForAdmin(queryOptions);
+    const { rows, count } = response;
+
+    const total = count;
+    const totalPages = parsedLimit ? Math.ceil(total / parsedLimit) : 1;
+
+    return {
+      data: rows,
+      total,
+      page: parsedPage,
+      totalPages,
+      totalVendors: vendorCount.totalVendors,
+      activeVendors: vendorCount.activeActiveVendors,
+      inactiveVendors: vendorCount.totalInactiveVendors,
+    };
+  }
+
+  // Non-admin users only see their company's vendors
   if (!user?.companyId) {
     throw new CustomError('Unable to determine company for user', 400);
   }

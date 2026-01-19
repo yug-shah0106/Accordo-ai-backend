@@ -5,6 +5,8 @@ import {
   getRequisitionsService,
   deleteRequisitionService,
   updateRequisitionService,
+  getRequisitionsForNegotiationService,
+  getRequisitionVendorsService,
 } from './requisition.service.js';
 
 export const createRequisition = async (
@@ -101,6 +103,43 @@ export const deleteRequisition = async (
     }
     const data = await deleteRequisitionService(requisitionId);
     res.status(200).json({ message: 'Requisition deleted successfully', data });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Get requisitions available for negotiation (for deal creation dropdown)
+ */
+export const getRequisitionsForNegotiation = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const data = await getRequisitionsForNegotiationService(req.context.userId);
+    res.status(200).json({ message: 'Requisitions for negotiation', data });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Get vendors attached to a specific requisition (for deal creation vendor dropdown)
+ */
+export const getRequisitionVendors = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const requisitionId = Number(req.params.requisitionId);
+    if (Number.isNaN(requisitionId)) {
+      res.status(400).json({ message: 'Invalid requisition ID' });
+      return;
+    }
+    const data = await getRequisitionVendorsService(requisitionId, req.context.userId);
+    res.status(200).json({ message: 'Requisition vendors', data });
   } catch (error) {
     next(error);
   }

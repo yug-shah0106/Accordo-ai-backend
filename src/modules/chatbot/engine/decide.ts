@@ -1,6 +1,18 @@
 import { Decision, Offer } from './types.js';
 import { totalUtility, priceUtility, termsUtility, NegotiationConfig } from './utility.js';
 
+/**
+ * Decision Engine with Weighted Utility Thresholds
+ *
+ * Threshold Zones (based on cumulative weighted utility):
+ * - Accept Zone:    utility >= 70% (accept_threshold)
+ * - Counter Zone:   50% <= utility < 70% (escalate_threshold to accept_threshold)
+ * - Escalate Zone:  30% <= utility < 50% (walkaway_threshold to escalate_threshold)
+ * - Walk Away Zone: utility < 30% (walkaway_threshold)
+ *
+ * Default thresholds: accept=0.70, escalate=0.50, walkaway=0.30
+ */
+
 function nextBetterTerms(
   config: NegotiationConfig,
   t: Offer['payment_terms']
@@ -25,6 +37,11 @@ export function decideNextMove(
   round: number
 ): Decision {
   const reasons: string[] = [];
+
+  // Get thresholds with defaults (70%, 50%, 30%)
+  const acceptThreshold = config.accept_threshold ?? 0.70;
+  const escalateThreshold = config.escalate_threshold ?? 0.50;
+  const walkawayThreshold = config.walkaway_threshold ?? 0.30;
 
   // Allow rounds 1..max_rounds, escalate after that
   if (round > config.max_rounds) {
@@ -61,39 +78,53 @@ export function decideNextMove(
 
   const u = totalUtility(config, vendorOffer);
 
-  if (u >= config.accept_threshold) {
+  // Decision zones based on cumulative weighted utility:
+  // Accept Zone: utility >= 70%
+  if (u >= acceptThreshold) {
     return {
       action: 'ACCEPT',
       utilityScore: u,
       counterOffer: null,
-      reasons: [`Utility ${u} >= accept threshold ${config.accept_threshold}`],
+      reasons: [`Utility ${(u * 100).toFixed(0)}% >= accept threshold ${(acceptThreshold * 100).toFixed(0)}%`],
     };
   }
 
-  // ✅ IMPORTANT: do NOT ESCALATE just because u is low
-  // Instead, give a stronger counter package
-  if (u < config.walkaway_threshold) {
+  // Walk Away Zone: utility < 30%
+  if (u < walkawayThreshold) {
+    return {
+      action: 'WALK_AWAY',
+      utilityScore: u,
+      counterOffer: null,
+      reasons: [`Utility ${(u * 100).toFixed(0)}% < walkaway threshold ${(walkawayThreshold * 100).toFixed(0)}%`],
+    };
+  }
+
+  // Escalate Zone: 30% <= utility < 50%
+  if (u < escalateThreshold) {
     const { target, anchor, concession_step } = config.parameters.unit_price;
     const bestTermsOption = bestTerms(config);
 
-    // Strong but plausible counter: use anchor + controlled steps
+    // Make a strong counter but flag for human review
     const buyerPosition = Math.min(
       target,
       anchor + (round - 1) * concession_step
     );
-    const strongPrice = Math.min(vendorOffer.unit_price, buyerPosition); // never above vendor
+    const strongPrice = Math.min(vendorOffer.unit_price, buyerPosition);
     const counter: Offer = {
       unit_price: strongPrice,
       payment_terms: bestTermsOption,
     };
 
     return {
-      action: 'COUNTER',
+      action: 'ESCALATE',
       utilityScore: u,
       counterOffer: counter,
-      reasons: ['Low utility; proposing a stronger package instead of closing.'],
+      reasons: [`Utility ${(u * 100).toFixed(0)}% in escalate zone (${(walkawayThreshold * 100).toFixed(0)}%-${(escalateThreshold * 100).toFixed(0)}%). Proposing counter but needs human review.`],
     };
   }
+
+  // Counter Zone: 50% <= utility < 70%
+  // Continue negotiating with counter-offers
 
   // Counter strategy: Pactum-like - solve for minimum terms needed to hit accept threshold
   let counter: Offer;
@@ -109,7 +140,7 @@ export function decideNextMove(
 
     // Required terms utility to hit accept threshold
     const requiredTermsUtil =
-      (config.accept_threshold - priceContribution) / wT;
+      (acceptThreshold - priceContribution) / wT;
 
     // Find cheapest terms option that meets the requirement
     const opts = config.parameters.payment_terms.options;

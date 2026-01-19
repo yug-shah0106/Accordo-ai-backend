@@ -41,11 +41,16 @@ export async function checkHealth(): Promise<LLMHealthResponse> {
       model: LLM_MODEL,
     };
   } catch (error) {
-    logger.error('LLM health check failed:', error);
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    const axiosError = error as { code?: string };
+    logger.error('LLM health check failed:', {
+      message: errorMessage,
+      code: axiosError.code,
+    });
     return {
       available: false,
       model: LLM_MODEL,
-      error: error instanceof Error ? error.message : 'Unknown error',
+      error: errorMessage,
     };
   }
 }
@@ -77,8 +82,17 @@ export async function chatCompletion(
 
     return response.data.message?.content || '';
   } catch (error) {
-    logger.error('LLM chat completion failed:', error);
-    throw new Error('Failed to get response from LLM');
+    // Extract safe error details to avoid circular reference issues with axios errors
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    const axiosError = error as { response?: { status?: number; data?: unknown }; code?: string };
+
+    logger.error('LLM chat completion failed:', {
+      message: errorMessage,
+      status: axiosError.response?.status,
+      code: axiosError.code,
+      responseData: axiosError.response?.data,
+    });
+    throw new Error(`Failed to get response from LLM: ${errorMessage}`);
   }
 }
 
@@ -128,8 +142,14 @@ export async function streamChatCompletion(
       response.data.on('error', reject);
     });
   } catch (error) {
-    logger.error('LLM stream completion failed:', error);
-    throw new Error('Failed to stream response from LLM');
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    const axiosError = error as { response?: { status?: number }; code?: string };
+    logger.error('LLM stream completion failed:', {
+      message: errorMessage,
+      status: axiosError.response?.status,
+      code: axiosError.code,
+    });
+    throw new Error(`Failed to stream response from LLM: ${errorMessage}`);
   }
 }
 

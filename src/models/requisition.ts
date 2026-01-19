@@ -84,6 +84,7 @@ export class Requisition extends Model<
   declare submittedForApprovalAt: Date | null;
   declare submittedByUserId: ForeignKey<number> | null;
   declare createdAt: CreationOptional<Date>;
+  declare archivedAt: Date | null;
 
   // Associations
   declare RequisitionProduct?: NonAttribute<any[]>;
@@ -186,6 +187,11 @@ export default function requisitionModel(sequelize: Sequelize): typeof Requisiti
         defaultValue: null,
       },
       createdAt: DataTypes.DATE,
+      archivedAt: {
+        type: DataTypes.DATE,
+        allowNull: true,
+        defaultValue: null,
+      },
     },
     {
       sequelize,

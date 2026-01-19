@@ -64,17 +64,23 @@ const repo = {
 
   /**
    * Get all projects with filtering and pagination
+   * Admin users (userType === 'admin') see all projects across companies
    */
   getProjects: async (
     queryOptions: QueryOptions = {},
     userId: number
   ): Promise<FindAndCountResult> => {
     const user = await userRepo.getUserProfile(userId);
+
+    // Admin users see all projects, non-admin users only see their company's projects
+    const isAdmin = user?.userType === 'admin';
+    const companyFilter = (!isAdmin && user?.companyId) ? { companyId: user.companyId } : {};
+
     const options = {
       ...queryOptions,
       where: {
         ...(queryOptions.where || {}),
-        ...(user?.companyId ? { companyId: user.companyId } : {}),
+        ...companyFilter,
       },
       include: [
         {

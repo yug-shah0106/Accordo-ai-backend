@@ -66,6 +66,18 @@ export class Company extends Model<
   declare createdAt: CreationOptional<Date>;
   declare updatedAt: CreationOptional<Date>;
 
+  // Association fields populated via include
+  declare Addresses?: {
+    id: number;
+    label: string;
+    address: string;
+    city: string | null;
+    state: string | null;
+    country: string | null;
+    postalCode: string | null;
+    isDefault: boolean;
+  }[];
+
   static associate(models: Record<string, typeof Model>): void {
     this.hasMany(models.User as ModelStatic<Model>, { foreignKey: 'companyId', as: 'Users' });
     this.hasMany(models.User as ModelStatic<Model>, { foreignKey: 'companyId', as: 'Vendor' });
@@ -78,6 +90,10 @@ export class Company extends Model<
     this.hasMany(models.VendorCompany as ModelStatic<Model>, {
       foreignKey: 'companyId',
       as: 'vendorCompany',
+    });
+    this.hasMany(models.Address as ModelStatic<Model>, {
+      foreignKey: 'companyId',
+      as: 'Addresses',
     });
   }
 }

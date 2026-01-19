@@ -1,5 +1,14 @@
 import { Offer, Explainability, Decision } from './types.js';
 
+/**
+ * NegotiationConfig defines the parameters and thresholds for utility-based negotiations.
+ *
+ * Threshold Zones (based on cumulative weighted utility 0-100%):
+ * - Accept Zone: utility >= accept_threshold (default 70%)
+ * - Counter Zone: utility >= escalate_threshold AND < accept_threshold (50-70%)
+ * - Escalate Zone: utility >= walkaway_threshold AND < escalate_threshold (30-50%)
+ * - Walk Away Zone: utility < walkaway_threshold (< 30%)
+ */
 export interface NegotiationConfig {
   parameters: {
     unit_price: {
@@ -20,7 +29,11 @@ export interface NegotiationConfig {
       };
     };
   };
+  /** Accept threshold - utility >= this triggers ACCEPT (default: 0.70 = 70%) */
   accept_threshold: number;
+  /** Escalate threshold - utility >= this but < accept triggers COUNTER, < this triggers ESCALATE (default: 0.50 = 50%) */
+  escalate_threshold?: number;
+  /** Walk away threshold - utility < this triggers WALK_AWAY (default: 0.30 = 30%) */
   walkaway_threshold: number;
   max_rounds: number;
 }
@@ -104,6 +117,7 @@ export function computeExplainability(
       weights: { price: wP, terms: wT },
       thresholds: {
         accept: config.accept_threshold,
+        escalate: config.escalate_threshold ?? 0.50,
         walkaway: config.walkaway_threshold,
       },
       unitPrice: {

@@ -1,4 +1,5 @@
-import models from '../../models/index.js';
+import { QueryTypes } from 'sequelize';
+import models, { sequelize } from '../../models/index.js';
 import type { Company } from '../../models/company.js';
 import type { User } from '../../models/user.js';
 import type { Transaction, FindOptions } from 'sequelize';
@@ -54,6 +55,69 @@ const repo: CompanyRepository = {
 
   deleteCompany: async (companyId: number): Promise<number> => {
     return models.Company.destroy({ where: { id: companyId } });
+  },
+
+  /**
+   * Get delivery addresses from companies and projects
+   * Returns a combined list of addresses from the user's company and associated projects
+   */
+  getAddresses: async (userId: number): Promise<{
+    id: string;
+    name: string;
+    address: string;
+    type: 'company' | 'project';
+    isDefault: boolean;
+  }[]> => {
+    const user = await models.User.findByPk(userId);
+    const isAdmin = user?.userType === 'admin';
+
+    // Build company filter
+    const companyFilter = (!isAdmin && user?.companyId) ? `AND c.id = ${user.companyId}` : '';
+    const projectFilter = (!isAdmin && user?.companyId) ? `AND p."companyId" = ${user.companyId}` : '';
+
+    // Get company addresses
+    const companyQuery = `
+      SELECT
+        'company-' || c.id as id,
+        COALESCE(c."companyName", 'Company Address') as name,
+        c."fullAddress" as address,
+        'company' as type,
+        true as "isDefault"
+      FROM "Companies" c
+      WHERE c."fullAddress" IS NOT NULL
+      AND c."fullAddress" != ''
+      ${companyFilter}
+    `;
+
+    // Get project addresses
+    const projectQuery = `
+      SELECT
+        'project-' || p.id as id,
+        COALESCE(p."projectName", 'Project Address') as name,
+        p."projectAddress" as address,
+        'project' as type,
+        false as "isDefault"
+      FROM "Projects" p
+      WHERE p."projectAddress" IS NOT NULL
+      AND p."projectAddress" != ''
+      ${projectFilter}
+    `;
+
+    const [companyAddresses, projectAddresses] = await Promise.all([
+      sequelize.query(companyQuery, { type: QueryTypes.SELECT }),
+      sequelize.query(projectQuery, { type: QueryTypes.SELECT }),
+    ]);
+
+    // Combine and return unique addresses
+    const addresses = [...companyAddresses, ...projectAddresses] as {
+      id: string;
+      name: string;
+      address: string;
+      type: 'company' | 'project';
+      isDefault: boolean;
+    }[];
+
+    return addresses;
   },
 };
 

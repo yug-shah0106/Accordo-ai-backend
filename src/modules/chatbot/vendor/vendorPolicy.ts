@@ -3,9 +3,409 @@
  *
  * Defines default negotiation policies for different vendor scenarios.
  * Each scenario has different concession willingness and constraints.
+ *
+ * Updated January 2026:
+ * - Added product category margins for vendor profit calculation
+ * - Added vendor scenario generator for vendor-perspective negotiation
+ * - Added AI-PM response generation for automated PM responses
  */
 
 import type { VendorPolicy, VendorScenario } from './types.js';
+
+// ============================================================================
+// Product Category Margins
+// ============================================================================
+
+/**
+ * Category margin configuration for vendor profit calculations
+ */
+export interface CategoryMargin {
+  /** Target profit margin vendor aims for */
+  target: number;
+  /** Minimum acceptable profit margin */
+  min: number;
+  /** Maximum profit margin (aggressive pricing) */
+  max: number;
+}
+
+/**
+ * Default profit margins by product category
+ * Used to generate vendor scenario chips based on profit goals
+ */
+export const CATEGORY_MARGINS: Record<string, CategoryMargin> = {
+  'Electronics': { target: 0.15, min: 0.08, max: 0.25 },
+  'Raw Materials': { target: 0.08, min: 0.05, max: 0.15 },
+  'Office Supplies': { target: 0.20, min: 0.12, max: 0.30 },
+  'Machinery': { target: 0.12, min: 0.06, max: 0.20 },
+  'Packaging': { target: 0.18, min: 0.10, max: 0.28 },
+  'Services': { target: 0.25, min: 0.15, max: 0.40 },
+  'Chemicals': { target: 0.10, min: 0.05, max: 0.18 },
+  'Textiles': { target: 0.18, min: 0.10, max: 0.30 },
+  'Food & Beverage': { target: 0.12, min: 0.06, max: 0.22 },
+  'Construction': { target: 0.15, min: 0.08, max: 0.25 },
+  'default': { target: 0.15, min: 0.08, max: 0.25 },
+};
+
+/**
+ * Get category margin for a product category
+ */
+export function getCategoryMargin(category: string): CategoryMargin {
+  return CATEGORY_MARGINS[category] || CATEGORY_MARGINS['default'];
+}
+
+// ============================================================================
+// Vendor Scenario Generation (for Vendor Perspective)
+// ============================================================================
+
+/**
+ * Vendor scenario offer structure
+ */
+export interface VendorScenarioOffer {
+  type: VendorScenario;
+  label: string;
+  description: string;
+  offer: {
+    price: number;
+    paymentTerms: string;
+    deliveryDate: string;
+  };
+  messages: string[];
+  expectedPmReaction: string;
+}
+
+/**
+ * Generate vendor scenarios based on PM's last offer and vendor profit goals
+ *
+ * This generates scenario chips from the VENDOR's perspective:
+ * - HARD: Maximize vendor profit (higher price, favorable terms)
+ * - MEDIUM: Balanced approach (moderate profit)
+ * - SOFT: Accept closer to PM's terms (minimal profit)
+ */
+export function generateVendorScenarios(
+  pmLastOffer: { price: number; paymentTerms: string; deliveryDate: string } | null,
+  productCategory: string,
+  vendorCostBase: number,
+  quantity: number = 1
+): VendorScenarioOffer[] {
+  const margin = getCategoryMargin(productCategory);
+  const pmPrice = pmLastOffer?.price || vendorCostBase * 1.05; // Default to cost + 5%
+  const pmTerms = pmLastOffer?.paymentTerms || 'Net 30';
+  const pmDelivery = pmLastOffer?.deliveryDate || getDateInDays(30);
+
+  // Calculate vendor prices based on margin targets
+  const hardPrice = Math.round(vendorCostBase * (1 + margin.max) * 100) / 100;
+  const mediumPrice = Math.round(((pmPrice + vendorCostBase * (1 + margin.target)) / 2) * 100) / 100;
+  const softPrice = Math.round(Math.max(pmPrice * 1.02, vendorCostBase * (1 + margin.min)) * 100) / 100;
+
+  return [
+    {
+      type: 'HARD',
+      label: 'Maximize Profit',
+      description: `Target ${(margin.max * 100).toFixed(0)}% margin`,
+      offer: {
+        price: hardPrice,
+        paymentTerms: 'Net 15',
+        deliveryDate: getDateInDays(45), // Relaxed delivery
+      },
+      messages: generateHardScenarioMessages(hardPrice, quantity, pmPrice),
+      expectedPmReaction: 'COUNTER',
+    },
+    {
+      type: 'MEDIUM',
+      label: 'Balanced Offer',
+      description: `Target ${(margin.target * 100).toFixed(0)}% margin`,
+      offer: {
+        price: mediumPrice,
+        paymentTerms: 'Net 30',
+        deliveryDate: getDateInDays(30),
+      },
+      messages: generateMediumScenarioMessages(mediumPrice, quantity, pmPrice),
+      expectedPmReaction: 'COUNTER',
+    },
+    {
+      type: 'SOFT',
+      label: 'Close to Accept',
+      description: `Minimal ${(margin.min * 100).toFixed(0)}% margin`,
+      offer: {
+        price: softPrice,
+        paymentTerms: pmTerms,
+        deliveryDate: pmDelivery,
+      },
+      messages: generateSoftScenarioMessages(softPrice, quantity, pmPrice, pmTerms),
+      expectedPmReaction: 'ACCEPT',
+    },
+  ];
+}
+
+/**
+ * Generate messages for HARD scenario (maximize vendor profit)
+ */
+function generateHardScenarioMessages(vendorPrice: number, quantity: number, pmPrice: number): string[] {
+  return [
+    `Thank you for your interest. For ${quantity} units, our price is $${vendorPrice.toFixed(2)} per unit with payment due within 15 days. This includes our premium quality guarantee and priority support.`,
+    `I appreciate the inquiry. Given current market conditions and our quality standards, we can offer $${vendorPrice.toFixed(2)} per unit with Net 15 terms. Delivery can be arranged within 6 weeks.`,
+    `After reviewing your requirements, our offer is $${vendorPrice.toFixed(2)} per unit. This pricing reflects our commitment to quality and includes comprehensive warranty coverage.`,
+  ];
+}
+
+/**
+ * Generate messages for MEDIUM scenario (balanced approach)
+ */
+function generateMediumScenarioMessages(vendorPrice: number, quantity: number, pmPrice: number): string[] {
+  return [
+    `I've reviewed your offer carefully. We can meet at $${vendorPrice.toFixed(2)} per unit with Net 30 payment terms. This is a fair compromise that works for both parties.`,
+    `Thank you for your proposal. Let me offer $${vendorPrice.toFixed(2)} per unit with standard Net 30 terms. We can arrange delivery within 4 weeks.`,
+    `I understand your position. Would $${vendorPrice.toFixed(2)} per unit with Net 30 payment work for you? I believe this balances both our needs.`,
+  ];
+}
+
+/**
+ * Generate messages for SOFT scenario (close to PM's terms)
+ */
+function generateSoftScenarioMessages(vendorPrice: number, quantity: number, pmPrice: number, pmTerms: string): string[] {
+  return [
+    `I want to make this work. I can offer $${vendorPrice.toFixed(2)} per unit with your ${pmTerms} terms. Let's finalize this deal.`,
+    `We'd be happy to work with you. My best offer is $${vendorPrice.toFixed(2)} per unit, accepting your payment terms. Shall we proceed?`,
+    `To move forward, I can accept $${vendorPrice.toFixed(2)} per unit with ${pmTerms}. This is close to what you're asking - can we close?`,
+  ];
+}
+
+/**
+ * Helper to get date string N days from now
+ */
+function getDateInDays(days: number): string {
+  const date = new Date();
+  date.setDate(date.getDate() + days);
+  return date.toISOString().split('T')[0];
+}
+
+// ============================================================================
+// AI-PM Response Generation
+// ============================================================================
+
+/**
+ * AI-PM decision result
+ */
+export interface AiPmDecision {
+  action: 'ACCEPT' | 'COUNTER' | 'ESCALATE' | 'WALK_AWAY' | 'ASK_CLARIFY';
+  message: string;
+  counterOffer?: {
+    price: number;
+    paymentTerms: string;
+    deliveryDate: string;
+  };
+  utility: number;
+  reasoning: string;
+}
+
+/**
+ * PM's negotiation stance from wizard config
+ */
+export interface PmStance {
+  targetUnitPrice: number;
+  maxAcceptablePrice: number;
+  idealPaymentDays: number;
+  maxPaymentDays: number;
+  requiredDeliveryDate: string;
+  preferredDeliveryDate?: string;
+  walkawayThreshold: number;
+  acceptThreshold: number;
+  escalateThreshold: number;
+  maxRounds: number;
+}
+
+/**
+ * Generate AI-PM response based on vendor's offer and PM's stance
+ *
+ * @param vendorOffer - The vendor's offer (price, terms, delivery)
+ * @param pmStance - PM's negotiation parameters from wizard config
+ * @param currentRound - Current negotiation round
+ * @returns AI-PM decision with response message
+ */
+export function generateAiPmResponse(
+  vendorOffer: {
+    price: number | null;
+    paymentTerms: string | null;
+    deliveryDate: string | null;
+  },
+  pmStance: PmStance,
+  currentRound: number
+): AiPmDecision {
+  // Handle incomplete offer
+  if (vendorOffer.price === null) {
+    return {
+      action: 'ASK_CLARIFY',
+      message: `I need more details on your pricing. Could you provide a specific unit price for this order?`,
+      utility: 0,
+      reasoning: 'Vendor did not provide a clear price',
+    };
+  }
+
+  // Calculate utility score
+  const priceUtility = calculatePriceUtility(vendorOffer.price, pmStance);
+  const termsUtility = calculateTermsUtility(vendorOffer.paymentTerms, pmStance);
+  const deliveryUtility = calculateDeliveryUtility(vendorOffer.deliveryDate, pmStance);
+
+  // Weighted average (price most important)
+  const totalUtility = priceUtility * 0.50 + termsUtility * 0.30 + deliveryUtility * 0.20;
+
+  // Check for max rounds
+  if (currentRound >= pmStance.maxRounds) {
+    return {
+      action: 'ESCALATE',
+      message: `We've reached our maximum negotiation rounds. I'll need to escalate this to our procurement committee for a final decision. Thank you for your patience.`,
+      utility: totalUtility,
+      reasoning: `Max rounds (${pmStance.maxRounds}) reached`,
+    };
+  }
+
+  // Decision based on utility thresholds
+  if (totalUtility >= pmStance.acceptThreshold) {
+    return {
+      action: 'ACCEPT',
+      message: `I'm pleased to accept your offer of $${vendorOffer.price.toFixed(2)} per unit${vendorOffer.paymentTerms ? ` with ${vendorOffer.paymentTerms} terms` : ''}. This meets our requirements. Let's proceed with the agreement.`,
+      utility: totalUtility,
+      reasoning: `Utility ${(totalUtility * 100).toFixed(0)}% >= accept threshold ${(pmStance.acceptThreshold * 100).toFixed(0)}%`,
+    };
+  }
+
+  if (totalUtility < pmStance.walkawayThreshold) {
+    return {
+      action: 'WALK_AWAY',
+      message: `I appreciate your time, but unfortunately this offer of $${vendorOffer.price.toFixed(2)} is significantly above our budget. We'll need to explore other options for this procurement.`,
+      utility: totalUtility,
+      reasoning: `Utility ${(totalUtility * 100).toFixed(0)}% < walkaway threshold ${(pmStance.walkawayThreshold * 100).toFixed(0)}%`,
+    };
+  }
+
+  if (totalUtility < pmStance.escalateThreshold) {
+    // Generate counter-offer closer to PM's targets
+    const counterPrice = calculateCounterPrice(vendorOffer.price, pmStance, currentRound);
+    const counterTerms = pmStance.idealPaymentDays <= 30 ? 'Net 30' :
+                         pmStance.idealPaymentDays <= 60 ? 'Net 60' : 'Net 90';
+
+    return {
+      action: 'COUNTER',
+      message: `Thank you for your offer. However, $${vendorOffer.price.toFixed(2)} is higher than our target. Based on our budget and market analysis, I can offer $${counterPrice.toFixed(2)} per unit with ${counterTerms} payment terms. What do you think?`,
+      counterOffer: {
+        price: counterPrice,
+        paymentTerms: counterTerms,
+        deliveryDate: pmStance.requiredDeliveryDate,
+      },
+      utility: totalUtility,
+      reasoning: `Utility ${(totalUtility * 100).toFixed(0)}% between walkaway and escalate, countering`,
+    };
+  }
+
+  // Counter with more aggressive offer
+  const counterPrice = calculateCounterPrice(vendorOffer.price, pmStance, currentRound);
+  const counterTerms = pmStance.idealPaymentDays <= 30 ? 'Net 30' :
+                       pmStance.idealPaymentDays <= 60 ? 'Net 60' : 'Net 90';
+
+  return {
+    action: 'COUNTER',
+    message: `I appreciate the offer of $${vendorOffer.price.toFixed(2)}. We're getting closer. I can go up to $${counterPrice.toFixed(2)} per unit with ${counterTerms} terms and delivery by ${pmStance.requiredDeliveryDate}. Can we close at this?`,
+    counterOffer: {
+      price: counterPrice,
+      paymentTerms: counterTerms,
+      deliveryDate: pmStance.requiredDeliveryDate,
+    },
+    utility: totalUtility,
+    reasoning: `Utility ${(totalUtility * 100).toFixed(0)}% in counter zone, making progress`,
+  };
+}
+
+/**
+ * Calculate utility for price component (0-1)
+ */
+function calculatePriceUtility(vendorPrice: number, pmStance: PmStance): number {
+  if (vendorPrice <= pmStance.targetUnitPrice) {
+    return 1.0; // At or below target = perfect
+  }
+  if (vendorPrice >= pmStance.maxAcceptablePrice) {
+    return 0.0; // At or above max = zero utility
+  }
+  // Linear interpolation between target and max
+  const range = pmStance.maxAcceptablePrice - pmStance.targetUnitPrice;
+  const distance = vendorPrice - pmStance.targetUnitPrice;
+  return 1.0 - (distance / range);
+}
+
+/**
+ * Calculate utility for payment terms component (0-1)
+ */
+function calculateTermsUtility(paymentTerms: string | null, pmStance: PmStance): number {
+  if (!paymentTerms) return 0.5; // Neutral if not specified
+
+  const daysMatch = paymentTerms.match(/Net\s*(\d+)/i);
+  if (!daysMatch) return 0.5;
+
+  const days = parseInt(daysMatch[1], 10);
+
+  if (days <= pmStance.idealPaymentDays) {
+    return 1.0; // Better than ideal
+  }
+  if (days >= pmStance.maxPaymentDays) {
+    return 0.3; // At max acceptable
+  }
+  // Linear interpolation
+  const range = pmStance.maxPaymentDays - pmStance.idealPaymentDays;
+  const distance = days - pmStance.idealPaymentDays;
+  return 1.0 - (distance / range) * 0.7; // Never goes below 0.3
+}
+
+/**
+ * Calculate utility for delivery date component (0-1)
+ */
+function calculateDeliveryUtility(deliveryDate: string | null, pmStance: PmStance): number {
+  if (!deliveryDate) return 0.5; // Neutral if not specified
+
+  const vendorDate = new Date(deliveryDate);
+  const requiredDate = new Date(pmStance.requiredDeliveryDate);
+  const preferredDate = pmStance.preferredDeliveryDate
+    ? new Date(pmStance.preferredDeliveryDate)
+    : requiredDate;
+
+  if (vendorDate <= preferredDate) {
+    return 1.0; // Meets or beats preferred
+  }
+  if (vendorDate <= requiredDate) {
+    return 0.8; // Meets required
+  }
+  // Late penalty
+  const daysLate = Math.ceil((vendorDate.getTime() - requiredDate.getTime()) / (1000 * 60 * 60 * 24));
+  return Math.max(0.1, 0.8 - (daysLate * 0.1)); // 10% penalty per day late
+}
+
+/**
+ * Calculate PM's counter-offer price
+ */
+function calculateCounterPrice(vendorPrice: number, pmStance: PmStance, round: number): number {
+  // Start closer to target, move toward max over rounds
+  const progressFactor = Math.min(round / pmStance.maxRounds, 0.8);
+  const range = pmStance.maxAcceptablePrice - pmStance.targetUnitPrice;
+  const counterPrice = pmStance.targetUnitPrice + (range * progressFactor * 0.6);
+
+  // Don't offer more than vendor is asking
+  return Math.round(Math.min(counterPrice, vendorPrice * 0.95) * 100) / 100;
+}
+
+/**
+ * Generate PM's opening offer message from wizard config
+ */
+export function generatePmOpeningOffer(
+  pmStance: PmStance,
+  productName: string,
+  quantity: number
+): string {
+  const paymentTerms = pmStance.idealPaymentDays <= 30 ? 'Net 30' :
+                       pmStance.idealPaymentDays <= 60 ? 'Net 60' : 'Net 90';
+
+  return `Good day! I'm reaching out regarding our purchase of ${quantity} units of ${productName}. ` +
+         `Based on our budget and market analysis, I'd like to propose $${pmStance.targetUnitPrice.toFixed(2)} per unit ` +
+         `with ${paymentTerms} payment terms. We need delivery by ${pmStance.requiredDeliveryDate}. ` +
+         `What can you offer us?`;
+}
 
 /**
  * Default vendor policy (baseline)

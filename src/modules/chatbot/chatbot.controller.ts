@@ -43,8 +43,117 @@ export const createDeal = async (
 };
 
 /**
+ * Create a new deal with full wizard configuration
+ * POST /api/chatbot/deals/with-config
+ */
+export const createDealWithConfig = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const result = await chatbotService.createDealWithConfigService({
+      ...req.body,
+      userId: req.context.userId,
+    });
+
+    logger.info(`Deal with config created: ${result.id} by user ${req.context.userId}`);
+
+    // Determine message based on email status
+    const emailStatus = (result as any).emailStatus;
+    let message = 'Deal created successfully';
+    if (emailStatus && !emailStatus.success) {
+      message = 'Deal created successfully, but email notification to vendor failed';
+    } else if (emailStatus && emailStatus.success) {
+      message = 'Deal created successfully and email notification sent to vendor';
+    }
+
+    res.status(201).json({ message, data: result });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Get smart defaults for a vendor/RFQ combination
+ * NEW: GET /api/chatbot/requisitions/:rfqId/vendors/:vendorId/smart-defaults (path params)
+ * LEGACY: GET /api/chatbot/deals/smart-defaults?rfqId=X&vendorId=Y (query params)
+ */
+export const getSmartDefaults = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    // Support both path params (new) and query params (legacy)
+    const rfqId = req.params.rfqId || req.query.rfqId;
+    const vendorId = req.params.vendorId || req.query.vendorId;
+
+    if (!rfqId || !vendorId) {
+      throw new CustomError('rfqId and vendorId are required', 400);
+    }
+
+    const defaults = await chatbotService.getSmartDefaultsService(
+      parseInt(rfqId as string, 10),
+      parseInt(vendorId as string, 10)
+    );
+
+    res.status(200).json({ message: 'Smart defaults retrieved successfully', data: defaults });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Look up a deal by ID only (no nested path required)
+ * GET /api/chatbot/deals/:dealId/lookup
+ *
+ * This is a convenience endpoint for the frontend when only dealId is available
+ * (e.g., from URL params). Returns the deal with its context (rfqId, vendorId)
+ * which can then be used for subsequent nested API calls.
+ *
+ * NOTE: Returns 400 if deal is missing requisitionId or vendorId since these
+ * are required for the hierarchical API structure.
+ */
+export const lookupDeal = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const { dealId } = req.params;
+    const result = await chatbotService.getDealService(dealId);
+
+    // Validate that the deal has the required context values for nested URLs
+    if (!result.deal.requisitionId || !result.deal.vendorId) {
+      throw new CustomError(
+        'Deal is missing required requisitionId or vendorId. This deal cannot be used with the hierarchical API structure.',
+        400
+      );
+    }
+
+    // Return deal with context for frontend to use in subsequent calls
+    res.status(200).json({
+      message: 'Deal lookup successful',
+      data: {
+        deal: result.deal,
+        messages: result.messages,
+        // Context for nested URL construction
+        context: {
+          rfqId: result.deal.requisitionId,
+          vendorId: result.deal.vendorId,
+          dealId: result.deal.id,
+        },
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
  * Get a deal with messages
- * GET /api/chatbot/deals/:dealId
+ * GET /api/chatbot/requisitions/:rfqId/vendors/:vendorId/deals/:dealId
  */
 export const getDeal = async (
   req: Request,
@@ -260,60 +369,31 @@ export const unarchiveDeal = async (
 };
 
 /**
- * Soft delete a deal
- * DELETE /api/chatbot/deals/:dealId
+ * Retry sending deal notification email to vendor
+ * POST /api/chatbot/requisitions/:rfqId/vendors/:vendorId/deals/:dealId/retry-email
  */
-export const softDeleteDeal = async (
+export const retryDealEmail = async (
   req: Request,
   res: Response,
   next: NextFunction
 ): Promise<void> => {
   try {
     const { dealId } = req.params;
-    const deal = await chatbotService.softDeleteDealService(dealId);
+    const result = await chatbotService.retryDealEmailService(dealId);
 
-    logger.info(`Deal soft deleted: ${dealId} by user ${req.context.userId}`);
-    res.status(200).json({ message: 'Deal deleted successfully', data: deal });
-  } catch (error) {
-    next(error);
-  }
-};
-
-/**
- * Restore a soft-deleted deal
- * POST /api/chatbot/deals/:dealId/restore
- */
-export const restoreDeal = async (
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> => {
-  try {
-    const { dealId } = req.params;
-    const deal = await chatbotService.restoreDealService(dealId);
-
-    logger.info(`Deal restored: ${dealId} by user ${req.context.userId}`);
-    res.status(200).json({ message: 'Deal restored successfully', data: deal });
-  } catch (error) {
-    next(error);
-  }
-};
-
-/**
- * Permanently delete a deal
- * DELETE /api/chatbot/deals/:dealId/permanent
- */
-export const permanentDeleteDeal = async (
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> => {
-  try {
-    const { dealId } = req.params;
-    await chatbotService.permanentDeleteDealService(dealId);
-
-    logger.info(`Deal permanently deleted: ${dealId} by user ${req.context.userId}`);
-    res.status(200).json({ message: 'Deal permanently deleted successfully' });
+    if (result.success) {
+      logger.info(`Deal email retried successfully: ${dealId} by user ${req.context.userId}`);
+      res.status(200).json({
+        message: 'Email sent successfully',
+        data: result,
+      });
+    } else {
+      logger.warn(`Deal email retry failed: ${dealId} - ${result.error}`);
+      res.status(200).json({
+        message: 'Email retry failed',
+        data: result,
+      });
+    }
   } catch (error) {
     next(error);
   }
@@ -567,3 +647,514 @@ export const suggestCounters = async (
     next(error);
   }
 };
+
+// ==================== REQUISITION-BASED DEAL CONTROLLERS ====================
+
+/**
+ * Get all requisitions with deal statistics
+ * GET /api/chatbot/requisitions
+ */
+export const getRequisitionsWithDeals = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const {
+      projectId,
+      status,
+      dateFrom,
+      dateTo,
+      sortBy,
+      archived,
+      page = 1,
+      limit = 10,
+    } = req.query;
+
+    const filters: chatbotService.RequisitionsWithDealsFilters = {};
+    if (projectId) filters.projectId = parseInt(projectId as string, 10);
+    if (status) filters.status = status as any;
+    if (dateFrom) filters.dateFrom = dateFrom as string;
+    if (dateTo) filters.dateTo = dateTo as string;
+    if (sortBy) filters.sortBy = sortBy as any;
+    if (archived) filters.archived = archived as 'active' | 'archived' | 'all';
+
+    const result = await chatbotService.getRequisitionsWithDealsService(
+      filters,
+      parseInt(page as string, 10),
+      parseInt(limit as string, 10)
+    );
+
+    // Transform response to match frontend expected structure
+    // Frontend expects: { data: { requisitions: [...], total, page, totalPages } }
+    res.status(200).json({
+      message: 'Requisitions retrieved successfully',
+      data: {
+        requisitions: result.data,
+        total: result.total,
+        page: result.page,
+        totalPages: result.totalPages,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Get all vendor deals for a specific requisition
+ * GET /api/chatbot/requisitions/:rfqId/deals
+ */
+export const getRequisitionDeals = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    // Support both rfqId (new) and requisitionId (legacy) param names
+    const rfqId = req.params.rfqId || req.params.requisitionId;
+    const { status, sortBy, sortOrder, archived } = req.query;
+
+    const result = await chatbotService.getRequisitionDealsService(
+      parseInt(rfqId, 10),
+      {
+        status: status as string,
+        sortBy: sortBy as string,
+        sortOrder: sortOrder as 'asc' | 'desc',
+        archived: archived as 'active' | 'archived' | 'all',
+      }
+    );
+
+    res.status(200).json({
+      message: 'Requisition deals retrieved successfully',
+      data: result,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Get detailed deal summary for modal display
+ * GET /api/chatbot/deals/:dealId/summary
+ */
+export const getDealSummary = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const { dealId } = req.params;
+    const result = await chatbotService.getDealSummaryService(dealId);
+
+    res.status(200).json({
+      message: 'Deal summary retrieved successfully',
+      data: result,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Get weighted utility calculation for a deal
+ * GET /api/chatbot/deals/:dealId/utility
+ *
+ * Returns:
+ * - Total weighted utility score (0-100%)
+ * - Parameter-level breakdown with individual utilities
+ * - Thresholds: Accept (≥70%), Escalate (30-50%), Walk Away (<30%)
+ * - Recommendation based on current utility
+ */
+export const getDealUtility = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const { dealId } = req.params;
+    const result = await chatbotService.getDealUtilityService(dealId);
+
+    res.status(200).json({
+      message: 'Utility calculated successfully',
+      data: result,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Get delivery addresses for a specific vendor
+ * GET /api/chatbot/vendors/:vendorId/addresses
+ *
+ * Returns the vendor's company address for delivery location selection
+ * Format matches DeliveryAddress type: { id, name, address, type, isDefault }
+ */
+export const getVendorAddresses = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const { vendorId } = req.params;
+    const addresses = await chatbotService.getVendorAddressesService(parseInt(vendorId, 10));
+
+    res.status(200).json({
+      message: 'Vendor addresses retrieved successfully',
+      data: addresses,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// ==================== NEW API RESTRUCTURE CONTROLLERS (January 2026) ====================
+
+/**
+ * Get requisitions available for negotiation
+ * GET /api/chatbot/requisitions/for-negotiation
+ *
+ * Proxies to the requisition module to get requisitions that can have deals created
+ */
+export const getRequisitionsForNegotiation = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const result = await chatbotService.getRequisitionsForNegotiationService();
+
+    res.status(200).json({
+      message: 'Requisitions for negotiation retrieved successfully',
+      data: result,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Get vendors attached to a requisition
+ * GET /api/chatbot/requisitions/:rfqId/vendors
+ */
+export const getRequisitionVendors = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const { rfqId } = req.params;
+    const result = await chatbotService.getRequisitionVendorsService(parseInt(rfqId, 10));
+
+    res.status(200).json({
+      message: 'Requisition vendors retrieved successfully',
+      data: result,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Unified message endpoint (merged INSIGHTS + CONVERSATION)
+ * POST /api/chatbot/requisitions/:rfqId/vendors/:vendorId/deals/:dealId/messages
+ * Query: ?mode=INSIGHTS or ?mode=CONVERSATION
+ */
+export const sendMessage = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const { dealId } = req.params;
+    const { content, role = 'VENDOR' } = req.body;
+    const { mode = 'INSIGHTS' } = req.query;
+
+    if (!content) {
+      throw new CustomError('Message content is required', 400);
+    }
+
+    if (mode === 'CONVERSATION') {
+      // Use CONVERSATION mode (LLM-driven)
+      const { processConversationMessage } = await import('./convo/conversationService.js');
+      const result = await processConversationMessage({
+        dealId,
+        vendorMessage: content,
+        userId: req.context.userId,
+      });
+
+      // Fetch updated deal and all messages to return to frontend
+      // This matches the INSIGHTS mode response structure for consistent frontend handling
+      const dealWithMessages = await chatbotService.getDealService(dealId);
+
+      res.status(200).json({
+        message: 'Message processed successfully',
+        data: {
+          deal: dealWithMessages.deal,
+          messages: dealWithMessages.messages,
+          latestMessage: result.data.accordoMessage,
+          conversationState: result.data.conversationState,
+          dealStatus: result.data.dealStatus,
+        },
+      });
+    } else {
+      // Use INSIGHTS mode (deterministic engine)
+      const result = await chatbotService.processVendorMessageService({
+        dealId,
+        content,
+        role,
+        userId: req.context.userId,
+      });
+
+      logger.info(
+        `Vendor message processed for deal ${dealId}: ${result.decision.action}`
+      );
+
+      // Fetch updated deal and all messages to return to frontend
+      const dealWithMessages = await chatbotService.getDealService(dealId);
+
+      res.status(200).json({
+        message: 'Message processed successfully',
+        data: {
+          deal: dealWithMessages.deal,
+          messages: dealWithMessages.messages,
+          latestMessage: result.message,
+          decision: result.decision,
+          explainability: result.explainability,
+        },
+      });
+    }
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Save a draft deal configuration
+ * POST /api/chatbot/requisitions/:rfqId/vendors/:vendorId/drafts
+ */
+export const saveDraft = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const { rfqId, vendorId } = req.params;
+    const draftData = req.body;
+
+    const draft = await chatbotService.saveDraftService({
+      rfqId: parseInt(rfqId, 10),
+      vendorId: parseInt(vendorId, 10),
+      userId: req.context.userId,
+      data: draftData,
+    });
+
+    res.status(201).json({
+      message: 'Draft saved successfully',
+      data: draft,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * List drafts for a RFQ+Vendor
+ * GET /api/chatbot/requisitions/:rfqId/vendors/:vendorId/drafts
+ */
+export const listDrafts = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const { rfqId, vendorId } = req.params;
+
+    const drafts = await chatbotService.listDraftsService(
+      parseInt(rfqId, 10),
+      parseInt(vendorId, 10),
+      req.context.userId
+    );
+
+    res.status(200).json({
+      message: 'Drafts retrieved successfully',
+      data: drafts,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Get a specific draft
+ * GET /api/chatbot/requisitions/:rfqId/vendors/:vendorId/drafts/:draftId
+ */
+export const getDraft = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const { draftId } = req.params;
+
+    const draft = await chatbotService.getDraftService(draftId);
+
+    res.status(200).json({
+      message: 'Draft retrieved successfully',
+      data: draft,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Delete a draft
+ * DELETE /api/chatbot/requisitions/:rfqId/vendors/:vendorId/drafts/:draftId
+ */
+export const deleteDraft = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const { draftId } = req.params;
+
+    await chatbotService.deleteDraftService(draftId);
+
+    res.status(200).json({
+      message: 'Draft deleted successfully',
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// ============================================================================
+// Vendor Negotiation (AI-PM Mode) Controllers
+// ============================================================================
+
+/**
+ * Start negotiation - generates AI-PM's opening offer
+ * POST /api/chatbot/requisitions/:rfqId/vendors/:vendorId/deals/:dealId/start-negotiation
+ */
+export const startNegotiation = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const { dealId } = req.params;
+
+    const result = await chatbotService.startNegotiationService(dealId);
+
+    logger.info(`Negotiation started for deal ${dealId} with AI-PM opening offer`);
+    res.status(200).json({
+      message: 'Negotiation started successfully',
+      data: result,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Get vendor scenarios - scenario chips for vendor based on current state
+ * GET /api/chatbot/requisitions/:rfqId/vendors/:vendorId/deals/:dealId/vendor-scenarios
+ */
+export const getVendorScenarios = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const { dealId } = req.params;
+
+    const scenarios = await chatbotService.getVendorScenariosService(dealId);
+
+    res.status(200).json({
+      message: 'Vendor scenarios retrieved successfully',
+      data: scenarios,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Vendor sends message - vendor sends offer, AI-PM responds immediately
+ * POST /api/chatbot/requisitions/:rfqId/vendors/:vendorId/deals/:dealId/vendor-message
+ */
+export const vendorSendMessage = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const { dealId } = req.params;
+    const { content } = req.body;
+
+    if (!content || !content.trim()) {
+      throw new CustomError('Message content is required', 400);
+    }
+
+    const result = await chatbotService.vendorSendMessageService(
+      dealId,
+      content,
+      req.context.userId
+    );
+
+    logger.info(`Vendor message processed for deal ${dealId}: AI-PM responded with ${result.pmDecision.action}`);
+    res.status(200).json({
+      message: 'Message processed successfully',
+      data: result,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Archive a requisition (cascades to all deals)
+ * POST /api/chatbot/requisitions/:rfqId/archive
+ */
+export const archiveRequisition = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const rfqId = parseInt(req.params.rfqId, 10);
+    const result = await chatbotService.archiveRequisitionService(rfqId);
+    res.status(200).json({
+      message: `Requisition archived successfully. ${result.archivedDealsCount} deals also archived.`,
+      data: result,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Unarchive a requisition
+ * POST /api/chatbot/requisitions/:rfqId/unarchive
+ */
+export const unarchiveRequisition = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const rfqId = parseInt(req.params.rfqId, 10);
+    const unarchiveDeals = req.body.unarchiveDeals !== false; // Default true
+    const result = await chatbotService.unarchiveRequisitionService(rfqId, unarchiveDeals);
+    res.status(200).json({
+      message: `Requisition unarchived successfully. ${result.unarchivedDealsCount} deals also unarchived.`,
+      data: result,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+

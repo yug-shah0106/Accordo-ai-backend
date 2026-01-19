@@ -5,6 +5,8 @@ import {
   getRequisition,
   updateRequisition,
   deleteRequisition,
+  getRequisitionsForNegotiation,
+  getRequisitionVendors,
 } from './requisition.controller.js';
 import {
   authMiddleware,
@@ -28,6 +30,22 @@ requisitionRouter.get(
   authMiddleware,
   (req, res, next) => checkPermission(req, res, next, moduleId, 1),
   getAllRequisitions
+);
+
+// Get requisitions available for negotiation (for deal wizard dropdown)
+requisitionRouter.get(
+  '/for-negotiation',
+  authMiddleware,
+  (req, res, next) => checkPermission(req, res, next, moduleId, 1),
+  getRequisitionsForNegotiation
+);
+
+// Get vendors attached to a specific requisition (for deal wizard vendor dropdown)
+requisitionRouter.get(
+  '/:requisitionId/vendors',
+  authMiddleware,
+  (req, res, next) => checkPermission(req, res, next, moduleId, 1),
+  getRequisitionVendors
 );
 
 requisitionRouter.get(

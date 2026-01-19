@@ -214,3 +214,30 @@ export const deleteCompanyService = async (companyId: number): Promise<number> =
     throw new CustomError(`Service ${error}`, 400);
   }
 };
+
+/**
+ * Address summary interface for delivery locations
+ */
+export interface AddressSummary {
+  id: string;
+  name: string;
+  address: string;
+  type: 'company' | 'project';
+  isDefault: boolean;
+}
+
+/**
+ * Gets delivery addresses for a user
+ * Aggregates addresses from user's company and associated projects
+ * Admin users see all addresses
+ * @param userId - User ID to get addresses for
+ * @returns List of delivery addresses
+ */
+export const getAddressesService = async (userId: number): Promise<AddressSummary[]> => {
+  try {
+    return companyRepo.getAddresses(userId);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new CustomError(message, 400);
+  }
+};

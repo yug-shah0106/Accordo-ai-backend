@@ -38,7 +38,7 @@ export default function authTokenModel(sequelize: Sequelize): typeof AuthToken {
         primaryKey: true,
       },
       user_id: DataTypes.INTEGER,
-      token: DataTypes.STRING,
+      token: DataTypes.TEXT, // TEXT to accommodate long JWT tokens
       email: DataTypes.STRING,
       createdAt: DataTypes.DATE,
       updatedAt: DataTypes.DATE,

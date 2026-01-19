@@ -238,3 +238,58 @@ export const deleteRequisitionService = async (
     throw new CustomError(String(error), 400);
   }
 };
+
+/**
+ * Response format for requisition summary (for negotiation dropdown)
+ */
+export interface RequisitionSummary {
+  id: number;
+  rfqNumber: string;
+  title: string;
+  projectName: string;
+  estimatedValue: number;
+  productCount: number;
+  vendorCount: number;
+  negotiationClosureDate?: string;
+}
+
+/**
+ * Response format for vendor summary (for vendor dropdown)
+ */
+export interface VendorSummary {
+  id: number;
+  name: string;
+  companyName?: string;
+  pastDealsCount: number;
+}
+
+/**
+ * Get all requisitions available for negotiation
+ * Returns summarized data for the deal creation dropdown
+ */
+export const getRequisitionsForNegotiationService = async (
+  userId: number
+): Promise<RequisitionSummary[]> => {
+  try {
+    const requisitions = await repo.getRequisitionsForNegotiation(userId);
+    return requisitions;
+  } catch (error) {
+    throw new CustomError((error as Error).message || String(error), 400);
+  }
+};
+
+/**
+ * Get vendors attached to a specific requisition (via Contracts)
+ * For the vendor dropdown in deal creation
+ */
+export const getRequisitionVendorsService = async (
+  requisitionId: number,
+  userId: number
+): Promise<VendorSummary[]> => {
+  try {
+    const vendors = await repo.getRequisitionVendors(requisitionId);
+    return vendors;
+  } catch (error) {
+    throw new CustomError((error as Error).message || String(error), 400);
+  }
+};
