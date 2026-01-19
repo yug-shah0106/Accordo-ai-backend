@@ -12,6 +12,9 @@ import { generateChatbotLlamaCompletion } from '../llm/chatbotLlamaClient.js';
 import { parseOfferRegex } from '../engine/parseOffer.js';
 import logger from '../../../config/logger.js';
 
+// Fast fallback timeout - if LLM takes longer than this, use template
+const LLM_FAST_TIMEOUT_MS = 5000;  // 5 second hard limit for fast fallback
+
 /**
  * Scenario-specific vendor persona prompts
  */
@@ -121,21 +124,42 @@ export async function generateVendorReply(
     const systemPrompt = VENDOR_PERSONAS[scenario];
     const userPrompt = buildVendorPrompt(round, lastAccordoOffer, nextPrice, nextTerms, scenario);
 
-    // Generate vendor message via LLM
+    // Generate vendor message via LLM with fast timeout fallback
     let vendorMessage: string;
+    const startTime = Date.now();
+
     try {
-      vendorMessage = await generateChatbotLlamaCompletion(
-        systemPrompt,
-        [{ role: 'user', content: userPrompt }],
-        {
-          temperature: 0.8, // Higher temperature for more varied vendor responses
-          maxTokens: 150,
-        }
+      // Create a timeout promise for fast fallback
+      const timeoutPromise = new Promise<string>((_, reject) =>
+        setTimeout(() => reject(new Error('LLM_TIMEOUT')), LLM_FAST_TIMEOUT_MS)
       );
+
+      // Race between LLM response and timeout
+      vendorMessage = await Promise.race([
+        generateChatbotLlamaCompletion(
+          systemPrompt,
+          [{ role: 'user', content: userPrompt }],
+          {
+            temperature: 0.6,  // Reduced for faster convergence
+            maxTokens: 80,     // Reduced - vendor messages are 2-3 sentences
+          }
+        ),
+        timeoutPromise,
+      ]);
+
+      logger.info('[VendorAgent] LLM response received', {
+        dealId,
+        responseTimeMs: Date.now() - startTime,
+      });
     } catch (llmError) {
-      // Fallback to template if LLM fails
+      // Fallback to template if LLM fails or times out
+      const errorMsg = llmError instanceof Error ? llmError.message : String(llmError);
+      const isTimeout = errorMsg === 'LLM_TIMEOUT';
+
       logger.warn('[VendorAgent] LLM generation failed, using fallback template', {
-        error: llmError instanceof Error ? llmError.message : String(llmError),
+        error: errorMsg,
+        isTimeout,
+        elapsedMs: Date.now() - startTime,
       });
       vendorMessage = buildFallbackVendorMessage(round, nextPrice, nextTerms, scenario);
     }

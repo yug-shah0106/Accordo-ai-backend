@@ -18,6 +18,12 @@ const CHATBOT_LLM_BASE_URL =
   process.env.CHATBOT_LLM_BASE_URL || env.llm.baseURL || 'http://localhost:11434';
 const CHATBOT_LLM_MODEL = process.env.CHATBOT_LLM_MODEL || 'llama3.1';
 
+// Performance-optimized defaults for fast responses
+const DEFAULT_MAX_TOKENS = 80;  // Reduced from 500 - vendor messages are 2-3 sentences
+const DEFAULT_TEMPERATURE = 0.6;  // Reduced from 0.7 - faster convergence
+const DEFAULT_NUM_CTX = 2048;  // Limit context window for speed
+const FAST_TIMEOUT_MS = 8000;  // 8 second timeout (reduced from 60s)
+
 /**
  * Message interface for chat completion
  */
@@ -51,8 +57,8 @@ export async function generateChatbotLlamaCompletion(
 ): Promise<string> {
   try {
     const {
-      temperature = 0.7,
-      maxTokens = 500,
+      temperature = DEFAULT_TEMPERATURE,
+      maxTokens = DEFAULT_MAX_TOKENS,
       topP = 0.9,
     } = options;
 
@@ -72,7 +78,7 @@ export async function generateChatbotLlamaCompletion(
       temperature,
     });
 
-    // Make request to Ollama chat endpoint
+    // Make request to Ollama chat endpoint with optimized settings
     const response = await axios.post(
       `${CHATBOT_LLM_BASE_URL}/api/chat`,
       {
@@ -83,10 +89,11 @@ export async function generateChatbotLlamaCompletion(
           temperature,
           num_predict: maxTokens,
           top_p: topP,
+          num_ctx: DEFAULT_NUM_CTX,  // Limit context window for speed
         },
       },
       {
-        timeout: 60000, // 60 second timeout
+        timeout: FAST_TIMEOUT_MS,  // Faster timeout for better UX
         headers: {
           'Content-Type': 'application/json',
         },
@@ -185,4 +192,114 @@ export function getChatbotLLMConfig(): {
     baseUrl: CHATBOT_LLM_BASE_URL,
     model: CHATBOT_LLM_MODEL,
   };
+}
+
+/**
+ * Stream a chat completion using Ollama with SSE
+ *
+ * This function streams the response chunk by chunk for better perceived performance.
+ * Each chunk is passed to the onChunk callback as it arrives.
+ *
+ * @param systemPrompt - System instructions for the LLM
+ * @param conversationHistory - Array of previous messages
+ * @param onChunk - Callback function called for each text chunk
+ * @param options - Optional parameters (temperature, maxTokens)
+ * @returns Complete generated text
+ */
+export async function streamChatbotLlamaCompletion(
+  systemPrompt: string,
+  conversationHistory: Array<{ role: string; content: string }>,
+  onChunk: (chunk: string) => void,
+  options: CompletionOptions = {}
+): Promise<string> {
+  const {
+    temperature = DEFAULT_TEMPERATURE,
+    maxTokens = DEFAULT_MAX_TOKENS,
+    topP = 0.9,
+  } = options;
+
+  // Prepare messages array
+  const messages: ChatMessage[] = [
+    { role: 'system', content: systemPrompt },
+    ...conversationHistory.map((msg) => ({
+      role: msg.role === 'VENDOR' ? 'user' : 'assistant',
+      content: msg.content,
+    })) as ChatMessage[],
+  ];
+
+  logger.info('[ChatbotLLM] Starting streaming request to Ollama', {
+    baseUrl: CHATBOT_LLM_BASE_URL,
+    model: CHATBOT_LLM_MODEL,
+    messageCount: messages.length,
+  });
+
+  try {
+    const response = await axios.post(
+      `${CHATBOT_LLM_BASE_URL}/api/chat`,
+      {
+        model: CHATBOT_LLM_MODEL,
+        messages,
+        stream: true,  // Enable streaming
+        options: {
+          temperature,
+          num_predict: maxTokens,
+          top_p: topP,
+          num_ctx: DEFAULT_NUM_CTX,
+        },
+      },
+      {
+        timeout: FAST_TIMEOUT_MS,
+        responseType: 'stream',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+
+    let fullText = '';
+
+    return new Promise<string>((resolve, reject) => {
+      response.data.on('data', (chunk: Buffer) => {
+        const lines = chunk.toString().split('\n').filter(Boolean);
+        for (const line of lines) {
+          try {
+            const data = JSON.parse(line);
+            if (data.message?.content) {
+              const textChunk = data.message.content;
+              fullText += textChunk;
+              onChunk(textChunk);
+            }
+            if (data.done) {
+              logger.info('[ChatbotLLM] Streaming completed', {
+                totalLength: fullText.length,
+              });
+              resolve(fullText.trim());
+            }
+          } catch (parseError) {
+            // Ignore parse errors for incomplete chunks
+          }
+        }
+      });
+
+      response.data.on('error', (error: Error) => {
+        logger.error('[ChatbotLLM] Stream error', { error: error.message });
+        reject(error);
+      });
+
+      response.data.on('end', () => {
+        if (fullText) {
+          resolve(fullText.trim());
+        }
+      });
+    });
+  } catch (error) {
+    if (error instanceof AxiosError) {
+      logger.error('[ChatbotLLM] Streaming request failed', {
+        status: error.response?.status,
+        message: error.message,
+      });
+      throw new Error(`LLM streaming failed: ${error.message}`);
+    }
+    throw error;
+  }
 }

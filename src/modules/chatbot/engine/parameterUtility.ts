@@ -40,16 +40,24 @@ export function calculateLinearUtility(
     if (value <= target) return 1;
     if (value >= max) return 0;
     // Linear interpolation between target and max
-    return 1 - (value - target) / (max - target);
+    // Guard against division by zero when max === target
+    const range = max - target;
+    if (range === 0) return 0;
+    return 1 - (value - target) / range;
   } else if (config.direction === "higher_better") {
     // Higher values are better (e.g., warranty months)
     // Utility = 1 when value >= target, 0 when value <= min
     if (value >= target) return 1;
     if (min !== undefined && min !== null && value <= min) return 0;
     if (min !== undefined && min !== null) {
-      return (value - min) / (target - min);
+      // Guard against division by zero when target === min
+      const range = target - min;
+      if (range === 0) return 0;
+      return (value - min) / range;
     }
     // If no min defined, use 0 as min
+    // Guard against division by zero when target === 0
+    if (target === 0) return 0;
     return value / target;
   } else if (config.direction === "closer_better") {
     // Closer to target is better
@@ -176,13 +184,19 @@ export function calculatePercentageUtility(
     if (clampedValue <= target) return 1;
     const max = (config.max as number) ?? 100;
     if (clampedValue >= max) return 0;
-    return 1 - (clampedValue - target) / (max - target);
+    // Guard against division by zero when max === target
+    const range = max - target;
+    if (range === 0) return 0;
+    return 1 - (clampedValue - target) / range;
   } else if (config.direction === "higher_better") {
     // Higher percentage is better (e.g., volume discount)
     if (clampedValue >= target) return 1;
     const min = (config.min as number) ?? 0;
     if (clampedValue <= min) return 0;
-    return (clampedValue - min) / (target - min);
+    // Guard against division by zero when target === min
+    const range = target - min;
+    if (range === 0) return 0;
+    return (clampedValue - min) / range;
   }
 
   return 0;

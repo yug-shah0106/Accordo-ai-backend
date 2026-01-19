@@ -136,7 +136,7 @@ export const env: EnvironmentConfig = {
   redisUrl: process.env.REDIS_URL,
   llm: {
     baseURL: process.env.LLM_BASE_URL || 'http://localhost:11434',
-    model: process.env.LLM_MODEL || 'llama3.2',
+    model: process.env.LLM_MODEL || 'llama3.1',
     negotiationModel: process.env.LLM_NEGOTIATION_MODEL,
     timeout: Number(process.env.LLM_TIMEOUT || 60000),
   },

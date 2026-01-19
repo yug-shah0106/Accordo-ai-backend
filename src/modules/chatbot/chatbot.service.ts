@@ -1,4 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
+import crypto from 'crypto';
 import { Op } from 'sequelize';
 import { CustomError } from '../../utils/custom-error.js';
 import logger from '../../config/logger.js';
@@ -14,7 +15,9 @@ import type { ChatbotDeal } from '../../models/chatbotDeal.js';
 import type { ChatbotMessage } from '../../models/chatbotMessage.js';
 import { chatCompletion } from '../../services/llm.service.js';
 import { captureVendorBid, checkAndTriggerComparison } from '../bidComparison/bidComparison.service.js';
-import { sendDealCreatedEmail } from '../../services/email.service.js';
+import { sendDealCreatedEmail, sendPmDealStatusNotificationEmail, sendDealSummaryPDFEmail } from '../../services/email.service.js';
+import { getCachedSuggestions, cacheSuggestions, invalidateSuggestions, precomputeSuggestionsBackground } from './suggestionCache.js';
+import { generateDealSummaryPDF, generatePDFFilename, type DealSummaryPDFInput } from './pdf/dealSummaryPdfGenerator.js';
 
 export interface CreateDealInput {
   title: string;
@@ -374,6 +377,36 @@ export const createDealWithConfigService = async (
       customParameters: customParameters || [],
     };
 
+    // Check if a Contract already exists for this vendor+requisition
+    // If not, create one to ensure data consistency between Contracts and ChatbotDeals tables
+    let contractId: number | null = null;
+
+    const existingContract = await models.Contract.findOne({
+      where: {
+        requisitionId: input.requisitionId,
+        vendorId: input.vendorId,
+      },
+    });
+
+    if (existingContract) {
+      contractId = existingContract.id;
+      logger.info(`Using existing contract ${contractId} for vendor ${input.vendorId} on requisition ${input.requisitionId}`);
+    } else {
+      // Create a new Contract record to link vendor to requisition
+      // This ensures the vendor appears in the dropdown for future deals
+      const uniqueToken = crypto.randomBytes(16).toString('hex');
+      const newContract = await models.Contract.create({
+        requisitionId: input.requisitionId,
+        vendorId: input.vendorId,
+        status: 'Created',
+        uniqueToken,
+        chatbotDealId: dealId,  // Link to the deal we're about to create
+        createdBy: input.userId,
+      });
+      contractId = newContract.id;
+      logger.info(`Created new contract ${contractId} for vendor ${input.vendorId} on requisition ${input.requisitionId}`);
+    }
+
     const deal = await models.ChatbotDeal.create({
       id: dealId,
       title: input.title,
@@ -389,7 +422,7 @@ export const createDealWithConfigService = async (
       negotiationConfigJson: { ...negotiationConfig, wizardConfig } as any,
       templateId: null,
       requisitionId: input.requisitionId,
-      contractId: null,
+      contractId: contractId,
       userId: input.userId,
       vendorId: input.vendorId,
       archivedAt: null,
@@ -742,6 +775,13 @@ export const processVendorMessageService = async (
         // Log but don't fail the message processing
         logger.error(`Failed to capture vendor bid: ${(bidError as Error).message}`);
       }
+    }
+
+    // Invalidate suggestions cache after new message & pre-compute for next round
+    invalidateSuggestions(input.dealId).catch(() => {});
+    if (finalStatus === 'NEGOTIATING' && input.userId) {
+      // Pre-compute suggestions in background for instant response on next request
+      precomputeSuggestionsBackground(input.dealId, input.userId, generateScenarioSuggestionsService);
     }
 
     return { message, accordoMessage, decision, explainability };
@@ -1569,8 +1609,28 @@ export const generateScenarioSuggestionsService = async (
   userId: number
 ): Promise<Record<string, string[]>> => {
   try {
-    // Get deal with messages and config
+    // Check cache first for instant response
     const deal = await models.ChatbotDeal.findOne({
+      where: { id: dealId },
+      attributes: ['id', 'round'],
+    });
+
+    if (!deal) {
+      throw new CustomError('Deal not found', 404);
+    }
+
+    const cachedResult = await getCachedSuggestions(dealId, deal.round);
+    if (cachedResult) {
+      logger.info('[ScenarioSuggestions] Returning cached suggestions', {
+        dealId,
+        round: deal.round,
+        source: cachedResult.source,
+      });
+      return cachedResult.suggestions;
+    }
+
+    // Get deal with messages and config (full fetch for generation)
+    const dealWithMessages = await models.ChatbotDeal.findOne({
       where: { id: dealId },
       include: [
         {
@@ -1583,18 +1643,18 @@ export const generateScenarioSuggestionsService = async (
       ],
     });
 
-    if (!deal) {
+    if (!dealWithMessages) {
       throw new CustomError('Deal not found', 404);
     }
 
     // Get negotiation config
-    const config = deal.negotiationConfigJson as NegotiationConfig;
+    const config = dealWithMessages.negotiationConfigJson as NegotiationConfig;
     if (!config) {
       throw new CustomError('Deal has no negotiation config', 400);
     }
 
     // Get last vendor message for context
-    const messages = (deal as any).Messages || [];
+    const messages = (dealWithMessages as any).Messages || [];
     const lastVendorMessage = messages.filter((m: ChatbotMessage) => m.role === 'VENDOR').pop();
 
     // Build conversation context
@@ -1612,9 +1672,9 @@ export const generateScenarioSuggestionsService = async (
     const prompt = `You are a procurement negotiation assistant. Analyze this negotiation and generate 4 counter-offer suggestions for each scenario type.
 
 NEGOTIATION CONTEXT:
-Deal: ${deal.title}
-Current Round: ${deal.round}
-Status: ${deal.status}
+Deal: ${dealWithMessages.title}
+Current Round: ${dealWithMessages.round}
+Status: ${dealWithMessages.status}
 
 NEGOTIATION CONFIG:
 Target Price: $${priceConfig.target}
@@ -1649,82 +1709,124 @@ Each offer should be a short message (under 50 chars) like "We can do $92 Net 30
     let suggestions: Record<string, string[]>;
     let generationSource: 'llm' | 'fallback' = 'llm';
 
-    // Try LLM first, fallback to defaults if unavailable
-    try {
+    // Fast timeout for instant response (500ms)
+    const SUGGESTION_TIMEOUT_MS = 500;
+
+    // Generate instant fallback suggestions (used if LLM is slow or fails)
+    const generateFallbackSuggestions = (): Record<string, string[]> => ({
+      HARD: [
+        `We can do $${priceConfig.anchor} ${idealTerms}`,
+        `Best I can offer is $${priceConfig.anchor + 2} ${idealTerms}`,
+        `Final: $${priceConfig.anchor + 5} ${idealTerms}`,
+        `Absolute limit: $${priceConfig.anchor + 8} ${idealTerms}`,
+      ],
+      MEDIUM: [
+        `We can do $${priceConfig.target - 5} ${acceptableTerms}`,
+        `How about $${priceConfig.target - 8} ${acceptableTerms}?`,
+        `We're open to $${priceConfig.target - 12} Net 90`,
+        `Final offer: $${priceConfig.target - 15} Net 90`,
+      ],
+      SOFT: [
+        `We can do $${priceConfig.target} ${acceptableTerms}`,
+        `How about $${priceConfig.target - 2} Net 90?`,
+        `We're willing to go to $${priceConfig.target - 5} Net 90`,
+        `Final offer: $${priceConfig.target - 8} Net 90`,
+      ],
+      WALK_AWAY: [
+        `We can do $${priceConfig.max_acceptable} ${idealTerms}`,
+        `Best I can offer is $${priceConfig.max_acceptable - 2} ${idealTerms}`,
+        `Our final offer is $${priceConfig.max_acceptable + 10} ${idealTerms} - take it or leave it`,
+        `Sorry, we can't go lower than $${priceConfig.max_acceptable + 10}`,
+      ],
+    });
+
+    // LLM generation promise
+    const llmGenerationPromise = async (): Promise<Record<string, string[]>> => {
       const llmResponse = await chatCompletion(
         [{ role: 'user', content: prompt }],
-        { temperature: 0.7, maxTokens: 1000 }
+        { temperature: 0.7, maxTokens: 500 }  // Reduced from 1000
       );
-
       // Clean response - remove markdown code blocks if present
       const cleanedResponse = llmResponse.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-      suggestions = JSON.parse(cleanedResponse);
+      return JSON.parse(cleanedResponse);
+    };
 
-      logger.info('[ScenarioSuggestions] Successfully generated suggestions via LLM', { dealId });
+    // Timeout promise that returns fallback after 500ms
+    const timeoutPromise = new Promise<Record<string, string[]>>((resolve) => {
+      setTimeout(() => {
+        logger.info('[ScenarioSuggestions] LLM timeout reached, using instant fallback', {
+          dealId,
+          timeoutMs: SUGGESTION_TIMEOUT_MS
+        });
+        resolve(generateFallbackSuggestions());
+      }, SUGGESTION_TIMEOUT_MS);
+    });
+
+    // Race between LLM and timeout - whoever finishes first wins
+    const startTime = Date.now();
+    try {
+      suggestions = await Promise.race([
+        llmGenerationPromise(),
+        timeoutPromise,
+      ]);
+
+      const elapsedMs = Date.now() - startTime;
+
+      // Determine if we got LLM or fallback based on timing
+      if (elapsedMs < SUGGESTION_TIMEOUT_MS) {
+        logger.info('[ScenarioSuggestions] LLM responded within timeout', {
+          dealId,
+          elapsedMs
+        });
+      } else {
+        generationSource = 'fallback';
+        logger.info('[ScenarioSuggestions] Using fallback (timeout triggered)', {
+          dealId,
+          elapsedMs
+        });
+      }
     } catch (llmOrParseError) {
-      logger.warn('[ScenarioSuggestions] LLM unavailable or response parsing failed, using fallback suggestions', {
+      logger.warn('[ScenarioSuggestions] LLM error, using fallback suggestions', {
         dealId,
         error: llmOrParseError instanceof Error ? llmOrParseError.message : String(llmOrParseError),
       });
 
       generationSource = 'fallback';
-
-      // Fallback to default suggestions
-      suggestions = {
-        HARD: [
-          `We can do $${priceConfig.anchor} ${idealTerms}`,
-          `Best I can offer is $${priceConfig.anchor + 2} ${idealTerms}`,
-          `Final: $${priceConfig.anchor + 5} ${idealTerms}`,
-          `Absolute limit: $${priceConfig.anchor + 8} ${idealTerms}`,
-        ],
-        MEDIUM: [
-          `We can do $${priceConfig.target - 5} ${acceptableTerms}`,
-          `How about $${priceConfig.target - 8} ${acceptableTerms}?`,
-          `We're open to $${priceConfig.target - 12} Net 90`,
-          `Final offer: $${priceConfig.target - 15} Net 90`,
-        ],
-        SOFT: [
-          `We can do $${priceConfig.target} ${acceptableTerms}`,
-          `How about $${priceConfig.target - 2} Net 90?`,
-          `We're willing to go to $${priceConfig.target - 5} Net 90`,
-          `Final offer: $${priceConfig.target - 8} Net 90`,
-        ],
-        WALK_AWAY: [
-          `We can do $${priceConfig.max_acceptable} ${idealTerms}`,
-          `Best I can offer is $${priceConfig.max_acceptable - 2} ${idealTerms}`,
-          `Our final offer is $${priceConfig.max_acceptable + 10} ${idealTerms} - take it or leave it`,
-          `Sorry, we can't go lower than $${priceConfig.max_acceptable + 10}`,
-        ],
-      };
+      suggestions = generateFallbackSuggestions();
     }
 
-    logger.info('[ScenarioSuggestions] Generated suggestions', { dealId, round: deal.round });
+    logger.info('[ScenarioSuggestions] Generated suggestions', { dealId, round: dealWithMessages.round });
 
-    // Log to training data for future LLM fine-tuning
-    try {
-      await models.NegotiationTrainingData.create({
-        dealId: deal.id,
-        userId,
-        round: deal.round,
-        suggestionsJson: suggestions,
-        conversationContext,
-        configSnapshot: config,
-        llmModel: process.env.LLM_MODEL || 'llama3.2',
-        generationSource,
-      });
+    // Cache the suggestions for future requests
+    await cacheSuggestions(dealId, dealWithMessages.round, suggestions, generationSource);
 
-      logger.info('[ScenarioSuggestions] Training data logged', {
-        dealId,
-        round: deal.round,
-        generationSource
-      });
-    } catch (loggingError) {
-      // Don't fail the request if logging fails
-      logger.error('[ScenarioSuggestions] Failed to log training data', {
-        dealId,
-        error: loggingError,
-      });
-    }
+    // Log to training data for future LLM fine-tuning (non-blocking)
+    setImmediate(async () => {
+      try {
+        await models.NegotiationTrainingData.create({
+          dealId: dealWithMessages.id,
+          userId,
+          round: dealWithMessages.round,
+          suggestionsJson: suggestions,
+          conversationContext,
+          configSnapshot: config,
+          llmModel: process.env.LLM_MODEL || 'llama3.1',
+          generationSource,
+        });
+
+        logger.info('[ScenarioSuggestions] Training data logged', {
+          dealId,
+          round: dealWithMessages.round,
+          generationSource
+        });
+      } catch (loggingError) {
+        // Don't fail the request if logging fails
+        logger.error('[ScenarioSuggestions] Failed to log training data', {
+          dealId,
+          error: loggingError,
+        });
+      }
+    });
 
     return suggestions;
   } catch (error) {
@@ -2067,8 +2169,10 @@ export const getRequisitionDealsService = async (
       order: [['lastMessageAt', 'DESC']],
     });
 
-    console.log('[DEBUG] Found deals count:', deals.length);
-    console.log('[DEBUG] Deals archivedAt values:', deals.map(d => ({ id: d.id, archivedAt: d.archivedAt })));
+    logger.debug('[getRequisitionDealsService] Found deals', {
+      count: deals.length,
+      deals: deals.map(d => ({ id: d.id, archivedAt: d.archivedAt })),
+    });
 
     // Calculate requisition statistics
     const statusCounts = {
@@ -2581,6 +2685,145 @@ export const getDealSummaryService = async (dealId: string): Promise<DealSummary
   }
 };
 
+/**
+ * Export deal summary as PDF
+ * Generates a comprehensive PDF report with analytics, timeline, and chat transcript
+ */
+export const exportDealPDFService = async (
+  dealId: string,
+  rfqId: number
+): Promise<{ data: Buffer; filename: string }> => {
+  try {
+    logger.info('[exportDealPDF] Generating PDF for deal:', { dealId, rfqId });
+
+    // Get deal summary data
+    const summary = await getDealSummaryService(dealId);
+
+    // Get full message list for transcript
+    const deal = await models.ChatbotDeal.findByPk(dealId, {
+      include: [
+        {
+          model: models.ChatbotMessage,
+          as: 'Messages',
+          order: [['createdAt', 'ASC']],
+        },
+      ],
+    });
+
+    if (!deal) {
+      throw new CustomError('Deal not found', 404);
+    }
+
+    const messages = (deal.Messages || []) as ChatbotMessage[];
+
+    // Extract price data from timeline for charts
+    const timelineWithPrices = summary.timeline.map((item) => {
+      let vendorPrice: number | null = null;
+      let accordoPrice: number | null = null;
+
+      // Try to extract prices from messages
+      const vendorMatch = item.vendorOffer.match(/\$[\d,]+(?:\.\d{2})?/);
+      if (vendorMatch) {
+        vendorPrice = parseFloat(vendorMatch[0].replace(/[$,]/g, ''));
+      }
+
+      const accordoMatch = item.accordoResponse.match(/\$[\d,]+(?:\.\d{2})?/);
+      if (accordoMatch) {
+        accordoPrice = parseFloat(accordoMatch[0].replace(/[$,]/g, ''));
+      }
+
+      return {
+        ...item,
+        vendorPrice,
+        accordoPrice,
+      };
+    });
+
+    // Prepare PDF input
+    const pdfInput: DealSummaryPDFInput = {
+      deal: summary.deal,
+      finalOffer: summary.finalOffer,
+      metrics: summary.metrics,
+      timeline: timelineWithPrices,
+      messages: messages.map((m) => ({
+        id: m.id,
+        role: m.role,
+        content: m.content,
+        createdAt: m.createdAt.toISOString(),
+        extractedOffer: m.extractedOffer as any,
+      })),
+      rfqId,
+      generatedAt: new Date(),
+    };
+
+    // Generate PDF
+    const pdfBuffer = await generateDealSummaryPDF(pdfInput);
+    const filename = generatePDFFilename(summary.deal.vendorName, rfqId);
+
+    logger.info('[exportDealPDF] PDF generated successfully:', {
+      dealId,
+      filename,
+      size: pdfBuffer.length,
+    });
+
+    return { data: pdfBuffer, filename };
+  } catch (error) {
+    if (error instanceof CustomError) {
+      throw error;
+    }
+    logger.error('[exportDealPDF] Error:', error);
+    throw new CustomError(
+      `Failed to export PDF: ${error instanceof Error ? error.message : String(error)}`,
+      500
+    );
+  }
+};
+
+/**
+ * Email deal summary PDF to recipient
+ * Generates PDF and sends it as an email attachment
+ */
+export const emailDealPDFService = async (
+  dealId: string,
+  rfqId: number,
+  email: string
+): Promise<void> => {
+  try {
+    logger.info('[emailDealPDF] Sending PDF for deal:', { dealId, rfqId, email });
+
+    // Generate the PDF
+    const { data: pdfBuffer, filename } = await exportDealPDFService(dealId, rfqId);
+
+    // Get deal info for email subject
+    const summary = await getDealSummaryService(dealId);
+
+    // Send email with attachment
+    await sendDealSummaryPDFEmail({
+      to: email,
+      dealTitle: summary.deal.title,
+      vendorName: summary.deal.vendorName,
+      rfqId,
+      pdfBuffer,
+      filename,
+    });
+
+    logger.info('[emailDealPDF] Email sent successfully:', {
+      dealId,
+      email,
+      filename,
+    });
+  } catch (error) {
+    if (error instanceof CustomError) {
+      throw error;
+    }
+    logger.error('[emailDealPDF] Error:', error);
+    throw new CustomError(
+      `Failed to email PDF: ${error instanceof Error ? error.message : String(error)}`,
+      500
+    );
+  }
+};
+
 // ==================== NEW API RESTRUCTURE SERVICES (January 2026) ====================
 
 /**
@@ -2622,6 +2865,7 @@ export interface VendorAddress {
  */
 export interface RequisitionVendor {
   id: number;           // Vendor ID (frontend uses this as the value for selection)
+  vendorId?: number;    // Same as id, included for backward compatibility
   name: string;         // Vendor name (frontend expects `name` not `vendorName`)
   email?: string;
   companyId?: number;
@@ -2806,10 +3050,13 @@ export const getRequisitionVendorsService = async (
 
     // For each vendor, check if they have an existing deal and count past deals
     const result: RequisitionVendor[] = [];
+    const processedVendorIds = new Set<number>();
 
     for (const contract of contracts) {
       const vendor = (contract as any).Vendor;
       if (!vendor) continue;
+
+      processedVendorIds.add(vendor.id);
 
       // Check for existing deal for this requisition
       const existingDeal = await models.ChatbotDeal.findOne({
@@ -2850,7 +3097,7 @@ export const getRequisitionVendorsService = async (
 
       result.push({
         id: vendor.id,                    // Frontend expects vendor ID as `id` (User table)
-        vendorId: contract.vendorId,      // Vendor table ID (for matching with VendorDetails)
+        vendorId: contract.vendorId ?? undefined,  // Vendor table ID (for matching with VendorDetails)
         name: vendor.name || 'Unknown Vendor',  // Frontend expects `name`
         email: vendor.email || '',
         companyId: vendor.Company?.id || undefined,
@@ -2867,9 +3114,98 @@ export const getRequisitionVendorsService = async (
       });
     }
 
+    // FALLBACK: Also check ChatbotDeals table for vendors that may have deals
+    // without corresponding Contract records (legacy data or edge cases)
+    const dealsWithoutContracts = await models.ChatbotDeal.findAll({
+      where: {
+        requisitionId: rfqId,
+        vendorId: { [Op.ne]: null },
+        deletedAt: null,
+      },
+      attributes: ['vendorId'],
+      group: ['vendorId'],
+    });
+
+    for (const deal of dealsWithoutContracts) {
+      const vendorId = deal.vendorId;
+      if (!vendorId || processedVendorIds.has(vendorId)) continue;
+
+      // This vendor has a deal but no contract - fetch their info
+      const vendor = await models.User.findByPk(vendorId, {
+        attributes: ['id', 'name', 'email'],
+        include: [
+          {
+            model: models.Company,
+            as: 'Company',
+            attributes: ['id', 'companyName'],
+            required: false,
+          },
+        ],
+      });
+
+      if (!vendor) continue;
+
+      processedVendorIds.add(vendorId);
+
+      // Get the most recent deal for this vendor on this requisition
+      const existingDeal = await models.ChatbotDeal.findOne({
+        where: {
+          requisitionId: rfqId,
+          vendorId: vendorId,
+          deletedAt: null,
+        },
+        order: [['createdAt', 'DESC']],
+      });
+
+      // Count past completed deals for this vendor
+      const pastDealsCount = await models.ChatbotDeal.count({
+        where: {
+          vendorId: vendorId,
+          status: { [Op.in]: ['ACCEPTED', 'WALKED_AWAY', 'ESCALATED'] },
+          deletedAt: null,
+        },
+      });
+
+      // Calculate average utility score from past deals
+      const pastDeals = await models.ChatbotDeal.findAll({
+        where: {
+          vendorId: vendorId,
+          status: 'ACCEPTED',
+          latestUtility: { [Op.ne]: null },
+          deletedAt: null,
+        },
+        attributes: ['latestUtility'],
+      });
+      const avgUtilityScore = pastDeals.length > 0
+        ? pastDeals.reduce((sum, d) => sum + (d.latestUtility || 0), 0) / pastDeals.length
+        : null;
+
+      result.push({
+        id: vendor.id,
+        vendorId: vendor.id,
+        name: vendor.name || 'Unknown Vendor',
+        email: vendor.email || '',
+        companyId: (vendor as any).Company?.id || undefined,
+        companyName: (vendor as any).Company?.companyName || null,
+        pastDealsCount,
+        avgUtilityScore,
+        addresses: [...buyerAddresses],
+        // No contract exists for this vendor
+        contractId: null,
+        contractStatus: null,
+        hasDeal: !!existingDeal,
+        dealId: existingDeal?.id || null,
+        dealStatus: existingDeal?.status || null,
+      });
+
+      logger.info(`[getRequisitionVendors] Added vendor ${vendorId} from ChatbotDeals fallback (no contract exists)`);
+    }
+
     logger.info('[getRequisitionVendors] Retrieved vendors', {
       rfqId,
       vendorCount: result.length,
+      fromContracts: contracts.length,
+      fromDealsFallback: result.length - contracts.length,
     });
 
     return result;
@@ -3454,6 +3790,81 @@ export const vendorSendMessageService = async (
       newRound: deal.round,
       finalStatus,
     });
+
+    // Send PM notification email if deal status changed to terminal state
+    if (finalStatus === 'ACCEPTED' || finalStatus === 'WALKED_AWAY' || finalStatus === 'ESCALATED') {
+      try {
+        // Only proceed if we have valid user and requisition IDs
+        if (!deal.userId || !deal.requisitionId) {
+          logger.warn('[VendorSendMessage] Cannot send PM notification - missing userId or requisitionId', {
+            dealId,
+            hasUserId: !!deal.userId,
+            hasRequisitionId: !!deal.requisitionId,
+          });
+        } else {
+          // Get PM (deal creator) info
+          const pmUser = await models.User.findByPk(deal.userId);
+          // Get requisition info
+          const requisition = await models.Requisition.findByPk(deal.requisitionId);
+          // Get vendor info
+          const vendorUser = deal.vendorId ? await models.User.findByPk(deal.vendorId) : null;
+          const vendorCompany = deal.vendorId ? await models.Company.findOne({
+            include: [{
+              model: models.VendorCompany,
+              as: 'VendorCompanies',
+              where: { vendorId: deal.vendorId },
+              required: true,
+            }],
+          }) : null;
+
+          if (pmUser && requisition) {
+            const emailResult = await sendPmDealStatusNotificationEmail({
+              dealId: deal.id,
+              dealTitle: deal.title,
+              requisitionId: deal.requisitionId as number,
+              rfqNumber: (requisition as any).rfqId || `RFQ-${deal.requisitionId}`,
+              vendorName: vendorUser?.name || 'Vendor',
+              vendorCompanyName: (vendorCompany as any)?.name || undefined,
+              pmEmail: pmUser.email || '',
+              pmName: pmUser.name || 'Procurement Manager',
+              pmUserId: pmUser.id,
+              newStatus: finalStatus,
+              utility: pmDecision.utility,
+              vendorOffer: {
+                price: vendorOffer.unit_price,
+                paymentTerms: vendorOffer.payment_terms,
+              },
+              reasoning: pmDecision.reasoning ? [pmDecision.reasoning] : undefined,
+            });
+
+            if (emailResult.success) {
+              logger.info('[VendorSendMessage] PM notification email sent', {
+                dealId,
+                pmEmail: pmUser.email,
+                status: finalStatus,
+              });
+            } else {
+              logger.warn('[VendorSendMessage] PM notification email failed', {
+                dealId,
+                error: emailResult.error,
+              });
+            }
+          } else {
+            logger.warn('[VendorSendMessage] Could not send PM notification - missing user or requisition', {
+              dealId,
+              hasUser: !!pmUser,
+              hasRequisition: !!requisition,
+            });
+          }
+        }
+      } catch (emailError) {
+        // Don't fail the entire operation if email fails
+        logger.error('[VendorSendMessage] Error sending PM notification email', {
+          dealId,
+          error: emailError instanceof Error ? emailError.message : String(emailError),
+        });
+      }
+    }
 
     return {
       deal,

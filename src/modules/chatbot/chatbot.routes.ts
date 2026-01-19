@@ -247,6 +247,32 @@ chatbotRouter.get(
 );
 
 /**
+ * Export deal summary as PDF
+ * POST /api/chatbot/requisitions/:rfqId/vendors/:vendorId/deals/:dealId/export-pdf
+ *
+ * Returns PDF file as buffer for direct download.
+ */
+chatbotRouter.post(
+  '/requisitions/:rfqId/vendors/:vendorId/deals/:dealId/export-pdf',
+  authMiddleware,
+  validateParams(nestedDealSchema),
+  controller.exportDealPDF
+);
+
+/**
+ * Email deal summary PDF to specified recipient
+ * POST /api/chatbot/requisitions/:rfqId/vendors/:vendorId/deals/:dealId/email-pdf
+ *
+ * Body: { email: string }
+ */
+chatbotRouter.post(
+  '/requisitions/:rfqId/vendors/:vendorId/deals/:dealId/email-pdf',
+  authMiddleware,
+  validateParams(nestedDealSchema),
+  controller.emailDealPDF
+);
+
+/**
  * Get explainability data for a deal
  * GET /api/chatbot/requisitions/:rfqId/vendors/:vendorId/deals/:dealId/explainability
  */

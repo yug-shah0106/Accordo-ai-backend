@@ -757,6 +757,65 @@ export const getDealSummary = async (
 };
 
 /**
+ * Export deal summary as PDF
+ * POST /api/chatbot/requisitions/:rfqId/vendors/:vendorId/deals/:dealId/export-pdf
+ *
+ * Generates a comprehensive PDF report and returns it for download.
+ */
+export const exportDealPDF = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const { dealId, rfqId } = req.params;
+    const result = await chatbotService.exportDealPDFService(dealId, parseInt(rfqId, 10));
+
+    // Set headers for PDF download
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${result.filename}"`);
+    res.setHeader('Content-Length', result.data.length);
+
+    res.send(result.data);
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Email deal summary PDF to recipient
+ * POST /api/chatbot/requisitions/:rfqId/vendors/:vendorId/deals/:dealId/email-pdf
+ *
+ * Generates PDF and emails it to the specified address.
+ */
+export const emailDealPDF = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const { dealId, rfqId } = req.params;
+    const { email } = req.body;
+
+    if (!email || typeof email !== 'string') {
+      res.status(400).json({
+        message: 'Email address is required',
+      });
+      return;
+    }
+
+    await chatbotService.emailDealPDFService(dealId, parseInt(rfqId, 10), email);
+
+    res.status(200).json({
+      message: `Deal summary PDF sent to ${email}`,
+      data: { email, sentAt: new Date().toISOString() },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
  * Get weighted utility calculation for a deal
  * GET /api/chatbot/deals/:dealId/utility
  *

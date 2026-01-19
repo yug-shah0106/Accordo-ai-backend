@@ -921,3 +921,26 @@ The API documentation is powered by Swagger/OpenAPI 3.0, providing interactive d
 **Helper Functions** (`helpers/`):
 - Utility functions for creating test data
 - Random data generators
+
+## Troubleshooting
+
+### PostgreSQL Sequence Sync Issues
+
+**Symptom**: Contract creation fails with `SequelizeUniqueConstraintError: id must be unique`
+
+**Cause**: PostgreSQL auto-increment sequences can get out of sync with actual table data, especially after bulk imports or manual data manipulation.
+
+**Fix**:
+```sql
+-- Check current sequence value vs max ID
+SELECT last_value FROM "Contracts_id_seq";
+SELECT MAX(id) FROM "Contracts";
+
+-- Reset sequence to max ID
+SELECT setval('"Contracts_id_seq"', (SELECT MAX(id) FROM "Contracts"));
+
+-- For other tables, replace table name accordingly:
+-- SELECT setval('"TableName_id_seq"', (SELECT MAX(id) FROM "TableName"));
+```
+
+**Prevention**: The contract.service.ts includes type coercion for vendorId and requisitionId to handle string/number mismatches from frontend forms.

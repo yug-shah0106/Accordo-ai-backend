@@ -1389,3 +1389,408 @@ export const sendDealCreatedEmail = async (
     return { success: false, error: errorMessage };
   }
 };
+
+// ==========================================
+// PM NOTIFICATION EMAIL (Deal Status Change)
+// ==========================================
+
+/**
+ * Input data for PM notification email when deal status changes
+ */
+interface PmNotificationEmailData {
+  dealId: string;
+  dealTitle: string;
+  requisitionId: number;
+  rfqNumber: string;
+  vendorName: string;
+  vendorCompanyName?: string;
+  pmEmail: string;
+  pmName: string;
+  pmUserId: number;
+  newStatus: 'ACCEPTED' | 'WALKED_AWAY' | 'ESCALATED';
+  utility?: number;
+  vendorOffer?: {
+    price?: number | null;
+    paymentTerms?: string | null;
+  };
+  reasoning?: string[];
+}
+
+/**
+ * Generate HTML email for PM notification when deal status changes
+ */
+const generatePmNotificationEmailHTML = (
+  data: PmNotificationEmailData,
+  dashboardLink: string
+): string => {
+  const statusConfig: Record<string, { color: string; icon: string; title: string; description: string }> = {
+    ACCEPTED: {
+      color: '#059669',
+      icon: '✓',
+      title: 'Deal Accepted',
+      description: 'The negotiation has concluded successfully. The vendor\'s offer meets your acceptance criteria.',
+    },
+    WALKED_AWAY: {
+      color: '#dc2626',
+      icon: '✗',
+      title: 'Deal Walked Away',
+      description: 'The negotiation could not reach acceptable terms. The vendor\'s offer fell below your minimum thresholds.',
+    },
+    ESCALATED: {
+      color: '#f59e0b',
+      icon: '!',
+      title: 'Deal Escalated',
+      description: 'The negotiation requires management review. The offer is in the escalation zone and needs human decision.',
+    },
+  };
+
+  const config = statusConfig[data.newStatus];
+
+  const offerHTML = data.vendorOffer ? `
+    <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 15px; margin: 15px 0;">
+      <h3 style="color: #374151; margin: 0 0 10px 0; font-size: 14px; font-weight: 600;">Final Vendor Offer</h3>
+      ${data.vendorOffer.price ? `<p style="margin: 5px 0; color: #64748b;">Price: <strong style="color: #1f2937;">$${data.vendorOffer.price.toLocaleString('en-US', { minimumFractionDigits: 2 })}</strong></p>` : ''}
+      ${data.vendorOffer.paymentTerms ? `<p style="margin: 5px 0; color: #64748b;">Payment Terms: <strong style="color: #1f2937;">${data.vendorOffer.paymentTerms}</strong></p>` : ''}
+      ${data.utility !== undefined ? `<p style="margin: 5px 0; color: #64748b;">Utility Score: <strong style="color: #1f2937;">${(data.utility * 100).toFixed(1)}%</strong></p>` : ''}
+    </div>
+  ` : '';
+
+  const reasoningHTML = data.reasoning && data.reasoning.length > 0 ? `
+    <div style="background-color: #fffbeb; border: 1px solid #fcd34d; border-radius: 8px; padding: 15px; margin: 15px 0;">
+      <h3 style="color: #92400e; margin: 0 0 10px 0; font-size: 14px; font-weight: 600;">AI Decision Reasoning</h3>
+      <ul style="margin: 0; padding-left: 20px; color: #78350f;">
+        ${data.reasoning.map(r => `<li style="margin: 5px 0;">${r}</li>`).join('')}
+      </ul>
+    </div>
+  ` : '';
+
+  return `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>Negotiation ${config.title}</title>
+    </head>
+    <body style="font-family: 'Segoe UI', Arial, sans-serif; line-height: 1.6; color: #1f2937; max-width: 650px; margin: 0 auto; padding: 20px; background-color: #f3f4f6;">
+      <div style="background-color: white; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
+        <!-- Header -->
+        <div style="background-color: ${config.color}; padding: 30px; text-align: center;">
+          <div style="width: 60px; height: 60px; background-color: rgba(255,255,255,0.2); border-radius: 50%; margin: 0 auto 15px; display: flex; align-items: center; justify-content: center;">
+            <span style="color: white; font-size: 32px; font-weight: bold;">${config.icon}</span>
+          </div>
+          <h1 style="color: white; margin: 0; font-size: 24px; font-weight: 600;">${config.title}</h1>
+        </div>
+
+        <!-- Content -->
+        <div style="padding: 30px;">
+          <p style="font-size: 16px; margin-bottom: 20px;">Dear <strong>${data.pmName}</strong>,</p>
+
+          <p style="margin-bottom: 20px;">${config.description}</p>
+
+          <!-- Deal Summary Card -->
+          <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 20px; margin-bottom: 20px;">
+            <h2 style="color: #1e40af; margin: 0 0 15px 0; font-size: 18px; font-weight: 600;">Deal Details</h2>
+            <table style="width: 100%;">
+              <tr>
+                <td style="padding: 8px 0; color: #64748b; width: 140px;">Deal Title:</td>
+                <td style="padding: 8px 0; font-weight: 500;">${data.dealTitle}</td>
+              </tr>
+              <tr>
+                <td style="padding: 8px 0; color: #64748b;">RFQ Number:</td>
+                <td style="padding: 8px 0; font-weight: 500;">${data.rfqNumber}</td>
+              </tr>
+              <tr>
+                <td style="padding: 8px 0; color: #64748b;">Vendor:</td>
+                <td style="padding: 8px 0; font-weight: 500;">${data.vendorCompanyName || data.vendorName}</td>
+              </tr>
+              <tr>
+                <td style="padding: 8px 0; color: #64748b;">Status:</td>
+                <td style="padding: 8px 0;">
+                  <span style="display: inline-block; padding: 4px 12px; background-color: ${config.color}; color: white; border-radius: 4px; font-weight: 600; font-size: 12px;">${data.newStatus.replace('_', ' ')}</span>
+                </td>
+              </tr>
+            </table>
+          </div>
+
+          ${offerHTML}
+          ${reasoningHTML}
+
+          <!-- CTA Button -->
+          <div style="text-align: center; margin: 30px 0;">
+            <a href="${dashboardLink}" style="display: inline-block; background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%); color: white; padding: 16px 40px; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 16px; box-shadow: 0 4px 14px rgba(37, 99, 235, 0.4);">View Deal Details</a>
+          </div>
+
+          ${data.newStatus === 'ESCALATED' ? `
+          <div style="background-color: #fef3c7; border: 1px solid #fcd34d; border-radius: 8px; padding: 15px; margin-top: 20px; text-align: center;">
+            <p style="margin: 0; color: #92400e; font-size: 14px;">
+              <strong>Action Required:</strong> Please review this deal and make a final decision.
+            </p>
+          </div>
+          ` : ''}
+        </div>
+
+        <!-- Footer -->
+        <div style="background-color: #f8fafc; padding: 20px 30px; border-top: 1px solid #e2e8f0;">
+          <p style="color: #64748b; font-size: 12px; margin: 0; text-align: center;">
+            This is an automated notification from Accordo AI Procurement Platform.<br>
+            Deal ID: ${data.dealId}
+          </p>
+        </div>
+      </div>
+    </body>
+    </html>
+  `;
+};
+
+/**
+ * Generate plain text email for PM notification
+ */
+const generatePmNotificationEmailText = (
+  data: PmNotificationEmailData,
+  dashboardLink: string
+): string => {
+  const statusMessages: Record<string, string> = {
+    ACCEPTED: 'The negotiation has concluded successfully. The vendor\'s offer meets your acceptance criteria.',
+    WALKED_AWAY: 'The negotiation could not reach acceptable terms. The vendor\'s offer fell below your minimum thresholds.',
+    ESCALATED: 'The negotiation requires management review. The offer is in the escalation zone and needs human decision.',
+  };
+
+  const offerText = data.vendorOffer ? `
+Final Vendor Offer:
+${data.vendorOffer.price ? `- Price: $${data.vendorOffer.price.toLocaleString('en-US', { minimumFractionDigits: 2 })}` : ''}
+${data.vendorOffer.paymentTerms ? `- Payment Terms: ${data.vendorOffer.paymentTerms}` : ''}
+${data.utility !== undefined ? `- Utility Score: ${(data.utility * 100).toFixed(1)}%` : ''}
+` : '';
+
+  const reasoningText = data.reasoning && data.reasoning.length > 0 ? `
+AI Decision Reasoning:
+${data.reasoning.map(r => `- ${r}`).join('\n')}
+` : '';
+
+  return `
+NEGOTIATION STATUS UPDATE: ${data.newStatus.replace('_', ' ')}
+${'='.repeat(50)}
+
+Dear ${data.pmName},
+
+${statusMessages[data.newStatus]}
+
+DEAL DETAILS
+------------
+Deal Title: ${data.dealTitle}
+RFQ Number: ${data.rfqNumber}
+Vendor: ${data.vendorCompanyName || data.vendorName}
+Status: ${data.newStatus.replace('_', ' ')}
+
+${offerText}
+${reasoningText}
+
+VIEW DEAL
+---------
+${dashboardLink}
+
+${data.newStatus === 'ESCALATED' ? 'ACTION REQUIRED: Please review this deal and make a final decision.\n' : ''}
+---
+This is an automated notification from Accordo AI Procurement Platform.
+Deal ID: ${data.dealId}
+  `;
+};
+
+/**
+ * Send PM notification email when deal status changes to ACCEPTED, WALKED_AWAY, or ESCALATED
+ */
+export const sendPmDealStatusNotificationEmail = async (
+  data: PmNotificationEmailData
+): Promise<{ success: boolean; messageId?: string; error?: string }> => {
+  try {
+    // Build the dashboard link
+    const dashboardLink = `${env.chatbotFrontendUrl}/chatbot/requisitions/${data.requisitionId}/vendors/${data.pmUserId}/deals/${data.dealId}`;
+
+    const subjectPrefix: Record<string, string> = {
+      ACCEPTED: '[DEAL ACCEPTED]',
+      WALKED_AWAY: '[DEAL WALKED AWAY]',
+      ESCALATED: '[ACTION REQUIRED - ESCALATED]',
+    };
+
+    const mailOptions: EmailOptions = {
+      from: smtp.from || 'noreply@accordo.ai',
+      to: data.pmEmail,
+      subject: `${subjectPrefix[data.newStatus]} ${data.dealTitle} (${data.rfqNumber})`,
+      html: generatePmNotificationEmailHTML(data, dashboardLink),
+      text: generatePmNotificationEmailText(data, dashboardLink),
+    };
+
+    const info = await sendEmailWithRetry(mailOptions);
+
+    await logEmail(
+      data.pmEmail,
+      data.pmUserId,
+      mailOptions.subject,
+      'other',
+      'sent',
+      undefined,
+      data.requisitionId,
+      {
+        emailSubType: 'pm_deal_status_notification',
+        dealId: data.dealId,
+        dealTitle: data.dealTitle,
+        rfqNumber: data.rfqNumber,
+        newStatus: data.newStatus,
+        vendorName: data.vendorName,
+        utility: data.utility,
+      },
+      undefined,
+      info.messageId,
+      0
+    );
+
+    logger.info('PM deal status notification email sent successfully', {
+      dealId: data.dealId,
+      pmEmail: data.pmEmail,
+      newStatus: data.newStatus,
+      requisitionId: data.requisitionId,
+      messageId: info.messageId,
+    });
+
+    return { success: true, messageId: info.messageId };
+  } catch (error) {
+    const errorMessage = (error as Error).message;
+
+    logger.error('Failed to send PM deal status notification email', {
+      dealId: data.dealId,
+      pmEmail: data.pmEmail,
+      newStatus: data.newStatus,
+      requisitionId: data.requisitionId,
+      error: errorMessage,
+    });
+
+    await logEmail(
+      data.pmEmail,
+      data.pmUserId,
+      `Deal Status: ${data.dealTitle}`,
+      'other',
+      'failed',
+      undefined,
+      data.requisitionId,
+      {
+        emailSubType: 'pm_deal_status_notification',
+        dealId: data.dealId,
+        dealTitle: data.dealTitle,
+        newStatus: data.newStatus,
+      },
+      errorMessage,
+      undefined,
+      2
+    );
+
+    // Return error instead of throwing - notification failure shouldn't break the flow
+    return { success: false, error: errorMessage };
+  }
+};
+
+/**
+ * Send deal summary PDF via email
+ */
+export interface SendDealSummaryPDFEmailData {
+  to: string;
+  dealTitle: string;
+  vendorName: string;
+  rfqId: number;
+  pdfBuffer: Buffer;
+  filename: string;
+}
+
+export const sendDealSummaryPDFEmail = async (
+  data: SendDealSummaryPDFEmailData
+): Promise<{ success: boolean; messageId?: string; error?: string }> => {
+  const subject = `Deal Summary Report - ${data.vendorName} (RFQ-${data.rfqId})`;
+
+  const html = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+        .header { background: #0066cc; color: white; padding: 20px; text-align: center; border-radius: 8px 8px 0 0; }
+        .content { padding: 30px; background: #f9f9f9; border-radius: 0 0 8px 8px; }
+        .highlight { background: #e8f4fc; padding: 15px; border-radius: 8px; margin: 20px 0; }
+        .footer { text-align: center; margin-top: 30px; color: #666; font-size: 12px; }
+      </style>
+    </head>
+    <body>
+      <div class="container">
+        <div class="header">
+          <h1>📄 Deal Summary Report</h1>
+        </div>
+        <div class="content">
+          <p>Hello,</p>
+
+          <p>Please find attached the Deal Summary Report for:</p>
+
+          <div class="highlight">
+            <strong>Deal:</strong> ${data.dealTitle}<br>
+            <strong>Vendor:</strong> ${data.vendorName}<br>
+            <strong>RFQ ID:</strong> ${data.rfqId}
+          </div>
+
+          <p>This report includes:</p>
+          <ul>
+            <li>Deal Overview and Final Offer</li>
+            <li>Negotiation Analytics and Charts</li>
+            <li>Round-by-Round Timeline</li>
+            <li>Complete Chat Transcript</li>
+          </ul>
+
+          <p>The PDF is attached to this email.</p>
+
+          <div class="footer">
+            <p>Generated by Accordo AI<br>
+            <em>Confidential - For Internal Use Only</em></p>
+          </div>
+        </div>
+      </div>
+    </body>
+    </html>
+  `;
+
+  try {
+    const transporter = buildNodemailerTransporter();
+
+    const info = await transporter.sendMail({
+      from: `"Accordo AI" <${smtp.user}>`,
+      to: data.to,
+      subject,
+      html,
+      attachments: [
+        {
+          filename: data.filename,
+          content: data.pdfBuffer,
+          contentType: 'application/pdf',
+        },
+      ],
+    });
+
+    logger.info('Deal Summary PDF email sent successfully', {
+      to: data.to,
+      rfqId: data.rfqId,
+      vendorName: data.vendorName,
+      messageId: info.messageId,
+    });
+
+    return { success: true, messageId: info.messageId };
+  } catch (error) {
+    const errorMessage = (error as Error).message;
+
+    logger.error('Failed to send Deal Summary PDF email', {
+      to: data.to,
+      rfqId: data.rfqId,
+      vendorName: data.vendorName,
+      error: errorMessage,
+    });
+
+    return { success: false, error: errorMessage };
+  }
+};

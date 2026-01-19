@@ -54,7 +54,11 @@ export function calculateWeightedUtility(
 
   // Normalize if weights don't sum to 100
   // (This shouldn't happen if Step 4 validates properly, but handle it gracefully)
-  if (totalWeight > 0 && totalWeight !== 100) {
+  // Guard against division by zero when totalWeight is 0
+  if (totalWeight === 0) {
+    // No parameters configured or all have zero weight
+    totalUtility = 0;
+  } else if (totalWeight !== 100) {
     totalUtility = (totalUtility / totalWeight) * 100;
   }
 

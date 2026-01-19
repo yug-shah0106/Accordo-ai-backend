@@ -58,6 +58,15 @@ export function getCategoryMargin(category: string): CategoryMargin {
 // ============================================================================
 
 /**
+ * Chip for displaying offer details
+ */
+export interface OfferChip {
+  label: string;
+  value: string;
+  type: 'price' | 'terms' | 'delivery';
+}
+
+/**
  * Vendor scenario offer structure
  */
 export interface VendorScenarioOffer {
@@ -69,8 +78,79 @@ export interface VendorScenarioOffer {
     paymentTerms: string;
     deliveryDate: string;
   };
+  /** Pre-formatted chips for UI display */
+  chips: OfferChip[];
+  /** Natural language message with offer details inline */
+  message: string;
   messages: string[];
   expectedPmReaction: string;
+}
+
+/**
+ * Format price for display (localized)
+ */
+function formatPrice(price: number, locale: string = 'en-US', currency: string = 'USD'): string {
+  return new Intl.NumberFormat(locale, {
+    style: 'currency',
+    currency,
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(price);
+}
+
+/**
+ * Format date for display
+ */
+function formatDeliveryDate(dateStr: string, locale: string = 'en-US'): string {
+  const date = new Date(dateStr);
+  return new Intl.DateTimeFormat(locale, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  }).format(date);
+}
+
+/**
+ * Generate chips for a scenario offer
+ */
+function generateOfferChips(
+  price: number,
+  paymentTerms: string,
+  deliveryDate: string,
+  locale: string = 'en-US',
+  currency: string = 'USD'
+): OfferChip[] {
+  return [
+    { label: 'Price', value: formatPrice(price, locale, currency), type: 'price' },
+    { label: 'Terms', value: paymentTerms, type: 'terms' },
+    { label: 'Delivery', value: formatDeliveryDate(deliveryDate, locale), type: 'delivery' },
+  ];
+}
+
+/**
+ * Generate natural language message with offer details inline
+ */
+function generateInlineMessage(
+  price: number,
+  paymentTerms: string,
+  deliveryDate: string,
+  scenarioType: VendorScenario,
+  locale: string = 'en-US',
+  currency: string = 'USD'
+): string {
+  const priceStr = formatPrice(price, locale, currency);
+  const dateStr = formatDeliveryDate(deliveryDate, locale);
+
+  switch (scenarioType) {
+    case 'HARD':
+      return `I can offer ${priceStr}/unit with ${paymentTerms} payment terms. Delivery by ${dateStr}.`;
+    case 'MEDIUM':
+      return `We propose ${priceStr}/unit with ${paymentTerms}. Expected delivery: ${dateStr}.`;
+    case 'SOFT':
+      return `Our best offer: ${priceStr}/unit with ${paymentTerms}. We can deliver by ${dateStr}.`;
+    default:
+      return `Offer: ${priceStr}/unit, ${paymentTerms}, delivery by ${dateStr}.`;
+  }
 }
 
 /**
@@ -85,7 +165,9 @@ export function generateVendorScenarios(
   pmLastOffer: { price: number; paymentTerms: string; deliveryDate: string } | null,
   productCategory: string,
   vendorCostBase: number,
-  quantity: number = 1
+  quantity: number = 1,
+  locale: string = 'en-US',
+  currency: string = 'USD'
 ): VendorScenarioOffer[] {
   const margin = getCategoryMargin(productCategory);
   const pmPrice = pmLastOffer?.price || vendorCostBase * 1.05; // Default to cost + 5%
@@ -97,6 +179,10 @@ export function generateVendorScenarios(
   const mediumPrice = Math.round(((pmPrice + vendorCostBase * (1 + margin.target)) / 2) * 100) / 100;
   const softPrice = Math.round(Math.max(pmPrice * 1.02, vendorCostBase * (1 + margin.min)) * 100) / 100;
 
+  // Delivery dates for each scenario
+  const hardDelivery = getDateInDays(45);
+  const mediumDelivery = getDateInDays(30);
+
   return [
     {
       type: 'HARD',
@@ -105,8 +191,10 @@ export function generateVendorScenarios(
       offer: {
         price: hardPrice,
         paymentTerms: 'Net 15',
-        deliveryDate: getDateInDays(45), // Relaxed delivery
+        deliveryDate: hardDelivery,
       },
+      chips: generateOfferChips(hardPrice, 'Net 15', hardDelivery, locale, currency),
+      message: generateInlineMessage(hardPrice, 'Net 15', hardDelivery, 'HARD', locale, currency),
       messages: generateHardScenarioMessages(hardPrice, quantity, pmPrice),
       expectedPmReaction: 'COUNTER',
     },
@@ -117,8 +205,10 @@ export function generateVendorScenarios(
       offer: {
         price: mediumPrice,
         paymentTerms: 'Net 30',
-        deliveryDate: getDateInDays(30),
+        deliveryDate: mediumDelivery,
       },
+      chips: generateOfferChips(mediumPrice, 'Net 30', mediumDelivery, locale, currency),
+      message: generateInlineMessage(mediumPrice, 'Net 30', mediumDelivery, 'MEDIUM', locale, currency),
       messages: generateMediumScenarioMessages(mediumPrice, quantity, pmPrice),
       expectedPmReaction: 'COUNTER',
     },
@@ -131,6 +221,8 @@ export function generateVendorScenarios(
         paymentTerms: pmTerms,
         deliveryDate: pmDelivery,
       },
+      chips: generateOfferChips(softPrice, pmTerms, pmDelivery, locale, currency),
+      message: generateInlineMessage(softPrice, pmTerms, pmDelivery, 'SOFT', locale, currency),
       messages: generateSoftScenarioMessages(softPrice, quantity, pmPrice, pmTerms),
       expectedPmReaction: 'ACCEPT',
     },

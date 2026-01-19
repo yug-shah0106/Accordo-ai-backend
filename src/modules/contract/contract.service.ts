@@ -55,6 +55,14 @@ export const createContractService = async (
     // Remove non-model fields from contractData
     const { skipEmail: _, skipChatbot: __, ...cleanContractData } = contractData as any;
 
+    // Ensure IDs are numbers (frontend may send strings)
+    if (cleanContractData.vendorId) {
+      cleanContractData.vendorId = parseInt(String(cleanContractData.vendorId), 10);
+    }
+    if (cleanContractData.requisitionId) {
+      cleanContractData.requisitionId = parseInt(String(cleanContractData.requisitionId), 10);
+    }
+
     // Fetch vendor details
     const vendor = await models.User.findByPk(cleanContractData.vendorId);
     if (!vendor) {
@@ -127,6 +135,13 @@ export const createContractService = async (
     if (error instanceof CustomError) {
       throw error;
     }
+    // Log the actual error for debugging
+    logger.error('Contract creation failed with error:', {
+      errorName: (error as any).name,
+      errorMessage: (error as Error).message,
+      errorStack: (error as Error).stack,
+      errors: (error as any).errors?.map((e: any) => ({ message: e.message, path: e.path, value: e.value })),
+    });
     throw new CustomError((error as Error).message || String(error), 400);
   }
 };
