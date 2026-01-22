@@ -1,16 +1,16 @@
-"use strict";
-/** @type {import('sequelize-cli').Migration} */
-module.exports = {
-  async up(queryInterface, Sequelize) {
+import { QueryInterface, DataTypes } from 'sequelize';
+
+export default {
+  async up(queryInterface: QueryInterface): Promise<void> {
     await queryInterface.createTable("Requisitions", {
       id: {
         allowNull: false,
         autoIncrement: true,
         primaryKey: true,
-        type: Sequelize.INTEGER,
+        type: DataTypes.INTEGER,
       },
       projectId: {
-        type: Sequelize.INTEGER,
+        type: DataTypes.INTEGER,
         allowNull: false,
         references: {
           model: "Projects",
@@ -18,60 +18,60 @@ module.exports = {
         },
       },
       rfqId: {
-        type: Sequelize.STRING,
+        type: DataTypes.STRING,
       },
       subject: {
-        type: Sequelize.STRING,
+        type: DataTypes.STRING,
       },
       category: {
-        type: Sequelize.STRING,
+        type: DataTypes.STRING,
       },
       deliveryDate: {
-        type: Sequelize.DATE,
+        type: DataTypes.DATE,
       },
       negotiationClosureDate: {
-        type: Sequelize.DATE,
+        type: DataTypes.DATE,
       },
       typeOfCurrency: {
-        type: Sequelize.ENUM("USD", "INR", "EUR"),
+        type: DataTypes.ENUM("USD", "INR", "EUR"),
       },
       targetPrice: {
-        type: Sequelize.DOUBLE,
+        type: DataTypes.DOUBLE,
       },
       totalPrice: {
-        type: Sequelize.DOUBLE,
+        type: DataTypes.DOUBLE,
       },
       status: {
-        type: Sequelize.ENUM("Created", "Fulfilled", "Benchmarked", "InitialQuotation", "Closed", "Awarded", "Cancelled", "Expired"),
+        type: DataTypes.ENUM("Created", "Fulfilled", "Benchmarked", "InitialQuotation", "Closed", "Awarded", "Cancelled", "Expired"),
       },
       savingsInPrice: {
-        type: Sequelize.DOUBLE,
+        type: DataTypes.DOUBLE,
       },
       createdBy: {
-        type: Sequelize.INTEGER,
+        type: DataTypes.INTEGER,
       },
       fulfilledAt: {
-        type: Sequelize.DATE,
+        type: DataTypes.DATE,
       },
       fulfilledBy: {
-        type: Sequelize.INTEGER,
+        type: DataTypes.INTEGER,
       },
       createdAt: {
         allowNull: false,
-        type: Sequelize.DATE,
+        type: DataTypes.DATE,
       },
       benchmarkedAt: {
-        type: Sequelize.DATE,
+        type: DataTypes.DATE,
       },
       benchmarkedBy: {
-        type: Sequelize.INTEGER,
+        type: DataTypes.INTEGER,
       },
       benchmarkResponse: {
-        type: Sequelize.TEXT,
+        type: DataTypes.TEXT,
       }
     });
   },
-  async down(queryInterface, Sequelize) {
+  async down(queryInterface: QueryInterface): Promise<void> {
     await queryInterface.dropTable("Requisitions");
   },
 };

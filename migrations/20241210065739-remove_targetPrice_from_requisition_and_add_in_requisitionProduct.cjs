@@ -1,16 +1,16 @@
-"use strict";
+import { QueryInterface, DataTypes } from 'sequelize';
 
-/** @type {import('sequelize-cli').Migration} */
-module.exports = {
-  async up(queryInterface, Sequelize) {
+
+export default {
+  async up(queryInterface: QueryInterface): Promise<void> {
     await queryInterface.removeColumn("Requisitions", "targetPrice");
     await queryInterface.addColumn("RequisitionProducts", "targetPrice", {
-      type: Sequelize.DOUBLE,
+      type: DataTypes.DOUBLE,
       after: "productId",
     });
   },
 
-  async down(queryInterface, Sequelize) {
+  async down(queryInterface: QueryInterface): Promise<void> {
     await queryInterface.removeColumn("RequisitionProducts", "targetPrice");
   },
 };

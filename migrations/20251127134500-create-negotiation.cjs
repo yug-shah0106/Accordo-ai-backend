@@ -1,16 +1,16 @@
-'use strict';
+import { QueryInterface, DataTypes } from 'sequelize';
 
-module.exports = {
-    async up(queryInterface, Sequelize) {
+export default {
+    async up(queryInterface: QueryInterface): Promise<void> {
         await queryInterface.createTable('Negotiations', {
             id: {
                 allowNull: false,
                 primaryKey: true,
-                type: Sequelize.UUID,
-                defaultValue: Sequelize.UUIDV4
+                type: DataTypes.UUID,
+                defaultValue: DataTypes.UUIDV4
             },
             rfqId: {
-                type: Sequelize.INTEGER,
+                type: DataTypes.INTEGER,
                 allowNull: false,
                 references: {
                     model: 'Requisitions',
@@ -20,7 +20,7 @@ module.exports = {
                 onDelete: 'CASCADE'
             },
             vendorId: {
-                type: Sequelize.INTEGER,
+                type: DataTypes.INTEGER,
                 allowNull: false,
                 references: {
                     model: 'User',
@@ -30,29 +30,29 @@ module.exports = {
                 onDelete: 'CASCADE'
             },
             status: {
-                type: Sequelize.ENUM('active', 'completed', 'failed'),
+                type: DataTypes.ENUM('active', 'completed', 'failed'),
                 defaultValue: 'active'
             },
             round: {
-                type: Sequelize.INTEGER,
+                type: DataTypes.INTEGER,
                 defaultValue: 1
             },
             score: {
-                type: Sequelize.FLOAT,
+                type: DataTypes.FLOAT,
                 defaultValue: 0.0
             },
             createdAt: {
                 allowNull: false,
-                type: Sequelize.DATE
+                type: DataTypes.DATE
             },
             updatedAt: {
                 allowNull: false,
-                type: Sequelize.DATE
+                type: DataTypes.DATE
             }
         });
     },
 
-    async down(queryInterface, Sequelize) {
+    async down(queryInterface: QueryInterface): Promise<void> {
         await queryInterface.dropTable('Negotiations');
     }
 };

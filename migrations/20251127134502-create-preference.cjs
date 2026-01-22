@@ -1,47 +1,47 @@
-'use strict';
+import { QueryInterface, DataTypes } from 'sequelize';
 
-module.exports = {
-    async up(queryInterface, Sequelize) {
+export default {
+    async up(queryInterface: QueryInterface): Promise<void> {
         await queryInterface.createTable('Preferences', {
             id: {
                 allowNull: false,
                 primaryKey: true,
-                type: Sequelize.UUID,
-                defaultValue: Sequelize.UUIDV4
+                type: DataTypes.UUID,
+                defaultValue: DataTypes.UUIDV4
             },
             entityId: {
-                type: Sequelize.INTEGER,
+                type: DataTypes.INTEGER,
                 allowNull: false
                 // Can reference User (Vendor) or Company (Buyer) - polymorphic or just ID
             },
             entityType: {
-                type: Sequelize.STRING, // 'User' or 'Company'
+                type: DataTypes.STRING, // 'User' or 'Company'
                 allowNull: false
             },
             context: {
-                type: Sequelize.STRING, // 'global' or 'rfq_specific'
+                type: DataTypes.STRING, // 'global' or 'rfq_specific'
                 defaultValue: 'global'
             },
             weights: {
-                type: Sequelize.JSONB,
+                type: DataTypes.JSONB,
                 allowNull: false
             },
             constraints: {
-                type: Sequelize.JSONB,
+                type: DataTypes.JSONB,
                 allowNull: true
             },
             createdAt: {
                 allowNull: false,
-                type: Sequelize.DATE
+                type: DataTypes.DATE
             },
             updatedAt: {
                 allowNull: false,
-                type: Sequelize.DATE
+                type: DataTypes.DATE
             }
         });
     },
 
-    async down(queryInterface, Sequelize) {
+    async down(queryInterface: QueryInterface): Promise<void> {
         await queryInterface.dropTable('Preferences');
     }
 };

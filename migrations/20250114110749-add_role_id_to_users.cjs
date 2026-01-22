@@ -1,10 +1,10 @@
-"use strict";
+import { QueryInterface, DataTypes } from 'sequelize';
 
-/** @type {import('sequelize-cli').Migration} */
-module.exports = {
-  async up(queryInterface, Sequelize) {
+
+export default {
+  async up(queryInterface: QueryInterface): Promise<void> {
     await queryInterface.addColumn("User", "roleId", {
-      type: Sequelize.INTEGER,
+      type: DataTypes.INTEGER,
       after: "companyId",
       references: {
         model: "Roles",
@@ -12,13 +12,13 @@ module.exports = {
       },
     });
     await queryInterface.addColumn("User", "status", {
-      type: Sequelize.STRING,
+      type: DataTypes.STRING,
       after: "roleId",
       defaultValue: "active",
     });
   },
 
-  async down(queryInterface, Sequelize) {
+  async down(queryInterface: QueryInterface): Promise<void> {
     await queryInterface.removeColumn("User", "status");
     await queryInterface.removeColumn("User", "roleId");
   },

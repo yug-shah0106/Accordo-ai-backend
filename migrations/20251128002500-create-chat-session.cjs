@@ -1,16 +1,16 @@
-'use strict';
+import { QueryInterface, DataTypes } from 'sequelize';
 
-module.exports = {
-    async up(queryInterface, Sequelize) {
+export default {
+    async up(queryInterface: QueryInterface): Promise<void> {
         await queryInterface.createTable('ChatSessions', {
             id: {
                 allowNull: false,
                 primaryKey: true,
-                type: Sequelize.UUID,
-                defaultValue: Sequelize.UUIDV4
+                type: DataTypes.UUID,
+                defaultValue: DataTypes.UUIDV4
             },
             negotiationId: {
-                type: Sequelize.UUID,
+                type: DataTypes.UUID,
                 allowNull: true, // Can be null if chat is general
                 references: {
                     model: 'Negotiations',
@@ -20,7 +20,7 @@ module.exports = {
                 onDelete: 'SET NULL'
             },
             userId: {
-                type: Sequelize.INTEGER,
+                type: DataTypes.INTEGER,
                 allowNull: false,
                 references: {
                     model: 'User',
@@ -30,25 +30,25 @@ module.exports = {
                 onDelete: 'CASCADE'
             },
             history: {
-                type: Sequelize.JSONB,
+                type: DataTypes.JSONB,
                 defaultValue: []
             },
             context: {
-                type: Sequelize.JSONB,
+                type: DataTypes.JSONB,
                 defaultValue: {}
             },
             createdAt: {
                 allowNull: false,
-                type: Sequelize.DATE
+                type: DataTypes.DATE
             },
             updatedAt: {
                 allowNull: false,
-                type: Sequelize.DATE
+                type: DataTypes.DATE
             }
         });
     },
 
-    async down(queryInterface, Sequelize) {
+    async down(queryInterface: QueryInterface): Promise<void> {
         await queryInterface.dropTable('ChatSessions');
     }
 };

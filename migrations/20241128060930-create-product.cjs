@@ -1,50 +1,50 @@
-"use strict";
-/** @type {import('sequelize-cli').Migration} */
-module.exports = {
-  async up(queryInterface, Sequelize) {
+import { QueryInterface, DataTypes } from 'sequelize';
+
+export default {
+  async up(queryInterface: QueryInterface): Promise<void> {
     await queryInterface.createTable("Products", {
       id: {
         allowNull: false,
         autoIncrement: true,
         primaryKey: true,
-        type: Sequelize.INTEGER,
+        type: DataTypes.INTEGER,
       },
       productName: {
-        type: Sequelize.STRING,
+        type: DataTypes.STRING,
       },
       category: {
-        type: Sequelize.STRING,
+        type: DataTypes.STRING,
       },
       brandName: {
-        type: Sequelize.STRING,
+        type: DataTypes.STRING,
       },
       gstType: {
-        type: Sequelize.ENUM("GST", "Non-GST"),
+        type: DataTypes.ENUM("GST", "Non-GST"),
       },
       tds: {
-        type: Sequelize.DOUBLE,
+        type: DataTypes.DOUBLE,
       },
       type: {
-        type: Sequelize.ENUM("Goods", "Services"),
+        type: DataTypes.ENUM("Goods", "Services"),
         defaultValue: "Goods",
       },
       UOM: {
-        type: Sequelize.STRING,
+        type: DataTypes.STRING,
       },
       companyId: {
-        type: Sequelize.INTEGER,
+        type: DataTypes.INTEGER,
       },
       createdAt: {
         allowNull: false,
-        type: Sequelize.DATE,
+        type: DataTypes.DATE,
       },
       updatedAt: {
         allowNull: false,
-        type: Sequelize.DATE,
+        type: DataTypes.DATE,
       },
     });
   },
-  async down(queryInterface, Sequelize) {
+  async down(queryInterface: QueryInterface): Promise<void> {
     await queryInterface.dropTable("Products");
   },
 };

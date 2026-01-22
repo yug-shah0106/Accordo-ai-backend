@@ -1,16 +1,16 @@
-"use strict";
+import { QueryInterface, DataTypes } from 'sequelize';
 
-/** @type {import('sequelize-cli').Migration} */
+
 const tName = "Companies";
-module.exports = {
-  up(queryInterface, Sequelize) {
+export default {
+  up(queryInterface: QueryInterface) {
     return queryInterface.sequelize.transaction((t) => {
       return Promise.all([
         queryInterface.addColumn(
           tName,
           "companyLogo",
           {
-            type: Sequelize.STRING,
+            type: DataTypes.STRING,
           },
           { transaction: t }
         ),
@@ -18,7 +18,7 @@ module.exports = {
           tName,
           "apiKey",
           {
-            type: Sequelize.STRING(150),
+            type: DataTypes.STRING(150),
           },
           { transaction: t }
         ),
@@ -26,7 +26,7 @@ module.exports = {
           tName,
           "apiSecret",
           {
-            type: Sequelize.STRING(150),
+            type: DataTypes.STRING(150),
           },
           { transaction: t }
         ),
@@ -34,7 +34,7 @@ module.exports = {
           tName,
           "establishmentDate",
           {
-            type: Sequelize.DATE,
+            type: DataTypes.DATE,
           },
           { transaction: t }
         ),
@@ -42,179 +42,179 @@ module.exports = {
           tName,
           "nature",
           {
-            type: Sequelize.ENUM("Domestic", "Interational"),
+            type: DataTypes.ENUM("Domestic", "Interational"),
           },
           { transaction: t }
         ),
         queryInterface.addColumn(
           tName,
           "type",
-          { type: Sequelize.STRING(150)},
+          { type: DataTypes.STRING(150)},
           { transaction: t }
         ),
         queryInterface.addColumn(
           tName,
           "numberOfEmployees",
-          { type: Sequelize.ENUM("0-10", "10-100", "100-1000", "1000+") },
+          { type: DataTypes.ENUM("0-10", "10-100", "100-1000", "1000+") },
           { transaction: t }
         ),
         queryInterface.addColumn(
           tName,
           "annualTurnover",
-          { type: Sequelize.STRING },
+          { type: DataTypes.STRING },
           { transaction: t }
         ),
         queryInterface.addColumn(
           tName,
           "industryType",
-          { type: Sequelize.ENUM("Industry1", "Industry2") },
+          { type: DataTypes.ENUM("Industry1", "Industry2") },
           { transaction: t }
         ),
         queryInterface.addColumn(
           tName,
           "gstNumber",
-          { type: Sequelize.STRING(100) },
+          { type: DataTypes.STRING(100) },
           { transaction: t }
         ),
         queryInterface.addColumn(
           tName,
           "gstFileUrl",
-          { type: Sequelize.STRING },
+          { type: DataTypes.STRING },
           { transaction: t }
         ),
         queryInterface.addColumn(
           tName,
           "panNumber",
-          { type: Sequelize.STRING(100) },
+          { type: DataTypes.STRING(100) },
           { transaction: t }
         ),
         queryInterface.addColumn(
           tName,
           "panFileUrl",
-          { type: Sequelize.STRING },
+          { type: DataTypes.STRING },
           { transaction: t }
         ),
         queryInterface.addColumn(
           tName,
           "msmeNumber",
-          { type: Sequelize.STRING(100) },
+          { type: DataTypes.STRING(100) },
           { transaction: t }
         ),
         queryInterface.addColumn(
           tName,
           "msmeFileUrl",
-          { type: Sequelize.STRING },
+          { type: DataTypes.STRING },
           { transaction: t }
         ),
         queryInterface.addColumn(
           tName,
           "ciNumber",
-          { type: Sequelize.STRING(100) },
+          { type: DataTypes.STRING(100) },
           { transaction: t }
         ),
         queryInterface.addColumn(
           tName,
           "ciFileUrl",
-          { type: Sequelize.STRING },
+          { type: DataTypes.STRING },
           { transaction: t }
         ),
         queryInterface.addColumn(
           tName,
           "pocName",
-          { type: Sequelize.STRING(100) },
+          { type: DataTypes.STRING(100) },
           { transaction: t }
         ),
         queryInterface.addColumn(
           tName,
           "pocDesignation",
-          { type: Sequelize.STRING(100) },
+          { type: DataTypes.STRING(100) },
           { transaction: t }
         ),
         queryInterface.addColumn(
           tName,
           "pocEmail",
-          { type: Sequelize.STRING(100) },
+          { type: DataTypes.STRING(100) },
           { transaction: t }
         ),
         queryInterface.addColumn(
           tName,
           "pocPhone",
-          { type: Sequelize.STRING(20) },
+          { type: DataTypes.STRING(20) },
           { transaction: t }
         ),
         queryInterface.addColumn(
           tName,
           "pocWebsite",
-          { type: Sequelize.STRING },
+          { type: DataTypes.STRING },
           { transaction: t }
         ),
         queryInterface.addColumn(
           tName,
           "escalationName",
-          { type: Sequelize.STRING(100) },
+          { type: DataTypes.STRING(100) },
           { transaction: t }
         ),
         queryInterface.addColumn(
           tName,
           "escalationDesignation",
-          { type: Sequelize.STRING(100) },
+          { type: DataTypes.STRING(100) },
           { transaction: t }
         ),
         queryInterface.addColumn(
           tName,
           "escalationEmail",
-          { type: Sequelize.STRING(100) },
+          { type: DataTypes.STRING(100) },
           { transaction: t }
         ),
         queryInterface.addColumn(
           tName,
           "escalationPhone",
-          { type: Sequelize.STRING(20) },
+          { type: DataTypes.STRING(20) },
           { transaction: t }
         ),
         queryInterface.addColumn(
           tName,
           "typeOfCurrency",
-          { type: Sequelize.ENUM("INR", "USD", "EUR") },
+          { type: DataTypes.ENUM("INR", "USD", "EUR") },
           { transaction: t }
         ),
         queryInterface.addColumn(
           tName,
           "bankName",
-          { type: Sequelize.STRING(100) },
+          { type: DataTypes.STRING(100) },
           { transaction: t }
         ),
         queryInterface.addColumn(
           tName,
           "beneficiaryName",
-          { type: Sequelize.STRING(100) },
+          { type: DataTypes.STRING(100) },
           { transaction: t }
         ),
         queryInterface.addColumn(
           tName,
           "accountNumber",
-          { type: Sequelize.STRING(20) },
+          { type: DataTypes.STRING(20) },
           { transaction: t }
         ),
         queryInterface.addColumn(
           tName,
           "iBanNumber",
           {
-            type: Sequelize.STRING(34),
+            type: DataTypes.STRING(34),
           },
           { transaction: t }
         ),
         queryInterface.addColumn(
           tName,
           "swiftCode",
-          { type: Sequelize.STRING(11) },
+          { type: DataTypes.STRING(11) },
           { transaction: t }
         ),
         queryInterface.addColumn(
           tName,
           "bankAccountType",
           {
-            type: Sequelize.STRING(50),
+            type: DataTypes.STRING(50),
           },
           { transaction: t }
         ),
@@ -222,7 +222,7 @@ module.exports = {
           tName,
           "cancelledCheque",
           {
-            type: Sequelize.STRING,
+            type: DataTypes.STRING,
           },
           { transaction: t }
         ),
@@ -230,39 +230,39 @@ module.exports = {
           tName,
           "cancelledChequeURL",
           {
-            type: Sequelize.STRING,
+            type: DataTypes.STRING,
           },
           { transaction: t }
         ),
         queryInterface.addColumn(
           tName,
           "ifscCode",
-          { type: Sequelize.STRING(11) },
+          { type: DataTypes.STRING(11) },
           { transaction: t }
         ),
         queryInterface.addColumn(
           tName,
           "taxInPercentage",
-          { type: Sequelize.DOUBLE(5, 2) },
+          { type: DataTypes.DOUBLE(5, 2) },
           { transaction: t }
         ),
         queryInterface.addColumn(
           tName,
           "fullAddress",
-          { type: Sequelize.STRING },
+          { type: DataTypes.STRING },
           { transaction: t }
         ),
         queryInterface.addColumn(
           tName,
           "createdBy",
-          { type: Sequelize.INTEGER },
+          { type: DataTypes.INTEGER },
           { transaction: t }
         ),
       ]);
     });
   },
-  
-  down(queryInterface, Sequelize) {
+
+  down(queryInterface: QueryInterface) {
     return queryInterface.sequelize.transaction((t) => {
       return Promise.all([
         queryInterface.removeColumn(tName, "updatedAt", { transaction: t }),

@@ -1,63 +1,63 @@
-"use strict";
-/** @type {import('sequelize-cli').Migration} */
-module.exports = {
-  async up(queryInterface, Sequelize) {
+import { QueryInterface, DataTypes } from 'sequelize';
+
+export default {
+  async up(queryInterface: QueryInterface): Promise<void> {
     await queryInterface.createTable("Pos", {
       id: {
         allowNull: false,
         autoIncrement: true,
         primaryKey: true,
-        type: Sequelize.INTEGER,
+        type: DataTypes.INTEGER,
       },
       contractId: {
-        type: Sequelize.INTEGER,
+        type: DataTypes.INTEGER,
       },
       requisitionId: {
-        type: Sequelize.INTEGER,
+        type: DataTypes.INTEGER,
       },
       companyId: {
-        type: Sequelize.INTEGER,
+        type: DataTypes.INTEGER,
       },
       vendorId: {
-        type: Sequelize.INTEGER,
+        type: DataTypes.INTEGER,
       },
       lineItems: {
-        type: Sequelize.STRING,
+        type: DataTypes.STRING,
       },
       subTotal: {
-        type: Sequelize.DOUBLE,
+        type: DataTypes.DOUBLE,
       },
       taxTotal: {
-        type: Sequelize.DOUBLE,
+        type: DataTypes.DOUBLE,
       },
       total: {
-        type: Sequelize.DOUBLE,
+        type: DataTypes.DOUBLE,
       },
       status: {
-        type: Sequelize.ENUM("Created", "Cancelled"),
+        type: DataTypes.ENUM("Created", "Cancelled"),
       },
       poNumber: {
-        type: Sequelize.STRING,
+        type: DataTypes.STRING,
       },
       poUrl: {
-        type: Sequelize.STRING,
+        type: DataTypes.STRING,
       },
       deliveryDate: {
-        type: Sequelize.DATE,
+        type: DataTypes.DATE,
       },
       paymentTerms: {
-        type: Sequelize.STRING,
+        type: DataTypes.STRING,
       },
       addedBy: {
-        type: Sequelize.INTEGER,
+        type: DataTypes.INTEGER,
       },
       createdAt: {
         allowNull: false,
-        type: Sequelize.DATE,
+        type: DataTypes.DATE,
       },
     });
   },
-  async down(queryInterface, Sequelize) {
+  async down(queryInterface: QueryInterface): Promise<void> {
     await queryInterface.dropTable("Pos");
   },
 };

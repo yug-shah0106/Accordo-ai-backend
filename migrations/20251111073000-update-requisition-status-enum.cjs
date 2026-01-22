@@ -1,8 +1,7 @@
-"use strict";
+import { QueryInterface, DataTypes } from 'sequelize';
 
-/** @type {import('sequelize-cli').Migration} */
-module.exports = {
-  async up(queryInterface, Sequelize) {
+export default {
+  async up(queryInterface: QueryInterface): Promise<void> {
     const addValue = async (value) => {
       await queryInterface.sequelize.query(`DO $$
       BEGIN
@@ -23,7 +22,7 @@ module.exports = {
     await addValue("NegotiationStarted");
   },
 
-  async down(queryInterface, Sequelize) {
+  async down(queryInterface: QueryInterface): Promise<void> {
     // Postgres does not support removing enum values easily; no-op on downgrade.
   },
 };

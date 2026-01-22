@@ -1,29 +1,29 @@
-"use strict";
-/** @type {import('sequelize-cli').Migration} */
-module.exports = {
-  async up(queryInterface, Sequelize) {
+import { QueryInterface, DataTypes } from 'sequelize';
+
+export default {
+  async up(queryInterface: QueryInterface): Promise<void> {
     await queryInterface.createTable("Contracts", {
       id: {
         allowNull: false,
         autoIncrement: true,
         primaryKey: true,
-        type: Sequelize.INTEGER,
+        type: DataTypes.INTEGER,
       },
       companyId: {
-        type: Sequelize.INTEGER,
+        type: DataTypes.INTEGER,
       },
       requisitionId: {
-        type: Sequelize.INTEGER,
+        type: DataTypes.INTEGER,
       },
       vendorId: {
-        type: Sequelize.INTEGER,
+        type: DataTypes.INTEGER,
       },
       benchmarkRating: {
-        type: Sequelize.DOUBLE(5, 2),
+        type: DataTypes.DOUBLE(5, 2),
         allowNull: true,
       },
       status: {
-        type: Sequelize.ENUM(
+        type: DataTypes.ENUM(
           "Created",
           "Opened",
           "Completed",
@@ -36,42 +36,42 @@ module.exports = {
         defaultValue: "Created",
       },
       uniqueToken: {
-        type: Sequelize.STRING,
+        type: DataTypes.STRING,
       },
       contractDetails: {
-        type: Sequelize.STRING,
+        type: DataTypes.STRING,
       },
       openedAt: {
-        type: Sequelize.DATE,
+        type: DataTypes.DATE,
       },
       completedAt: {
-        type: Sequelize.DATE,
+        type: DataTypes.DATE,
       },
       verifiedAt: {
-        type: Sequelize.DATE,
+        type: DataTypes.DATE,
       },
       acceptedAt: {
-        type: Sequelize.DATE,
+        type: DataTypes.DATE,
       },
       rejectedAt: {
-        type: Sequelize.DATE,
+        type: DataTypes.DATE,
       },
       createdBy: {
-        type: Sequelize.INTEGER,
+        type: DataTypes.INTEGER,
       },
       updatedBy: {
-        type: Sequelize.INTEGER,
+        type: DataTypes.INTEGER,
       },
       createdAt: {
         allowNull: false,
-        type: Sequelize.DATE,
+        type: DataTypes.DATE,
       },
       quotedAt: {
-        type: Sequelize.DATE,
+        type: DataTypes.DATE,
       },
     });
   },
-  async down(queryInterface, Sequelize) {
+  async down(queryInterface: QueryInterface): Promise<void> {
     await queryInterface.dropTable("Contracts");
   },
 };
