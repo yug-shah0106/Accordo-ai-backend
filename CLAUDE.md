@@ -105,6 +105,8 @@ All routes are prefixed with `/api`. Main routes:
 - `/api/requisition` - Purchase requisitions
 - `/api/contract`, `/api/po` - Contracts and purchase orders
 - `/api/chatbot` - **Negotiation Chatbot** (deal management, message processing, decision engine)
+- `/api/bid-analysis` - **Bid Analysis** (vendor bid comparison, selection, audit trail)
+- `/api/bid-comparison` - Bid comparison and PDF generation
 - `/api/vendor`, `/api/company`, `/api/customer` - Entity management
 - `/api/chat` - Chat sessions with LLM integration
 - `/api/benchmark` - Market benchmarking
@@ -391,6 +393,53 @@ The Negotiation Chatbot is a utility-based AI decision engine for procurement ne
   - `vendorAgent.ts` - Vendor negotiation agent
   - `vendorPolicy.ts` - Vendor utility calculation and policies
   - `vendorSimulator.service.ts` - Simulated vendor responses
+- `engine/` - Additional engine components (January 2026):
+  - `concernExtractor.ts` - Extract vendor concerns from messages
+  - `deliveryUtility.ts` - Delivery date utility calculations
+  - `responseGenerator.ts` - Generate contextual responses
+  - `toneDetector.ts` - Detect message tone and sentiment
+
+### Vendor Perspective Pricing (January 2026)
+
+All vendor scenarios now use **vendor perspective** pricing - vendors want HIGHER prices (profit maximization).
+
+**Key Concept**: When generating vendor offers, the system uses PM's price configuration from the wizard:
+- `targetUnitPrice` = PM's ideal price (what PM wants to pay)
+- `maxAcceptablePrice` = PM's ceiling (walkaway above this)
+
+**Vendor Scenario Pricing** (`vendor/vendorPolicy.ts`):
+
+| Scenario | Price Calculation | Vendor Strategy | Expected PM Reaction |
+|----------|-------------------|-----------------|----------------------|
+| **HARD** | 17.5% above PM's max | Maximum profit, aggressive | WALK_AWAY |
+| **MEDIUM** | 75% of range from target to max | Balanced, competitive | COUNTER |
+| **SOFT** | 25% of range from target to max | Quick close, near target | ACCEPT |
+| **WALK_AWAY** | At PM's max, no concessions | Take it or leave it | WALK_AWAY |
+
+**Example** (PM Target=$90, PM Max=$100):
+- **HARD**: $117.50 (17.5% above max) - risks rejection
+- **MEDIUM**: $97.50 (near PM's max) - balanced approach
+- **SOFT**: $92.50 (near PM's target) - quick close
+
+**Policy Configuration** (`getScenarioPolicy`):
+
+| Scenario | Start Price | Min Price (Floor) | Concession Step | Max Rounds |
+|----------|-------------|-------------------|-----------------|------------|
+| HARD | 115% of max | 100% of max | 1.5% | 8 |
+| MEDIUM | 110% of max | 95% of max | 2% | 7 |
+| SOFT | 105% of max | 90% of max | 2.5% | 6 |
+| WALK_AWAY | 110% of max | 100% of max | 0% | 3 |
+
+**Payment Terms** (vendor prefers shorter = faster cash flow):
+- HARD: Net 15 (shortest)
+- MEDIUM: Net 45 (balanced)
+- SOFT: Matches PM's terms (flexible)
+
+**Key Functions**:
+- `generateVendorScenarios()` - Generate vendor offer chips for UI
+- `getScenarioPolicy()` - Get policy for a scenario with vendor perspective
+- `calculateNextVendorPrice()` - Calculate next vendor price based on policy
+- `generateAiPmResponse()` - Generate AI-PM response to vendor offers
 
 ### API Routes (`/api/chatbot`)
 
@@ -944,3 +993,112 @@ SELECT setval('"Contracts_id_seq"', (SELECT MAX(id) FROM "Contracts"));
 ```
 
 **Prevention**: The contract.service.ts includes type coercion for vendorId and requisitionId to handle string/number mismatches from frontend forms.
+
+## Bid Analysis Module (January 2026)
+
+### Overview
+
+The Bid Analysis module provides a comprehensive interface for procurement managers to analyze vendor bids, compare offers, and select winning vendors. It extends the Bid Comparison module with enhanced UI features and audit logging.
+
+### Architecture (`src/modules/bidAnalysis/`)
+
+**Key Files**:
+- `bidAnalysis.service.ts` - Core business logic (26KB)
+  - `getRequisitionsForBidAnalysis()` - List requisitions with bid summaries
+  - `getRequisitionBidDetail()` - Get detailed bid comparison for a requisition
+  - `getActionHistory()` - Get action audit trail
+  - `rejectBid()` - Reject a vendor bid
+  - `restoreBid()` - Restore a rejected bid
+  - `exportPdfAction()` - Log PDF export action
+- `bidAnalysis.controller.ts` - Express route handlers (25KB)
+- `bidAnalysis.routes.ts` - API route definitions
+- `bidAnalysis.types.ts` - TypeScript interfaces
+- `bidAnalysis.validator.ts` - Request validation schemas
+
+### API Routes (`/api/bid-analysis`)
+
+```
+GET    /requisitions                           # List requisitions with bid summaries
+GET    /requisitions/:requisitionId            # Get detailed bid comparison
+GET    /requisitions/:requisitionId/history    # Get action audit trail
+GET    /requisitions/:requisitionId/pdf        # Download PDF comparison report
+POST   /requisitions/:requisitionId/select/:bidId   # Select winning vendor
+POST   /requisitions/:requisitionId/reject/:bidId   # Reject a bid
+POST   /requisitions/:requisitionId/restore/:bidId  # Restore a rejected bid
+POST   /requisitions/:requisitionId/export          # Log PDF export action
+```
+
+### Data Types
+
+**RequisitionWithBidSummary**:
+```typescript
+interface RequisitionWithBidSummary {
+  id: number;
+  rfqId: string;
+  subject: string;
+  status: string;
+  negotiationClosureDate: Date | null;
+  bidsCount: number;
+  completedBidsCount: number;
+  pendingBidsCount: number;
+  excludedBidsCount: number;
+  lowestPrice: number | null;
+  highestPrice: number | null;
+  averagePrice: number | null;
+  isReadyForAnalysis: boolean;
+  hasAwardedVendor: boolean;
+  awardedVendorName: string | null;
+}
+```
+
+**TopBidInfo**:
+```typescript
+interface TopBidInfo {
+  bidId: string;
+  vendorId: number;
+  vendorName: string;
+  finalPrice: number;
+  utilityScore: number;
+  dealStatus: DealStatus;
+  bidStatus: BidStatus;
+  rank: number;
+}
+```
+
+### Database Models
+
+**BidActionHistory** (`bid_action_histories` table):
+- `id` (UUID) - Primary key
+- `requisitionId` - Foreign key to requisition
+- `bidId` - Foreign key to bid/deal (nullable)
+- `dealId` - Foreign key to ChatbotDeal (nullable)
+- `userId` - User who performed action
+- `actionType` - ENUM: VIEWED | EXPORTED | REJECTED | RESTORED | SELECTED | COMPARED
+- `details` - JSONB with action-specific details
+- `createdAt` - Timestamp
+
+**Action Types**:
+| Type | Description |
+|------|-------------|
+| VIEWED | User viewed bid details |
+| EXPORTED | User exported PDF report |
+| REJECTED | User rejected a bid |
+| RESTORED | User restored a rejected bid |
+| SELECTED | User selected winning vendor |
+| COMPARED | User ran comparison analysis |
+
+### Integration with Bid Comparison
+
+The Bid Analysis module builds on top of the existing Bid Comparison module:
+- Uses `selectVendor()` from bidComparison.service for vendor selection
+- Leverages VendorBid and VendorSelection models
+- Extends with action history and enhanced filtering
+
+### Status Filters
+
+| Filter | Description |
+|--------|-------------|
+| `all` | All requisitions |
+| `ready` | Ready for analysis (deadline passed or all bids completed) |
+| `awaiting` | Waiting for bids to complete |
+| `awarded` | Already has selected vendor |

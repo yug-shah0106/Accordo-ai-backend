@@ -26,6 +26,7 @@ export class ChatbotMessage extends Model<
   declare utilityScore: number | null;
   declare counterOffer: object | null;
   declare explainabilityJson: object | null;
+  declare round: number | null;  // Which negotiation round this message belongs to
   declare createdAt: CreationOptional<Date>;
 
   // Associations
@@ -90,6 +91,11 @@ export function initChatbotMessageModel(sequelize: Sequelize): typeof ChatbotMes
         type: DataTypes.JSONB,
         allowNull: true,
         field: 'explainability_json',
+      },
+      round: {
+        type: DataTypes.INTEGER,
+        allowNull: true,
+        field: 'round',
       },
       createdAt: {
         type: DataTypes.DATE,

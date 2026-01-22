@@ -55,11 +55,21 @@ export function calculateWeightedUtility(
   // Normalize if weights don't sum to 100
   // (This shouldn't happen if Step 4 validates properly, but handle it gracefully)
   // Guard against division by zero when totalWeight is 0
+  //
+  // CRITICAL FIX (Jan 2026): The contribution is already calculated as:
+  //   contribution = utility * (weight / 100)
+  // So totalUtility is already in 0-1 scale when weights sum to 100.
+  // When weights don't sum to 100, we need to normalize by scaling proportionally.
+  // The correct formula is: totalUtility * (100 / totalWeight)
+  // This ensures the utility is scaled as if weights summed to 100.
   if (totalWeight === 0) {
     // No parameters configured or all have zero weight
     totalUtility = 0;
   } else if (totalWeight !== 100) {
-    totalUtility = (totalUtility / totalWeight) * 100;
+    // Scale up the utility proportionally
+    // e.g., if totalWeight=50 and totalUtility=0.4, result = 0.4 * (100/50) = 0.8
+    // This is correct because we're treating the 50% of weights as the full picture
+    totalUtility = totalUtility * (100 / totalWeight);
   }
 
   // Clamp total utility to [0, 1]

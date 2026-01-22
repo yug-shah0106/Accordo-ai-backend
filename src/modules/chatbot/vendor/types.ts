@@ -81,6 +81,21 @@ export interface GenerateVendorReplyInput {
    * Custom vendor policy (overrides scenario defaults)
    */
   customPolicy?: Partial<VendorPolicy>;
+
+  /**
+   * PM's price configuration from wizard (required for correct vendor pricing)
+   * Vendor prices should be ABOVE PM's target price
+   */
+  pmPriceConfig?: {
+    /**
+     * PM's target unit price (what PM wants to pay - lowest)
+     */
+    targetUnitPrice: number;
+    /**
+     * PM's maximum acceptable price (ceiling - vendor should start above this for HARD)
+     */
+    maxAcceptablePrice: number;
+  };
 }
 
 /**

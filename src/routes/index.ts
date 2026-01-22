@@ -18,6 +18,7 @@ import chatRoutes from '../modules/chat/chat.routes.js';
 import chatbotRoutes from '../modules/chatbot/chatbot.routes.js';
 import vectorRoutes from '../modules/vector/vector.routes.js';
 import bidComparisonRoutes from '../modules/bidComparison/bidComparison.routes.js';
+import bidAnalysisRoutes from '../modules/bidAnalysis/bidAnalysis.routes.js';
 import healthRoutes from '../modules/health/health.routes.js';
 
 const router = Router();
@@ -44,5 +45,6 @@ router.use('/chat', chatRoutes);
 router.use('/chatbot', chatbotRoutes);
 router.use('/vector', vectorRoutes);
 router.use('/bid-comparison', bidComparisonRoutes);
+router.use('/bid-analysis', bidAnalysisRoutes);
 
 export default router;

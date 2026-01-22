@@ -1,4 +1,4 @@
-import { Decision, Offer } from './types.js';
+import { Decision, Offer, extractPaymentDays, formatPaymentTerms } from './types.js';
 import { totalUtility, priceUtility, termsUtility, NegotiationConfig } from './utility.js';
 
 /**
@@ -13,22 +13,103 @@ import { totalUtility, priceUtility, termsUtility, NegotiationConfig } from './u
  * Default thresholds: accept=0.70, escalate=0.50, walkaway=0.30
  */
 
+/**
+ * Get delivery date and days for counter-offer
+ * Uses vendor's delivery if provided, otherwise falls back to config or 30-day default
+ */
+function getDeliveryForCounter(
+  vendorOffer: Offer,
+  config: NegotiationConfig
+): { delivery_date: string; delivery_days: number } {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  // Priority 1: Use vendor's delivery if provided
+  if (vendorOffer.delivery_date) {
+    const deliveryDate = new Date(vendorOffer.delivery_date);
+    const days = Math.ceil((deliveryDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+    return {
+      delivery_date: vendorOffer.delivery_date,
+      delivery_days: Math.max(1, days),
+    };
+  }
+
+  // Priority 2: Use vendor's delivery_days if provided
+  if (vendorOffer.delivery_days && vendorOffer.delivery_days > 0) {
+    const deliveryDate = new Date(today);
+    deliveryDate.setDate(deliveryDate.getDate() + vendorOffer.delivery_days);
+    return {
+      delivery_date: deliveryDate.toISOString().split('T')[0],
+      delivery_days: vendorOffer.delivery_days,
+    };
+  }
+
+  // Priority 3: Use config delivery if available
+  // Note: config doesn't currently have delivery, but we'll check anyway for future compatibility
+  const configDelivery = (config as unknown as { delivery?: { requiredDate?: string; preferredDate?: string } }).delivery;
+  if (configDelivery?.preferredDate || configDelivery?.requiredDate) {
+    const dateStr = configDelivery.preferredDate || configDelivery.requiredDate!;
+    const deliveryDate = new Date(dateStr);
+    const days = Math.ceil((deliveryDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+    return {
+      delivery_date: dateStr,
+      delivery_days: Math.max(1, days),
+    };
+  }
+
+  // Priority 4: Default to 30 days
+  const defaultDate = new Date(today);
+  defaultDate.setDate(defaultDate.getDate() + 30);
+  return {
+    delivery_date: defaultDate.toISOString().split('T')[0],
+    delivery_days: 30,
+  };
+}
+
+/**
+ * Get the next better payment terms for buyer
+ * UPDATED January 2026: Now supports any "Net X" format
+ *
+ * Strategy: If current terms are standard (30/60/90), move to next option
+ * If non-standard, move toward the nearest better standard term
+ * Better = longer payment time = better for buyer
+ */
 function nextBetterTerms(
   config: NegotiationConfig,
   t: Offer['payment_terms']
-) {
+): string {
   const opts = config.parameters.payment_terms.options; // ["Net 30","Net 60","Net 90"]
-  const idx = opts.indexOf(t!);
-  if (idx < 0) return opts[0];
-  return opts[Math.min(idx + 1, opts.length - 1)] as
-    | 'Net 30'
-    | 'Net 60'
-    | 'Net 90';
+
+  // If null or undefined, return first option
+  if (!t) return opts[0];
+
+  // Check if it's a standard term
+  const idx = opts.indexOf(t as 'Net 30' | 'Net 60' | 'Net 90');
+  if (idx >= 0) {
+    // Standard term - move to next option (longer is better for buyer)
+    return opts[Math.min(idx + 1, opts.length - 1)];
+  }
+
+  // Non-standard term - extract days and find nearest better standard
+  const days = extractPaymentDays(t);
+  if (days === null) return opts[0];
+
+  // Find the next standard term with more days (better for buyer)
+  if (days < 30) return 'Net 30';
+  if (days < 60) return 'Net 60';
+  if (days < 90) return 'Net 90';
+
+  // Already better than all standard options, keep the same
+  return t;
 }
 
-function bestTerms(config: NegotiationConfig): 'Net 30' | 'Net 60' | 'Net 90' {
+/**
+ * Get the best payment terms for buyer from config
+ * Typically Net 90 (longest payment time)
+ */
+function bestTerms(config: NegotiationConfig): string {
   const opts = config.parameters.payment_terms.options;
-  return opts[opts.length - 1] as 'Net 30' | 'Net 60' | 'Net 90';
+  return opts[opts.length - 1];
 }
 
 export function decideNextMove(
@@ -110,9 +191,12 @@ export function decideNextMove(
       anchor + (round - 1) * concession_step
     );
     const strongPrice = Math.min(vendorOffer.unit_price, buyerPosition);
+    const delivery = getDeliveryForCounter(vendorOffer, config);
     const counter: Offer = {
       unit_price: strongPrice,
       payment_terms: bestTermsOption,
+      delivery_date: delivery.delivery_date,
+      delivery_days: delivery.delivery_days,
     };
 
     return {
@@ -129,6 +213,7 @@ export function decideNextMove(
   // Counter strategy: Pactum-like - solve for minimum terms needed to hit accept threshold
   let counter: Offer;
   const bestTermsOption = bestTerms(config);
+  const delivery = getDeliveryForCounter(vendorOffer, config);
 
   if (vendorOffer.payment_terms !== bestTermsOption) {
     // Strategy: Compute required terms utility to hit accept threshold at vendor price
@@ -143,25 +228,28 @@ export function decideNextMove(
       (acceptThreshold - priceContribution) / wT;
 
     // Find cheapest terms option that meets the requirement
+    // UPDATED January 2026: Now supports any "Net X" format
     const opts = config.parameters.payment_terms.options;
     const utils = config.parameters.payment_terms.utility;
 
-    let chosenTerms: 'Net 30' | 'Net 60' | 'Net 90' = 'Net 90';
+    let chosenTerms: string = opts[opts.length - 1]; // Default to best (longest) terms
     for (const opt of opts) {
       if (utils[opt] >= requiredTermsUtil) {
-        chosenTerms = opt as 'Net 30' | 'Net 60' | 'Net 90';
+        chosenTerms = opt;
         break;
       }
     }
 
-    // If we can't meet threshold with any terms, just improve one step
-    if (utils[chosenTerms] < requiredTermsUtil) {
+    // If we can't meet threshold with any standard terms, improve one step
+    if (utils[chosenTerms as keyof typeof utils] < requiredTermsUtil) {
       chosenTerms = nextBetterTerms(config, vendorOffer.payment_terms);
     }
 
     counter = {
       unit_price: vendorOffer.unit_price,
       payment_terms: chosenTerms,
+      delivery_date: delivery.delivery_date,
+      delivery_days: delivery.delivery_days,
     };
     reasons.push(
       `Trade-off: keep price, request ${chosenTerms} to reach target utility.`
@@ -186,7 +274,12 @@ export function decideNextMove(
     const clamped = Math.min(desiredPrice, max_acceptable);
 
     const bestTermsOption = bestTerms(config);
-    counter = { unit_price: clamped, payment_terms: bestTermsOption };
+    counter = {
+      unit_price: clamped,
+      payment_terms: bestTermsOption,
+      delivery_date: delivery.delivery_date,
+      delivery_days: delivery.delivery_days,
+    };
     reasons.push(
       'Best terms already; move price slowly toward target (never above vendor offer).'
     );

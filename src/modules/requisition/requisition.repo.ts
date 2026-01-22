@@ -460,6 +460,7 @@ const repo = {
       }
       acc[addr.companyId].push({
         id: addr.id,
+        companyId: addr.companyId,
         label: addr.label,
         address: addr.address,
         city: addr.city,

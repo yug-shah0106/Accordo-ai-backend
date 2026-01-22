@@ -8,9 +8,15 @@
  * 1. Check in-memory cache first (instant)
  * 2. Generate fallback instantly if miss
  * 3. Background LLM generation updates cache for next request
+ *
+ * Emphasis Filtering (January 2026):
+ * - Cache keys now include emphasis filter for emphasis-specific results
+ * - Supports multi-emphasis combinations (e.g., "price,delivery")
+ * - No-emphasis cache stores full suggestions for client-side filtering
  */
 
 import logger from '../../config/logger.js';
+import type { ScenarioSuggestions, SuggestionDeliveryConfig, SuggestionEmphasis } from './engine/types.js';
 
 // Cache configuration
 const CACHE_TTL_MS = 300_000; // 5 minutes in milliseconds
@@ -18,35 +24,43 @@ const MEMORY_CACHE_MAX_SIZE = 100; // Max deals to cache in memory
 
 // In-memory cache for fastest access
 interface CacheEntry {
-  suggestions: Record<string, string[]>;
+  suggestions: ScenarioSuggestions;
   timestamp: number;
   source: 'llm' | 'fallback';
+  deliveryConfig?: SuggestionDeliveryConfig;
+  emphases?: SuggestionEmphasis[]; // Which emphases were requested
 }
 
 const memoryCache = new Map<string, CacheEntry>();
 
 /**
  * Generate cache key for a deal's suggestions
+ * Now includes emphasis filter for emphasis-specific caching
  */
-function getCacheKey(dealId: string, round: number): string {
-  return `suggestions:${dealId}:${round}`;
+function getCacheKey(dealId: string, round: number, emphases?: SuggestionEmphasis[]): string {
+  const emphasisSuffix = emphases && emphases.length > 0
+    ? `:${emphases.sort().join(',')}`
+    : '';
+  return `suggestions:${dealId}:${round}${emphasisSuffix}`;
 }
 
 /**
  * Get suggestions from cache
  *
+ * @param emphases - Optional emphasis filter for cached suggestions
  * @returns Cached suggestions or null if not found
  */
 export async function getCachedSuggestions(
   dealId: string,
-  round: number
-): Promise<{ suggestions: Record<string, string[]>; source: 'llm' | 'fallback' } | null> {
-  const key = getCacheKey(dealId, round);
+  round: number,
+  emphases?: SuggestionEmphasis[]
+): Promise<{ suggestions: ScenarioSuggestions; source: 'llm' | 'fallback'; deliveryConfig?: SuggestionDeliveryConfig; emphases?: SuggestionEmphasis[] } | null> {
+  const key = getCacheKey(dealId, round, emphases);
 
   const entry = memoryCache.get(key);
   if (entry && Date.now() - entry.timestamp < CACHE_TTL_MS) {
-    logger.debug('[SuggestionCache] Cache hit', { dealId, round, source: entry.source });
-    return { suggestions: entry.suggestions, source: entry.source };
+    logger.debug('[SuggestionCache] Cache hit', { dealId, round, source: entry.source, emphases });
+    return { suggestions: entry.suggestions, source: entry.source, deliveryConfig: entry.deliveryConfig, emphases: entry.emphases };
   }
 
   // Expired or not found
@@ -54,24 +68,30 @@ export async function getCachedSuggestions(
     memoryCache.delete(key);
   }
 
-  logger.debug('[SuggestionCache] Cache miss', { dealId, round });
+  logger.debug('[SuggestionCache] Cache miss', { dealId, round, emphases });
   return null;
 }
 
 /**
  * Store suggestions in cache
+ *
+ * @param emphases - Optional emphasis filter that was used to generate these suggestions
  */
 export async function cacheSuggestions(
   dealId: string,
   round: number,
-  suggestions: Record<string, string[]>,
-  source: 'llm' | 'fallback'
+  suggestions: ScenarioSuggestions,
+  source: 'llm' | 'fallback',
+  deliveryConfig?: SuggestionDeliveryConfig,
+  emphases?: SuggestionEmphasis[]
 ): Promise<void> {
-  const key = getCacheKey(dealId, round);
+  const key = getCacheKey(dealId, round, emphases);
   const entry: CacheEntry = {
     suggestions,
     timestamp: Date.now(),
     source,
+    deliveryConfig,
+    emphases,
   };
 
   memoryCache.set(key, entry);
@@ -82,7 +102,38 @@ export async function cacheSuggestions(
     if (oldestKey) memoryCache.delete(oldestKey);
   }
 
-  logger.debug('[SuggestionCache] Cached suggestions', { dealId, round, source });
+  logger.debug('[SuggestionCache] Cached suggestions', { dealId, round, source, emphases });
+}
+
+/**
+ * Filter suggestions by emphasis
+ * Used for hybrid filtering: immediately filter cached suggestions on client
+ *
+ * @param suggestions - Full suggestions object
+ * @param emphases - Emphases to filter by (if empty, returns all)
+ * @returns Filtered suggestions with only matching emphases
+ */
+export function filterSuggestionsByEmphasis(
+  suggestions: ScenarioSuggestions,
+  emphases: SuggestionEmphasis[]
+): ScenarioSuggestions {
+  if (!emphases || emphases.length === 0) {
+    return suggestions; // No filter, return all
+  }
+
+  const filterScenario = (scenarioSuggestions: ScenarioSuggestions[keyof ScenarioSuggestions]) => {
+    // Filter to suggestions that match any of the selected emphases
+    const filtered = scenarioSuggestions.filter(s => emphases.includes(s.emphasis));
+    // If nothing matches, return original (fallback)
+    return filtered.length > 0 ? filtered : scenarioSuggestions;
+  };
+
+  return {
+    HARD: filterScenario(suggestions.HARD),
+    MEDIUM: filterScenario(suggestions.MEDIUM),
+    SOFT: filterScenario(suggestions.SOFT),
+    WALK_AWAY: filterScenario(suggestions.WALK_AWAY),
+  };
 }
 
 /**
@@ -111,7 +162,7 @@ export async function invalidateSuggestions(dealId: string): Promise<void> {
 export function precomputeSuggestionsBackground(
   dealId: string,
   userId: number,
-  generateFn: (dealId: string, userId: number) => Promise<Record<string, string[]>>
+  generateFn: (dealId: string, userId: number) => Promise<ScenarioSuggestions>
 ): void {
   // Fire-and-forget background generation
   setImmediate(async () => {

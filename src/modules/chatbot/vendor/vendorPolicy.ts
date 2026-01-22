@@ -154,40 +154,70 @@ function generateInlineMessage(
 }
 
 /**
- * Generate vendor scenarios based on PM's last offer and vendor profit goals
+ * Generate vendor scenarios based on PM's price range configuration
  *
- * This generates scenario chips from the VENDOR's perspective:
- * - HARD: Maximize vendor profit (higher price, favorable terms)
- * - MEDIUM: Balanced approach (moderate profit)
- * - SOFT: Accept closer to PM's terms (minimal profit)
+ * UPDATED January 2026: Vendor scenarios now generate prices based on PM's
+ * target and max acceptable prices from the wizard configuration.
+ *
+ * From PM's perspective:
+ * - target = lowest price PM wants to pay (ideal)
+ * - max_acceptable = ceiling PM will pay (walkaway above this)
+ *
+ * From VENDOR's perspective (this function):
+ * - HARD: Aggressive vendor position (10-25% above PM's max) - risks rejection
+ *         Example: Target=$90, Max=$100 -> HARD=$110-$125
+ * - MEDIUM: Competitive offer (near PM's max) - balanced approach
+ *         Example: Target=$90, Max=$100 -> MEDIUM=$95-$100
+ * - SOFT: Quick close (near PM's target) - prioritize closing
+ *         Example: Target=$90, Max=$100 -> SOFT=$90-$95
+ *
+ * @param pmLastOffer - PM's last counter-offer (if any)
+ * @param productCategory - Product category for context
+ * @param pmTargetPrice - PM's target unit price (what PM wants to pay)
+ * @param pmMaxPrice - PM's maximum acceptable price (PM's ceiling)
+ * @param quantity - Order quantity
+ * @param locale - Locale for formatting
+ * @param currency - Currency for formatting
  */
 export function generateVendorScenarios(
   pmLastOffer: { price: number; paymentTerms: string; deliveryDate: string } | null,
   productCategory: string,
-  vendorCostBase: number,
+  pmTargetPrice: number,
+  pmMaxPrice: number,
   quantity: number = 1,
   locale: string = 'en-US',
   currency: string = 'USD'
 ): VendorScenarioOffer[] {
-  const margin = getCategoryMargin(productCategory);
-  const pmPrice = pmLastOffer?.price || vendorCostBase * 1.05; // Default to cost + 5%
   const pmTerms = pmLastOffer?.paymentTerms || 'Net 30';
   const pmDelivery = pmLastOffer?.deliveryDate || getDateInDays(30);
 
-  // Calculate vendor prices based on margin targets
-  const hardPrice = Math.round(vendorCostBase * (1 + margin.max) * 100) / 100;
-  const mediumPrice = Math.round(((pmPrice + vendorCostBase * (1 + margin.target)) / 2) * 100) / 100;
-  const softPrice = Math.round(Math.max(pmPrice * 1.02, vendorCostBase * (1 + margin.min)) * 100) / 100;
+  // Calculate the range between target and max
+  const priceRange = pmMaxPrice - pmTargetPrice;
+
+  // HARD: 10-25% above PM's max (aggressive, risks WALK_AWAY from PM)
+  // Vendor prioritizes maximum profit over closing the deal
+  // For Target=$90, Max=$100 -> HARD ~ $117.50 (17.5% above max)
+  const hardPrice = Math.round(pmMaxPrice * 1.175 * 100) / 100;
+
+  // MEDIUM: At or near PM's max (competitive but profitable)
+  // Balanced approach - PM will likely counter, negotiation continues
+  // For Target=$90, Max=$100 -> MEDIUM ~ $97.50 (between target and max, slightly above midpoint)
+  const mediumPrice = Math.round((pmTargetPrice + priceRange * 0.75) * 100) / 100;
+
+  // SOFT: Near PM's target (prioritize closing)
+  // Quick close - near PM's ideal, likely to be accepted with minimal counter
+  // For Target=$90, Max=$100 -> SOFT ~ $92.50 (midpoint between target and 50% of range)
+  const softPrice = Math.round((pmTargetPrice + priceRange * 0.25) * 100) / 100;
 
   // Delivery dates for each scenario
-  const hardDelivery = getDateInDays(45);
-  const mediumDelivery = getDateInDays(30);
+  const hardDelivery = getDateInDays(45);  // Longer delivery for HARD
+  const mediumDelivery = getDateInDays(30); // Standard delivery
 
   return [
     {
       type: 'HARD',
-      label: 'Maximize Profit',
-      description: `Target ${(margin.max * 100).toFixed(0)}% margin`,
+      label: 'Maximum Profit',
+      description: `Above max (~$${hardPrice.toFixed(2)})`,
       offer: {
         price: hardPrice,
         paymentTerms: 'Net 15',
@@ -195,27 +225,27 @@ export function generateVendorScenarios(
       },
       chips: generateOfferChips(hardPrice, 'Net 15', hardDelivery, locale, currency),
       message: generateInlineMessage(hardPrice, 'Net 15', hardDelivery, 'HARD', locale, currency),
-      messages: generateHardScenarioMessages(hardPrice, quantity, pmPrice),
-      expectedPmReaction: 'COUNTER',
+      messages: generateHardScenarioMessages(hardPrice, quantity, pmMaxPrice),
+      expectedPmReaction: 'WALK_AWAY',
     },
     {
       type: 'MEDIUM',
-      label: 'Balanced Offer',
-      description: `Target ${(margin.target * 100).toFixed(0)}% margin`,
+      label: 'Balanced Deal',
+      description: `Near max (~$${mediumPrice.toFixed(2)})`,
       offer: {
         price: mediumPrice,
-        paymentTerms: 'Net 30',
+        paymentTerms: 'Net 45',
         deliveryDate: mediumDelivery,
       },
-      chips: generateOfferChips(mediumPrice, 'Net 30', mediumDelivery, locale, currency),
-      message: generateInlineMessage(mediumPrice, 'Net 30', mediumDelivery, 'MEDIUM', locale, currency),
-      messages: generateMediumScenarioMessages(mediumPrice, quantity, pmPrice),
+      chips: generateOfferChips(mediumPrice, 'Net 45', mediumDelivery, locale, currency),
+      message: generateInlineMessage(mediumPrice, 'Net 45', mediumDelivery, 'MEDIUM', locale, currency),
+      messages: generateMediumScenarioMessages(mediumPrice, quantity, pmMaxPrice),
       expectedPmReaction: 'COUNTER',
     },
     {
       type: 'SOFT',
-      label: 'Close to Accept',
-      description: `Minimal ${(margin.min * 100).toFixed(0)}% margin`,
+      label: 'Quick Close',
+      description: `Near target (~$${softPrice.toFixed(2)})`,
       offer: {
         price: softPrice,
         paymentTerms: pmTerms,
@@ -223,7 +253,7 @@ export function generateVendorScenarios(
       },
       chips: generateOfferChips(softPrice, pmTerms, pmDelivery, locale, currency),
       message: generateInlineMessage(softPrice, pmTerms, pmDelivery, 'SOFT', locale, currency),
-      messages: generateSoftScenarioMessages(softPrice, quantity, pmPrice, pmTerms),
+      messages: generateSoftScenarioMessages(softPrice, quantity, pmMaxPrice, pmTerms),
       expectedPmReaction: 'ACCEPT',
     },
   ];
@@ -231,8 +261,11 @@ export function generateVendorScenarios(
 
 /**
  * Generate messages for HARD scenario (maximize vendor profit)
+ * @param vendorPrice - The vendor's asking price (above PM's max)
+ * @param quantity - Order quantity
+ * @param pmMaxPrice - PM's maximum acceptable price (for reference in message)
  */
-function generateHardScenarioMessages(vendorPrice: number, quantity: number, pmPrice: number): string[] {
+function generateHardScenarioMessages(vendorPrice: number, quantity: number, pmMaxPrice: number): string[] {
   return [
     `Thank you for your interest. For ${quantity} units, our price is $${vendorPrice.toFixed(2)} per unit with payment due within 15 days. This includes our premium quality guarantee and priority support.`,
     `I appreciate the inquiry. Given current market conditions and our quality standards, we can offer $${vendorPrice.toFixed(2)} per unit with Net 15 terms. Delivery can be arranged within 6 weeks.`,
@@ -242,19 +275,27 @@ function generateHardScenarioMessages(vendorPrice: number, quantity: number, pmP
 
 /**
  * Generate messages for MEDIUM scenario (balanced approach)
+ * UPDATED January 2026: Changed from Net 30 to Net 45 for better middle ground
+ * @param vendorPrice - The vendor's asking price (slightly above PM's max)
+ * @param quantity - Order quantity
+ * @param pmMaxPrice - PM's maximum acceptable price (for reference in message)
  */
-function generateMediumScenarioMessages(vendorPrice: number, quantity: number, pmPrice: number): string[] {
+function generateMediumScenarioMessages(vendorPrice: number, quantity: number, pmMaxPrice: number): string[] {
   return [
-    `I've reviewed your offer carefully. We can meet at $${vendorPrice.toFixed(2)} per unit with Net 30 payment terms. This is a fair compromise that works for both parties.`,
-    `Thank you for your proposal. Let me offer $${vendorPrice.toFixed(2)} per unit with standard Net 30 terms. We can arrange delivery within 4 weeks.`,
-    `I understand your position. Would $${vendorPrice.toFixed(2)} per unit with Net 30 payment work for you? I believe this balances both our needs.`,
+    `I've reviewed your offer carefully. We can meet at $${vendorPrice.toFixed(2)} per unit with Net 45 payment terms. This is a fair compromise that works for both parties.`,
+    `Thank you for your proposal. Let me offer $${vendorPrice.toFixed(2)} per unit with Net 45 terms. We can arrange delivery within 4 weeks.`,
+    `I understand your position. Would $${vendorPrice.toFixed(2)} per unit with Net 45 payment work for you? I believe this balances both our needs.`,
   ];
 }
 
 /**
- * Generate messages for SOFT scenario (close to PM's terms)
+ * Generate messages for SOFT scenario (close to PM's max - quick close)
+ * @param vendorPrice - The vendor's asking price (near PM's max)
+ * @param quantity - Order quantity
+ * @param pmMaxPrice - PM's maximum acceptable price (for reference)
+ * @param pmTerms - PM's preferred payment terms
  */
-function generateSoftScenarioMessages(vendorPrice: number, quantity: number, pmPrice: number, pmTerms: string): string[] {
+function generateSoftScenarioMessages(vendorPrice: number, quantity: number, pmMaxPrice: number, pmTerms: string): string[] {
   return [
     `I want to make this work. I can offer $${vendorPrice.toFixed(2)} per unit with your ${pmTerms} terms. Let's finalize this deal.`,
     `We'd be happy to work with you. My best offer is $${vendorPrice.toFixed(2)} per unit, accepting your payment terms. Shall we proceed?`,
@@ -514,8 +555,26 @@ export const DEFAULT_VENDOR_POLICY: VendorPolicy = {
 /**
  * Get vendor policy for a specific scenario
  *
+ * IMPORTANT: basePrice should be PM's maxAcceptablePrice (from wizard config)
+ * This ensures vendor prices are ABOVE PM's target price.
+ *
+ * From PM's perspective:
+ * - targetUnitPrice = lowest price PM wants to pay (ideal)
+ * - maxAcceptablePrice = ceiling PM will pay (walkaway above this)
+ *
+ * From VENDOR's perspective (this function):
+ * - basePrice = PM's maxAcceptablePrice (reference point)
+ * - startPrice = vendor's opening offer (should be >= basePrice)
+ * - minPrice = vendor's floor price (lowest they'll go)
+ *
+ * Example with PM's target=$90, max=$100 (basePrice=$100):
+ * - HARD:     startPrice=$115, minPrice=$100 (won't go below PM's max)
+ * - MEDIUM:   startPrice=$110, minPrice=$95  (might go slightly below max)
+ * - SOFT:     startPrice=$105, minPrice=$90  (can match PM's target)
+ * - WALK_AWAY: startPrice=$110, minPrice=$100 (firm at PM's max)
+ *
  * @param scenario - Vendor negotiation scenario
- * @param basePrice - Optional base price to calculate from (defaults to 100)
+ * @param basePrice - PM's maxAcceptablePrice (what PM is willing to pay as ceiling)
  * @returns Vendor policy configuration
  */
 export function getScenarioPolicy(
@@ -524,21 +583,23 @@ export function getScenarioPolicy(
 ): VendorPolicy {
   switch (scenario) {
     case 'HARD':
-      // Resistant vendor: small concessions, high floor price
+      // Resistant vendor: small concessions, won't go below PM's max
+      // Vendor believes their product is premium and worth more
       return {
-        minPrice: basePrice * 0.95, // Only willing to go 5% below base
-        startPrice: basePrice * 1.15, // Starts 15% above base
+        minPrice: basePrice * 1.0, // Floor at PM's max - vendor won't give discount
+        startPrice: basePrice * 1.15, // Starts 15% above PM's max
         preferredTerms: 'Net 30',
-        concessionStep: basePrice * 0.01, // 1% concessions only
+        concessionStep: basePrice * 0.015, // 1.5% concessions only
         maxRounds: 8, // Willing to negotiate longer
         minAcceptableTerms: 'Net 30', // Won't budge on terms
       };
 
     case 'MEDIUM':
-      // Balanced vendor: moderate concessions, reasonable floor price
+      // Balanced vendor: moderate concessions, can go slightly below PM's max
+      // Vendor is competitive but maintains margins
       return {
-        minPrice: basePrice * 0.90, // Willing to go 10% below base
-        startPrice: basePrice * 1.12, // Starts 12% above base
+        minPrice: basePrice * 0.95, // Can go 5% below PM's max (but still above target usually)
+        startPrice: basePrice * 1.10, // Starts 10% above PM's max
         preferredTerms: 'Net 30',
         concessionStep: basePrice * 0.02, // 2% concessions
         maxRounds: 7, // Moderate negotiation length
@@ -546,21 +607,23 @@ export function getScenarioPolicy(
       };
 
     case 'SOFT':
-      // Flexible vendor: reasonable concessions, lower floor price
+      // Flexible vendor: eager to close, can match PM's expectations
+      // Vendor prioritizes volume/relationship over margin
       return {
-        minPrice: basePrice * 0.85, // Willing to go 15% below base
-        startPrice: basePrice * 1.1, // Starts 10% above base
+        minPrice: basePrice * 0.90, // Can go 10% below PM's max (near PM's target)
+        startPrice: basePrice * 1.05, // Starts only 5% above PM's max
         preferredTerms: 'Net 30',
-        concessionStep: basePrice * 0.03, // 3% concessions
+        concessionStep: basePrice * 0.025, // 2.5% concessions
         maxRounds: 6, // Standard negotiation length
         minAcceptableTerms: 'Net 90', // Flexible on terms
       };
 
     case 'WALK_AWAY':
       // Inflexible vendor: no concessions, take it or leave it
+      // Vendor has other buyers or limited capacity
       return {
-        minPrice: basePrice * 1.0, // Won't go below base price
-        startPrice: basePrice * 1.1, // Starts 10% above base
+        minPrice: basePrice * 1.0, // Won't go below PM's max
+        startPrice: basePrice * 1.10, // Starts 10% above PM's max
         preferredTerms: 'Net 30',
         concessionStep: 0, // No price concessions
         maxRounds: 3, // Quick to walk away

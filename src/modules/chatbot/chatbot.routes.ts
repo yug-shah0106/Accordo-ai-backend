@@ -325,6 +325,58 @@ chatbotRouter.post(
   controller.suggestCounters
 );
 
+// ==================== Two-Phase Messaging (Instant Vendor + Async PM) ====================
+
+/**
+ * Save vendor message instantly (Phase 1)
+ * POST /api/chatbot/requisitions/:rfqId/vendors/:vendorId/deals/:dealId/vendor-message-instant
+ *
+ * This endpoint saves the vendor message immediately and returns without waiting
+ * for PM response generation. Used for instant UI feedback.
+ *
+ * Body: { content: string }
+ * Returns: { vendorMessage, deal } - Vendor message and updated deal state
+ */
+chatbotRouter.post(
+  '/requisitions/:rfqId/vendors/:vendorId/deals/:dealId/vendor-message-instant',
+  authMiddleware,
+  validateParams(nestedDealSchema),
+  validateBody(processMessageSchema),
+  controller.saveVendorMessageInstant
+);
+
+/**
+ * Generate PM response asynchronously (Phase 2)
+ * POST /api/chatbot/requisitions/:rfqId/vendors/:vendorId/deals/:dealId/pm-response-async
+ *
+ * Called after vendor message is saved. Generates human-like PM response
+ * using LLM with tone detection and concern acknowledgment.
+ *
+ * Returns: { pmMessage, decision, utility, suggestions } - Full PM response with context
+ */
+chatbotRouter.post(
+  '/requisitions/:rfqId/vendors/:vendorId/deals/:dealId/pm-response-async',
+  authMiddleware,
+  validateParams(nestedDealSchema),
+  controller.generatePMResponseAsync
+);
+
+/**
+ * Generate PM fallback response (Timeout Handler)
+ * POST /api/chatbot/requisitions/:rfqId/vendors/:vendorId/deals/:dealId/pm-response-fallback
+ *
+ * Called when LLM response times out (5+ seconds). Generates a quick
+ * template-based response to maintain conversation flow.
+ *
+ * Returns: { pmMessage, decision } - Fallback PM response
+ */
+chatbotRouter.post(
+  '/requisitions/:rfqId/vendors/:vendorId/deals/:dealId/pm-response-fallback',
+  authMiddleware,
+  validateParams(nestedDealSchema),
+  controller.generatePMResponseFallback
+);
+
 // ==================== Deal Lifecycle ====================
 
 /**

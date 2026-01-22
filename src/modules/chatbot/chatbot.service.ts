@@ -5,10 +5,12 @@ import { CustomError } from '../../utils/custom-error.js';
 import logger from '../../config/logger.js';
 import models from '../../models/index.js';
 import sequelize from '../../config/database.js';
-import { parseOfferRegex } from './engine/parseOffer.js';
+import { parseOfferRegex, parseOfferWithDelivery } from './engine/parseOffer.js';
+import { generateHumanLikeResponse, generateQuickFallback } from './engine/responseGenerator.js';
 import { decideNextMove } from './engine/decide.js';
 import { computeExplainability, totalUtility, type NegotiationConfig } from './engine/utility.js';
-import type { Offer, Decision, Explainability, WeightedUtilityResult, ParsedVendorOffer } from './engine/types.js';
+import type { Offer, Decision, Explainability, WeightedUtilityResult, ParsedVendorOffer, ScenarioSuggestions, StructuredSuggestion, SuggestionDeliveryConfig, SuggestionEmphasis } from './engine/types.js';
+import type { DeliveryConfig } from './engine/deliveryUtility.js';
 import { calculateWeightedUtility, convertLegacyConfig, getUtilitySummary, extractValueFromOffer } from './engine/weightedUtility.js';
 import { DEFAULT_THRESHOLDS } from './engine/types.js';
 import type { ChatbotDeal } from '../../models/chatbotDeal.js';
@@ -16,7 +18,7 @@ import type { ChatbotMessage } from '../../models/chatbotMessage.js';
 import { chatCompletion } from '../../services/llm.service.js';
 import { captureVendorBid, checkAndTriggerComparison } from '../bidComparison/bidComparison.service.js';
 import { sendDealCreatedEmail, sendPmDealStatusNotificationEmail, sendDealSummaryPDFEmail } from '../../services/email.service.js';
-import { getCachedSuggestions, cacheSuggestions, invalidateSuggestions, precomputeSuggestionsBackground } from './suggestionCache.js';
+import { getCachedSuggestions, cacheSuggestions, invalidateSuggestions, precomputeSuggestionsBackground, filterSuggestionsByEmphasis } from './suggestionCache.js';
 import { generateDealSummaryPDF, generatePDFFilename, type DealSummaryPDFInput } from './pdf/dealSummaryPdfGenerator.js';
 
 export interface CreateDealInput {
@@ -640,14 +642,46 @@ export const getSmartDefaultsService = async (
  * Extracts offer, makes decision, generates counter
  */
 /**
+ * Format delivery date for display in messages
+ * Format: "Mar 15 (30 days)" or "30 days" if no date
+ */
+const formatDeliveryForMessage = (deliveryDate: string | null | undefined, deliveryDays: number | null | undefined): string => {
+  if (!deliveryDate && !deliveryDays) return '';
+
+  let dateText = '';
+  if (deliveryDate) {
+    try {
+      const date = new Date(deliveryDate);
+      dateText = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    } catch {
+      dateText = deliveryDate;
+    }
+  }
+
+  if (deliveryDays && deliveryDays > 0) {
+    if (dateText) {
+      return `${dateText} (${deliveryDays} days)`;
+    }
+    return `${deliveryDays} days`;
+  }
+
+  return dateText;
+};
+
+/**
  * Generate Accordo response text based on decision
+ * Now includes delivery date and days in response messages
  */
 const generateAccordoResponseText = (decision: Decision, config: NegotiationConfig): string => {
   const { action, counterOffer, utilityScore } = decision;
 
+  // Format delivery if available in counterOffer
+  const deliveryText = formatDeliveryForMessage(counterOffer?.delivery_date, counterOffer?.delivery_days);
+
   switch (action) {
     case 'ACCEPT':
-      return `I'm pleased to accept your offer. We have a deal at $${counterOffer?.unit_price || 'agreed'} with ${counterOffer?.payment_terms || 'agreed'} payment terms. Thank you for the negotiation.`;
+      const acceptDelivery = deliveryText ? ` and delivery by ${deliveryText}` : '';
+      return `I'm pleased to accept your offer. We have a deal at $${counterOffer?.unit_price || 'agreed'} with ${counterOffer?.payment_terms || 'agreed'} payment terms${acceptDelivery}. Thank you for the negotiation.`;
 
     case 'COUNTER':
       const targetPrice = config.parameters.unit_price.target;
@@ -655,16 +689,18 @@ const generateAccordoResponseText = (decision: Decision, config: NegotiationConf
         ? `$${counterOffer.unit_price}`
         : `$${targetPrice}`;
       const termsText = counterOffer?.payment_terms || 'Net 60';
-      return `Thank you for your offer. Based on our analysis, I'd like to counter with ${priceText} and ${termsText} payment terms. This would give us a utility score of ${((utilityScore || 0) * 100).toFixed(0)}%.`;
+      const counterDelivery = deliveryText ? `, delivery by ${deliveryText}` : '';
+      return `Thank you for your offer. Based on our analysis, I'd like to counter with ${priceText}, ${termsText} payment terms${counterDelivery}. This would give us a utility score of ${((utilityScore || 0) * 100).toFixed(0)}%.`;
 
     case 'WALK_AWAY':
       return `I appreciate your time, but unfortunately the current offer doesn't meet our minimum requirements. The utility score of ${((utilityScore || 0) * 100).toFixed(0)}% falls below our walkaway threshold. We'll need to conclude this negotiation.`;
 
     case 'ESCALATE':
-      return `This negotiation has reached a point where I need to escalate it to a human decision-maker for review. Thank you for your patience.`;
+      const escalateDelivery = deliveryText ? `, delivery by ${deliveryText}` : '';
+      return `This negotiation has reached a point where I need to escalate it to a human decision-maker for review. Our counter-proposal is ${counterOffer?.unit_price ? `$${counterOffer.unit_price}` : 'pending'} with ${counterOffer?.payment_terms || 'negotiable'} terms${escalateDelivery}. Thank you for your patience.`;
 
     case 'ASK_CLARIFY':
-      return `I need some clarification on your offer. Could you please provide more details about the pricing and payment terms?`;
+      return `I need some clarification on your offer. Could you please provide more details about the pricing, payment terms, and delivery timeline?`;
 
     default:
       return `Thank you for your message. Our analysis shows a utility score of ${((utilityScore || 0) * 100).toFixed(0)}%.`;
@@ -763,18 +799,20 @@ export const processVendorMessageService = async (
       `Processed vendor message for deal ${input.dealId}: ${decision.action} (utility: ${decision.utilityScore})`
     );
 
-    // Hook: Capture vendor bid when deal reaches terminal state
+    // Hook: Capture vendor bid when deal reaches terminal state (fire-and-forget)
+    // CRITICAL FIX (Jan 2026): Run these in background to avoid blocking the response
     if (['ACCEPTED', 'WALKED_AWAY', 'ESCALATED'].includes(finalStatus)) {
-      try {
-        await captureVendorBid(deal.id);
-        if (deal.requisitionId) {
-          await checkAndTriggerComparison(deal.requisitionId);
-        }
-        logger.info(`Captured vendor bid for deal ${deal.id} with status ${finalStatus}`);
-      } catch (bidError) {
-        // Log but don't fail the message processing
-        logger.error(`Failed to capture vendor bid: ${(bidError as Error).message}`);
-      }
+      // Fire-and-forget: don't await, just log errors
+      captureVendorBid(deal.id)
+        .then(() => {
+          logger.info(`Captured vendor bid for deal ${deal.id} with status ${finalStatus}`);
+          if (deal.requisitionId) {
+            return checkAndTriggerComparison(deal.requisitionId);
+          }
+        })
+        .catch((bidError) => {
+          logger.error(`Failed to capture vendor bid: ${(bidError as Error).message}`);
+        });
     }
 
     // Invalidate suggestions cache after new message & pre-compute for next round
@@ -789,6 +827,415 @@ export const processVendorMessageService = async (
     if (error instanceof CustomError) throw error;
     throw new CustomError(
       `Failed to process vendor message: ${(error as Error).message}`,
+      500
+    );
+  }
+};
+
+// ============================================================================
+// TWO-PHASE MESSAGE PROCESSING (PM Response Enhancement - January 2026)
+// ============================================================================
+// Split message processing into two phases:
+// Phase 1: saveVendorMessageOnly - instant, saves vendor message
+// Phase 2: generatePMResponseAsync - async, generates human-like PM response
+// ============================================================================
+
+/**
+ * Input for saving vendor message only (Phase 1)
+ */
+export interface SaveVendorMessageInput {
+  dealId: string;
+  content: string;
+  userId: number;
+}
+
+/**
+ * Result from saving vendor message (Phase 1)
+ */
+export interface SaveVendorMessageResult {
+  message: ChatbotMessage;
+  deal: ChatbotDeal;
+  extractedOffer: Offer;
+  pmProcessing: boolean;
+}
+
+/**
+ * Input for generating PM response (Phase 2)
+ */
+export interface GeneratePMResponseInput {
+  dealId: string;
+  vendorMessageId: string;
+  userId: number;
+}
+
+/**
+ * Result from PM response generation (Phase 2)
+ */
+export interface PMResponseResult {
+  message: ChatbotMessage;
+  decision: Decision;
+  explainability: Explainability;
+  deal: ChatbotDeal;
+  generationSource: 'llm' | 'fallback';
+}
+
+/**
+ * Phase 1: Save vendor message only (instant, <100ms target)
+ *
+ * This function saves the vendor message immediately without generating
+ * the PM response. It parses the offer (including delivery) and updates
+ * the deal round, but does NOT generate or save the Accordo response.
+ *
+ * @param input - Vendor message input
+ * @returns Saved message with deal context
+ */
+export const saveVendorMessageOnlyService = async (
+  input: SaveVendorMessageInput
+): Promise<SaveVendorMessageResult> => {
+  try {
+    const deal = await models.ChatbotDeal.findByPk(input.dealId);
+    if (!deal) {
+      throw new CustomError('Deal not found', 404);
+    }
+
+    if (deal.status !== 'NEGOTIATING') {
+      throw new CustomError('Deal is not in negotiating status', 400);
+    }
+
+    // Parse vendor offer from message (now includes delivery)
+    const extractedOffer = parseOfferWithDelivery(input.content);
+
+    // Calculate the round for this message pair
+    // Vendor message STARTS a new round, PM response CONCLUDES it
+    // deal.round represents COMPLETED rounds, so new round = deal.round + 1
+    const currentRound = deal.round + 1;
+
+    // Save VENDOR message with round number
+    const vendorMessageId = uuidv4();
+    const message = await models.ChatbotMessage.create({
+      id: vendorMessageId,
+      dealId: input.dealId,
+      role: 'VENDOR',
+      content: input.content,
+      extractedOffer: extractedOffer as any,
+      engineDecision: null,
+      decisionAction: null,
+      utilityScore: null,
+      counterOffer: null,
+      explainabilityJson: null,
+      round: currentRound,  // Set round on vendor message
+    });
+
+    // Update deal with latest vendor offer (but DON'T increment round yet - that happens after PM response)
+    await deal.update({
+      latestVendorOffer: extractedOffer as any,
+      lastMessageAt: new Date(),
+    });
+
+    logger.info(`[Phase1] Vendor message saved for deal ${input.dealId} (round ${currentRound}, awaiting PM response)`);
+
+    // Invalidate suggestions cache
+    invalidateSuggestions(input.dealId).catch(() => {});
+
+    return {
+      message,
+      deal,
+      extractedOffer,
+      pmProcessing: true,
+    };
+  } catch (error) {
+    if (error instanceof CustomError) throw error;
+    throw new CustomError(
+      `Failed to save vendor message: ${(error as Error).message}`,
+      500
+    );
+  }
+};
+
+/**
+ * Phase 2: Generate PM response asynchronously (1-5 seconds expected)
+ *
+ * This function generates a human-like PM response using the LLM.
+ * It analyzes the conversation context, detects vendor tone, extracts
+ * concerns, and generates an appropriate response with delivery terms.
+ *
+ * Falls back to enhanced templates if LLM fails or times out.
+ *
+ * @param input - PM response input with vendor message ID
+ * @returns PM response with decision and explainability
+ */
+export const generatePMResponseAsyncService = async (
+  input: GeneratePMResponseInput
+): Promise<PMResponseResult> => {
+  try {
+    const deal = await models.ChatbotDeal.findByPk(input.dealId);
+    if (!deal) {
+      throw new CustomError('Deal not found', 404);
+    }
+
+    const vendorMessage = await models.ChatbotMessage.findByPk(input.vendorMessageId);
+    if (!vendorMessage) {
+      throw new CustomError('Vendor message not found', 404);
+    }
+
+    // Get conversation history for context
+    const allMessages = await models.ChatbotMessage.findAll({
+      where: { dealId: input.dealId },
+      order: [['createdAt', 'ASC']],
+    });
+
+    // Build negotiation config
+    let config: NegotiationConfig;
+    if (deal.requisitionId) {
+      config = await buildConfigFromRequisition(deal.requisitionId);
+    } else if (deal.contractId) {
+      config = await buildConfigFromContract(deal.contractId);
+    } else {
+      const { negotiationConfig } = await import('./engine/config.js');
+      config = negotiationConfig;
+    }
+
+    // Get vendor offer from the message
+    const extractedOffer = vendorMessage.extractedOffer as Offer || parseOfferWithDelivery(vendorMessage.content);
+
+    // Make decision using the engine
+    const decision = decideNextMove(config, extractedOffer, deal.round);
+
+    // Compute explainability
+    const explainability = computeExplainability(config, extractedOffer, decision);
+
+    // Build delivery config from deal's wizard configuration
+    const dealConfig = deal.get('configJson') as { delivery?: { requiredDate?: string; preferredDate?: string } } | undefined;
+    const deliveryConfig: DeliveryConfig | undefined = dealConfig?.delivery?.requiredDate
+      ? {
+          requiredDate: dealConfig.delivery.requiredDate,
+          preferredDate: dealConfig.delivery.preferredDate,
+          maxLateDays: 14, // Default 2 weeks grace period
+        }
+      : undefined;
+
+    // Generate human-like response using LLM with fallback
+    const conversationHistory = allMessages.map(m => ({
+      role: m.role,
+      content: m.content,
+    }));
+
+    const responseResult = await generateHumanLikeResponse({
+      decision,
+      config,
+      conversationHistory,
+      vendorOffer: extractedOffer,
+      counterOffer: decision.counterOffer,
+      deliveryConfig,
+      dealTitle: deal.title,
+      round: deal.round,
+      maxRounds: config.max_rounds,
+    });
+
+    // Get the round from the vendor message (both messages in a pair share the same round)
+    const currentRound = vendorMessage.round || (deal.round + 1);
+
+    // Save ACCORDO response message with the same round as vendor message
+    const accordoMessageId = uuidv4();
+    const accordoMessage = await models.ChatbotMessage.create({
+      id: accordoMessageId,
+      dealId: input.dealId,
+      role: 'ACCORDO',
+      content: responseResult.response,
+      extractedOffer: null,
+      engineDecision: decision as any,
+      decisionAction: decision.action,
+      utilityScore: decision.utilityScore,
+      counterOffer: decision.counterOffer as any,
+      explainabilityJson: explainability as any,
+      round: currentRound,  // PM message has same round as vendor message
+    });
+
+    // Update deal with final status based on decision
+    // PM response CONCLUDES the round, so increment deal.round NOW
+    let finalStatus: 'NEGOTIATING' | 'ACCEPTED' | 'WALKED_AWAY' | 'ESCALATED' = deal.status;
+    if (decision.action === 'ACCEPT') finalStatus = 'ACCEPTED';
+    else if (decision.action === 'WALK_AWAY') finalStatus = 'WALKED_AWAY';
+    else if (decision.action === 'ESCALATE') finalStatus = 'ESCALATED';
+
+    await deal.update({
+      round: currentRound,  // NOW increment deal.round (round is now complete)
+      status: finalStatus,
+      latestOfferJson: decision.counterOffer as any,
+      latestDecisionAction: decision.action,
+      latestUtility: decision.utilityScore,
+    });
+
+    logger.info(
+      `[Phase2] PM response generated for deal ${input.dealId}: ${decision.action} (utility: ${decision.utilityScore}, source: ${responseResult.source})`
+    );
+
+    // Hook: Capture vendor bid when deal reaches terminal state (fire-and-forget)
+    // CRITICAL FIX (Jan 2026): Run these in background to avoid blocking the response
+    if (['ACCEPTED', 'WALKED_AWAY', 'ESCALATED'].includes(finalStatus)) {
+      // Fire-and-forget: don't await, just log errors
+      captureVendorBid(deal.id)
+        .then(() => {
+          logger.info(`[Phase2] Captured vendor bid for deal ${deal.id} with status ${finalStatus}`);
+          if (deal.requisitionId) {
+            return checkAndTriggerComparison(deal.requisitionId);
+          }
+        })
+        .catch((bidError) => {
+          logger.error(`[Phase2] Failed to capture vendor bid: ${(bidError as Error).message}`);
+        });
+    }
+
+    // Pre-compute suggestions in background for next round
+    if (finalStatus === 'NEGOTIATING' && input.userId) {
+      precomputeSuggestionsBackground(input.dealId, input.userId, generateScenarioSuggestionsService);
+    }
+
+    return {
+      message: accordoMessage,
+      decision,
+      explainability,
+      deal,
+      generationSource: responseResult.source,
+    };
+  } catch (error) {
+    if (error instanceof CustomError) throw error;
+    throw new CustomError(
+      `Failed to generate PM response: ${(error as Error).message}`,
+      500
+    );
+  }
+};
+
+/**
+ * Generate a quick fallback PM response (for timeout scenarios)
+ *
+ * This function generates an immediate fallback response when the LLM
+ * takes too long. It uses enhanced templates with delivery terms.
+ *
+ * @param input - PM response input
+ * @returns Fallback PM response
+ */
+export const generatePMFallbackResponseService = async (
+  input: GeneratePMResponseInput
+): Promise<PMResponseResult> => {
+  try {
+    const deal = await models.ChatbotDeal.findByPk(input.dealId);
+    if (!deal) {
+      throw new CustomError('Deal not found', 404);
+    }
+
+    const vendorMessage = await models.ChatbotMessage.findByPk(input.vendorMessageId);
+    if (!vendorMessage) {
+      throw new CustomError('Vendor message not found', 404);
+    }
+
+    // Build negotiation config
+    let config: NegotiationConfig;
+    if (deal.requisitionId) {
+      config = await buildConfigFromRequisition(deal.requisitionId);
+    } else if (deal.contractId) {
+      config = await buildConfigFromContract(deal.contractId);
+    } else {
+      const { negotiationConfig } = await import('./engine/config.js');
+      config = negotiationConfig;
+    }
+
+    // Get vendor offer
+    const extractedOffer = vendorMessage.extractedOffer as Offer || parseOfferWithDelivery(vendorMessage.content);
+
+    // Make decision
+    const decision = decideNextMove(config, extractedOffer, deal.round);
+
+    // Compute explainability
+    const explainability = computeExplainability(config, extractedOffer, decision);
+
+    // Build delivery config
+    const dealConfigFallback = deal.get('configJson') as { delivery?: { requiredDate?: string; preferredDate?: string } } | undefined;
+    const deliveryConfig: DeliveryConfig | undefined = dealConfigFallback?.delivery?.requiredDate
+      ? {
+          requiredDate: dealConfigFallback.delivery.requiredDate,
+          preferredDate: dealConfigFallback.delivery.preferredDate,
+          maxLateDays: 14, // Default 2 weeks grace period
+        }
+      : undefined;
+
+    // Generate quick fallback response (no LLM, instant)
+    const fallbackResponse = generateQuickFallback({
+      decision,
+      config,
+      conversationHistory: [],
+      vendorOffer: extractedOffer,
+      counterOffer: decision.counterOffer,
+      deliveryConfig,
+      round: deal.round,
+      maxRounds: config.max_rounds,
+    });
+
+    // Get the round from the vendor message (both messages in a pair share the same round)
+    const currentRound = vendorMessage.round || (deal.round + 1);
+
+    // Save ACCORDO response message with the same round as vendor message
+    const accordoMessageId = uuidv4();
+    const accordoMessage = await models.ChatbotMessage.create({
+      id: accordoMessageId,
+      dealId: input.dealId,
+      role: 'ACCORDO',
+      content: fallbackResponse,
+      extractedOffer: null,
+      engineDecision: decision as any,
+      decisionAction: decision.action,
+      utilityScore: decision.utilityScore,
+      counterOffer: decision.counterOffer as any,
+      explainabilityJson: explainability as any,
+      round: currentRound,  // PM message has same round as vendor message
+    });
+
+    // Update deal status - PM response CONCLUDES the round
+    let finalStatus: 'NEGOTIATING' | 'ACCEPTED' | 'WALKED_AWAY' | 'ESCALATED' = deal.status;
+    if (decision.action === 'ACCEPT') finalStatus = 'ACCEPTED';
+    else if (decision.action === 'WALK_AWAY') finalStatus = 'WALKED_AWAY';
+    else if (decision.action === 'ESCALATE') finalStatus = 'ESCALATED';
+
+    await deal.update({
+      round: currentRound,  // NOW increment deal.round (round is now complete)
+      status: finalStatus,
+      latestOfferJson: decision.counterOffer as any,
+      latestDecisionAction: decision.action,
+      latestUtility: decision.utilityScore,
+    });
+
+    logger.info(
+      `[Fallback] PM fallback response generated for deal ${input.dealId}: ${decision.action}`
+    );
+
+    // Hook: Capture vendor bid when deal reaches terminal state (fire-and-forget)
+    // CRITICAL FIX (Jan 2026): Run these in background to avoid blocking the response
+    if (['ACCEPTED', 'WALKED_AWAY', 'ESCALATED'].includes(finalStatus)) {
+      // Fire-and-forget: don't await, just log errors
+      captureVendorBid(deal.id)
+        .then(() => {
+          logger.info(`[Fallback] Captured vendor bid for deal ${deal.id} with status ${finalStatus}`);
+          if (deal.requisitionId) {
+            return checkAndTriggerComparison(deal.requisitionId);
+          }
+        })
+        .catch((bidError) => {
+          logger.error(`[Fallback] Failed to capture vendor bid: ${(bidError as Error).message}`);
+        });
+    }
+
+    return {
+      message: accordoMessage,
+      decision,
+      explainability,
+      deal,
+      generationSource: 'fallback',
+    };
+  } catch (error) {
+    if (error instanceof CustomError) throw error;
+    throw new CustomError(
+      `Failed to generate PM fallback response: ${(error as Error).message}`,
       500
     );
   }
@@ -1395,6 +1842,28 @@ export const runDemoService = async (
     // Import vendor agent (dynamic to avoid circular deps)
     const { generateVendorReply } = await import('./vendor/vendorAgent.js');
 
+    // Extract PM's price config from deal configuration
+    // This ensures vendor offers are ABOVE PM's target price
+    const configJson = resetDeal.negotiationConfigJson as Record<string, unknown> | null;
+    const wizardConfig = configJson?.wizardConfig as Record<string, unknown> | undefined;
+    const priceQuantity = (wizardConfig?.priceQuantity || configJson?.priceQuantity || {}) as {
+      targetUnitPrice?: number;
+      maxAcceptablePrice?: number;
+    };
+
+    const pmPriceConfig = priceQuantity.targetUnitPrice && priceQuantity.maxAcceptablePrice
+      ? {
+          targetUnitPrice: priceQuantity.targetUnitPrice,
+          maxAcceptablePrice: priceQuantity.maxAcceptablePrice,
+        }
+      : undefined;
+
+    logger.info('[RunDemo] PM price config extracted', {
+      dealId,
+      pmPriceConfig,
+      hasConfig: !!pmPriceConfig,
+    });
+
     const steps: Array<{
       vendorMessage: ChatbotMessage;
       accordoMessage: ChatbotMessage;
@@ -1419,6 +1888,7 @@ export const runDemoService = async (
         lastAccordoOffer,
         scenario,
         customPolicy: undefined,
+        pmPriceConfig, // Pass PM's price config for correct vendor pricing
       });
 
       if (!vendorReplyResult.success || !vendorReplyResult.data) {
@@ -1595,19 +2065,94 @@ export const resumeDealService = async (dealId: string): Promise<ChatbotDeal> =>
   }
 };
 
+// ==================== DELIVERY DATE HELPER FUNCTIONS ====================
+
+/**
+ * Extract delivery date from deal config for suggestion generation
+ * Priority: preferredDate > requiredDate > 30-day default
+ */
+function getDeliveryConfigForSuggestions(configJson: Record<string, unknown> | null): SuggestionDeliveryConfig {
+  const DEFAULT_DAYS = 30;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  // Default fallback
+  const defaultDate = new Date(today);
+  defaultDate.setDate(defaultDate.getDate() + DEFAULT_DAYS);
+  const defaultConfig: SuggestionDeliveryConfig = {
+    date: defaultDate.toISOString().split('T')[0],
+    daysFromToday: DEFAULT_DAYS,
+    isDefault: true,
+  };
+
+  if (!configJson) return defaultConfig;
+
+  // Try to get from wizardConfig
+  const wizardConfig = configJson.wizardConfig as {
+    delivery?: {
+      preferredDate?: string;
+      requiredDate?: string;
+    };
+  } | undefined;
+
+  const delivery = wizardConfig?.delivery;
+  const targetDateStr = delivery?.preferredDate || delivery?.requiredDate;
+
+  if (!targetDateStr) return defaultConfig;
+
+  try {
+    const targetDate = new Date(targetDateStr);
+    targetDate.setHours(0, 0, 0, 0);
+
+    const diffTime = targetDate.getTime() - today.getTime();
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+    return {
+      date: targetDateStr,
+      daysFromToday: Math.max(0, diffDays),
+      isDefault: false,
+    };
+  } catch {
+    return defaultConfig;
+  }
+}
+
+/**
+ * Format delivery date for display: "Jan 15 (14 days)"
+ */
+function formatDeliveryForDisplay(date: string, days: number): string {
+  const dateObj = new Date(date);
+  const formatted = dateObj.toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+  });
+  return `${formatted} (${days} days)`;
+}
+
+// ==================== SCENARIO SUGGESTION GENERATION ====================
+
 /**
  * Generate AI-powered scenario suggestions
  *
  * Analyzes the conversation history and negotiation context to generate
  * contextually relevant counter-offer suggestions for each scenario type.
+ * Now returns structured suggestions with price, payment terms, AND delivery.
+ *
+ * Emphasis Filtering (January 2026):
+ * - When emphases are provided, suggestions are filtered/prioritized by those emphases
+ * - Multiple emphases result in weighted blend (equal priority)
+ * - Hybrid approach: cache lookup first, then filter or generate fresh
  *
  * @param dealId - The deal UUID
- * @returns Object with scenario suggestions: { HARD: [...], MEDIUM: [...], SOFT: [...], WALK_AWAY: [...] }
+ * @param userId - User ID for logging
+ * @param emphases - Optional emphasis filter (price, terms, delivery, value)
+ * @returns Object with structured scenario suggestions including delivery terms
  */
 export const generateScenarioSuggestionsService = async (
   dealId: string,
-  userId: number
-): Promise<Record<string, string[]>> => {
+  userId: number,
+  emphases?: SuggestionEmphasis[]
+): Promise<ScenarioSuggestions> => {
   try {
     // Check cache first for instant response
     const deal = await models.ChatbotDeal.findOne({
@@ -1619,14 +2164,32 @@ export const generateScenarioSuggestionsService = async (
       throw new CustomError('Deal not found', 404);
     }
 
-    const cachedResult = await getCachedSuggestions(dealId, deal.round);
+    // First try to get emphasis-specific cached result
+    const cachedResult = await getCachedSuggestions(dealId, deal.round, emphases);
     if (cachedResult) {
       logger.info('[ScenarioSuggestions] Returning cached suggestions', {
         dealId,
         round: deal.round,
         source: cachedResult.source,
+        emphases: emphases || 'all',
       });
       return cachedResult.suggestions;
+    }
+
+    // If no emphasis-specific cache, try to get all-emphases cache and filter
+    if (emphases && emphases.length > 0) {
+      const allCached = await getCachedSuggestions(dealId, deal.round, undefined);
+      if (allCached) {
+        logger.info('[ScenarioSuggestions] Filtering all-emphases cache', {
+          dealId,
+          round: deal.round,
+          emphases,
+        });
+        const filtered = filterSuggestionsByEmphasis(allCached.suggestions, emphases);
+        // Cache the filtered result for future requests with same emphases
+        await cacheSuggestions(dealId, deal.round, filtered, allCached.source, allCached.deliveryConfig, emphases);
+        return filtered;
+      }
     }
 
     // Get deal with messages and config (full fetch for generation)
@@ -1667,9 +2230,61 @@ export const generateScenarioSuggestionsService = async (
     const termsConfig = config.parameters?.payment_terms || { options: ['Net 30', 'Net 60', 'Net 90'] as const };
     const idealTerms = termsConfig.options?.[0] || 'Net 30';
     const acceptableTerms = termsConfig.options?.[1] || 'Net 60';
+    const flexibleTerms = termsConfig.options?.[2] || 'Net 90';
 
-    // Generate suggestions using LLM
-    const prompt = `You are a procurement negotiation assistant. Analyze this negotiation and generate 4 counter-offer suggestions for each scenario type.
+    // Extract delivery configuration from deal for suggestions
+    const configJson = dealWithMessages.negotiationConfigJson as Record<string, unknown> | null;
+    const deliveryConfig = getDeliveryConfigForSuggestions(configJson);
+    const deliveryDisplay = formatDeliveryForDisplay(deliveryConfig.date, deliveryConfig.daysFromToday);
+    const deliveryMessage = formatDeliveryForMessage(deliveryConfig.date, deliveryConfig.daysFromToday);
+
+    // Build emphasis instructions for LLM prompt
+    // When emphasis is selected, generate 4 options with DIFFERENT TRADE-OFFS all prioritizing the selected emphasis
+    const emphasisInstructions = emphases && emphases.length > 0
+      ? `
+EMPHASIS PRIORITY WITH TRADE-OFFS (IMPORTANT):
+The user wants to prioritize: ${emphases.join(', ')}
+
+Generate 4 suggestions per scenario, ALL emphasizing ${emphases.join(' + ')}, but with DIFFERENT TRADE-OFFS:
+${emphases.includes('price') ? `
+For PRICE emphasis - 4 trade-off options:
+1. Best price + standard terms + standard delivery (pure price focus)
+2. Slightly higher price + better payment terms (price + terms trade-off)
+3. Slightly higher price + faster delivery (price + delivery trade-off)
+4. Moderate price + balanced terms + balanced delivery (price + value trade-off)` : ''}
+${emphases.includes('terms') ? `
+For TERMS emphasis - 4 trade-off options:
+1. Best payment terms + standard price + standard delivery (pure terms focus)
+2. Good terms + lower price (terms + price trade-off)
+3. Good terms + faster delivery (terms + delivery trade-off)
+4. Balanced terms + balanced everything (terms + value trade-off)` : ''}
+${emphases.includes('delivery') ? `
+For DELIVERY emphasis - 4 trade-off options:
+1. Fastest delivery + standard price + standard terms (pure delivery focus)
+2. Fast delivery + lower price (delivery + price trade-off)
+3. Fast delivery + better terms (delivery + terms trade-off)
+4. Reliable delivery + balanced everything (delivery + value trade-off)` : ''}
+${emphases.length > 1 ? `
+For MULTI-EMPHASIS (${emphases.join(' + ')}) - blend equally with 4 variations:
+1. Aggressive on all selected emphases
+2. Balanced across all selected emphases
+3. Strong on first emphasis, moderate on others
+4. Moderate across all, with overall value focus` : ''}
+
+EACH suggestion must have DIFFERENT price/terms/delivery values to show the trade-offs clearly.`
+      : `
+For each scenario (HARD, MEDIUM, SOFT, WALK_AWAY), generate 4 suggestions with DIFFERENT emphasis:
+1. price: Emphasize the competitive pricing aspect
+2. terms: Emphasize favorable payment terms
+3. delivery: Emphasize meeting delivery requirements
+4. value: Emphasize overall value proposition`;
+
+    const emphasisExamples = emphases && emphases.length > 0
+      ? `Generate 4 options all prioritizing ${emphases.join(' + ')} but with different trade-offs in price/terms/delivery values`
+      : `Each suggestion has a different emphasis (price, terms, delivery, value)`;
+
+    // Generate suggestions using LLM - now with structured output including delivery
+    const prompt = `You are a procurement negotiation expert. Generate 4 counter-offer suggestions for each scenario type.
 
 NEGOTIATION CONTEXT:
 Deal: ${dealWithMessages.title}
@@ -1677,82 +2292,324 @@ Current Round: ${dealWithMessages.round}
 Status: ${dealWithMessages.status}
 
 NEGOTIATION CONFIG:
-Target Price: $${priceConfig.target}
-Min Price: $${priceConfig.anchor}
-Max Price: $${priceConfig.max_acceptable}
-Ideal Payment Terms: ${idealTerms}
-Acceptable Payment Terms: ${acceptableTerms}
+- Target Unit Price: $${priceConfig.target}
+- Min Price (Anchor): $${priceConfig.anchor}
+- Max Acceptable Price: $${priceConfig.max_acceptable}
+- Ideal Payment Terms: ${idealTerms}
+- Acceptable Payment Terms: ${acceptableTerms}
+- Flexible Payment Terms: ${flexibleTerms}
+- Required Delivery Date: ${deliveryConfig.date} (${deliveryConfig.daysFromToday} days from today)
 
 CONVERSATION HISTORY:
 ${conversationContext || 'No messages yet'}
 
 LAST VENDOR MESSAGE:
 ${lastVendorMessage ? lastVendorMessage.content : 'None'}
+${emphasisInstructions}
 
-Generate 4 counter-offer suggestions for EACH of these scenarios:
-1. HARD: Aggressive, push for best price, short payment terms
-2. MEDIUM: Balanced approach, reasonable price, moderate terms
-3. SOFT: Flexible, focus on relationship, longer terms acceptable
-4. WALK_AWAY: Unreasonable offers that signal walking away
+Each suggestion must be a complete, human-like negotiation message that naturally incorporates:
+- Unit price
+- Payment terms (Net 30/60/90)
+- Delivery commitment (use the ${deliveryConfig.daysFromToday}-day delivery window)
 
-Format your response as JSON only (no markdown, no explanation):
+${emphasisExamples}
+
+SCENARIO GUIDELINES:
+- HARD: Most aggressive - use anchor price, best terms for buyer
+- MEDIUM: Balanced - use target price, moderate terms
+- SOFT: Flexible - slightly above target, flexible on terms
+- WALK_AWAY: Final position - near max price, signals limit reached
+
+Return JSON only (no markdown, no explanation):
 {
-  "HARD": ["offer1", "offer2", "offer3", "offer4"],
-  "MEDIUM": ["offer1", "offer2", "offer3", "offer4"],
-  "SOFT": ["offer1", "offer2", "offer3", "offer4"],
-  "WALK_AWAY": ["offer1", "offer2", "offer3", "offer4"]
-}
-
-Each offer should be a short message (under 50 chars) like "We can do $92 Net 30" or "Best I can offer is $88 Net 60".`;
+  "HARD": [
+    {"message": "Your message here", "price": 92.00, "paymentTerms": "Net 30", "deliveryDate": "${deliveryConfig.date}", "deliveryDays": ${deliveryConfig.daysFromToday}, "emphasis": "${emphases?.[0] || 'price'}"},
+    {"message": "...", "price": ..., "paymentTerms": "...", "deliveryDate": "${deliveryConfig.date}", "deliveryDays": ${deliveryConfig.daysFromToday}, "emphasis": "${emphases?.[1] || emphases?.[0] || 'terms'}"},
+    {"message": "...", "price": ..., "paymentTerms": "...", "deliveryDate": "${deliveryConfig.date}", "deliveryDays": ${deliveryConfig.daysFromToday}, "emphasis": "${emphases?.[2] || emphases?.[0] || 'delivery'}"},
+    {"message": "...", "price": ..., "paymentTerms": "...", "deliveryDate": "${deliveryConfig.date}", "deliveryDays": ${deliveryConfig.daysFromToday}, "emphasis": "${emphases?.[3] || emphases?.[0] || 'value'}"}
+  ],
+  "MEDIUM": [...],
+  "SOFT": [...],
+  "WALK_AWAY": [...]
+}`;
 
     // Parse LLM response
-    let suggestions: Record<string, string[]>;
+    let suggestions: ScenarioSuggestions;
     let generationSource: 'llm' | 'fallback' = 'llm';
 
     // Fast timeout for instant response (500ms)
     const SUGGESTION_TIMEOUT_MS = 500;
 
-    // Generate instant fallback suggestions (used if LLM is slow or fails)
-    const generateFallbackSuggestions = (): Record<string, string[]> => ({
-      HARD: [
-        `We can do $${priceConfig.anchor} ${idealTerms}`,
-        `Best I can offer is $${priceConfig.anchor + 2} ${idealTerms}`,
-        `Final: $${priceConfig.anchor + 5} ${idealTerms}`,
-        `Absolute limit: $${priceConfig.anchor + 8} ${idealTerms}`,
-      ],
-      MEDIUM: [
-        `We can do $${priceConfig.target - 5} ${acceptableTerms}`,
-        `How about $${priceConfig.target - 8} ${acceptableTerms}?`,
-        `We're open to $${priceConfig.target - 12} Net 90`,
-        `Final offer: $${priceConfig.target - 15} Net 90`,
-      ],
-      SOFT: [
-        `We can do $${priceConfig.target} ${acceptableTerms}`,
-        `How about $${priceConfig.target - 2} Net 90?`,
-        `We're willing to go to $${priceConfig.target - 5} Net 90`,
-        `Final offer: $${priceConfig.target - 8} Net 90`,
-      ],
-      WALK_AWAY: [
-        `We can do $${priceConfig.max_acceptable} ${idealTerms}`,
-        `Best I can offer is $${priceConfig.max_acceptable - 2} ${idealTerms}`,
-        `Our final offer is $${priceConfig.max_acceptable + 10} ${idealTerms} - take it or leave it`,
-        `Sorry, we can't go lower than $${priceConfig.max_acceptable + 10}`,
-      ],
-    });
+    // Generate instant fallback suggestions with human-like templates (used if LLM is slow or fails)
+    // NOW EMPHASIS-AWARE: When emphasis is selected, generate 4 variations all focused on that emphasis
+    const generateFallbackSuggestions = (): ScenarioSuggestions => {
+      const dd = deliveryConfig.date;
+      const days = deliveryConfig.daysFromToday;
 
-    // LLM generation promise
-    const llmGenerationPromise = async (): Promise<Record<string, string[]>> => {
+      // Check if emphases are selected - if so, generate emphasis-specific variations
+      const hasEmphasis = emphases && emphases.length > 0;
+      const primaryEmphasis = hasEmphasis ? emphases[0] : null;
+      const isMultiEmphasis = hasEmphasis && emphases.length > 1;
+
+      // Helper to generate 4 price-focused variations with different price points
+      const generatePriceFocusedVariations = (
+        basePrice: number,
+        terms: string,
+        scenarioType: 'HARD' | 'MEDIUM' | 'SOFT' | 'WALK_AWAY'
+      ): StructuredSuggestion[] => {
+        const priceOffsets = scenarioType === 'HARD' ? [0, 2, 4, 6] :
+                            scenarioType === 'MEDIUM' ? [0, 3, 6, 9] :
+                            scenarioType === 'SOFT' ? [0, 2, 4, 6] :
+                            [0, 3, 6, 10]; // WALK_AWAY
+        const termsOptions = [idealTerms, idealTerms, acceptableTerms, flexibleTerms];
+
+        return [
+          {
+            message: `Our best price: $${basePrice.toFixed(2)} per unit with ${terms} terms and ${days}-day delivery. This is our most competitive offer.`,
+            price: basePrice,
+            paymentTerms: terms,
+            deliveryDate: dd,
+            deliveryDays: days,
+            emphasis: 'price' as SuggestionEmphasis,
+          },
+          {
+            message: `At $${(basePrice + priceOffsets[1]).toFixed(2)} per unit, we can offer ${termsOptions[1]} terms with expedited ${days}-day delivery.`,
+            price: basePrice + priceOffsets[1],
+            paymentTerms: termsOptions[1],
+            deliveryDate: dd,
+            deliveryDays: days,
+            emphasis: 'price' as SuggestionEmphasis,
+          },
+          {
+            message: `For $${(basePrice + priceOffsets[2]).toFixed(2)} per unit with ${termsOptions[2]} terms, we guarantee ${days}-day delivery with priority handling.`,
+            price: basePrice + priceOffsets[2],
+            paymentTerms: termsOptions[2],
+            deliveryDate: dd,
+            deliveryDays: days,
+            emphasis: 'price' as SuggestionEmphasis,
+          },
+          {
+            message: `Our value-balanced option: $${(basePrice + priceOffsets[3]).toFixed(2)} per unit, ${termsOptions[3]} terms, and reliable ${days}-day delivery.`,
+            price: basePrice + priceOffsets[3],
+            paymentTerms: termsOptions[3],
+            deliveryDate: dd,
+            deliveryDays: days,
+            emphasis: 'price' as SuggestionEmphasis,
+          },
+        ];
+      };
+
+      // Helper to generate 4 terms-focused variations with different payment terms
+      const generateTermsFocusedVariations = (
+        basePrice: number,
+        scenarioType: 'HARD' | 'MEDIUM' | 'SOFT' | 'WALK_AWAY'
+      ): StructuredSuggestion[] => {
+        const priceAdjust = scenarioType === 'HARD' ? 3 : scenarioType === 'MEDIUM' ? 5 : scenarioType === 'SOFT' ? 4 : 8;
+
+        return [
+          {
+            message: `Best terms: ${idealTerms} payment at $${basePrice.toFixed(2)} per unit with ${days}-day delivery. Optimal cash flow management.`,
+            price: basePrice,
+            paymentTerms: idealTerms,
+            deliveryDate: dd,
+            deliveryDays: days,
+            emphasis: 'terms' as SuggestionEmphasis,
+          },
+          {
+            message: `Extended ${acceptableTerms} terms at $${(basePrice + priceAdjust).toFixed(2)} per unit - flexible payment with guaranteed ${days}-day delivery.`,
+            price: basePrice + priceAdjust,
+            paymentTerms: acceptableTerms,
+            deliveryDate: dd,
+            deliveryDays: days,
+            emphasis: 'terms' as SuggestionEmphasis,
+          },
+          {
+            message: `Maximum flexibility: ${flexibleTerms} terms at $${(basePrice + priceAdjust * 1.5).toFixed(2)} per unit with ${days}-day delivery commitment.`,
+            price: basePrice + priceAdjust * 1.5,
+            paymentTerms: flexibleTerms,
+            deliveryDate: dd,
+            deliveryDays: days,
+            emphasis: 'terms' as SuggestionEmphasis,
+          },
+          {
+            message: `Custom terms package: ${acceptableTerms} with milestone payments at $${(basePrice + priceAdjust * 0.5).toFixed(2)} per unit, ${days}-day delivery.`,
+            price: basePrice + priceAdjust * 0.5,
+            paymentTerms: acceptableTerms,
+            deliveryDate: dd,
+            deliveryDays: days,
+            emphasis: 'terms' as SuggestionEmphasis,
+          },
+        ];
+      };
+
+      // Helper to generate 4 delivery-focused variations with different delivery options
+      const generateDeliveryFocusedVariations = (
+        basePrice: number,
+        terms: string,
+        scenarioType: 'HARD' | 'MEDIUM' | 'SOFT' | 'WALK_AWAY'
+      ): StructuredSuggestion[] => {
+        const priceAdjust = scenarioType === 'HARD' ? 4 : scenarioType === 'MEDIUM' ? 6 : scenarioType === 'SOFT' ? 5 : 10;
+        const expeditedDays = Math.max(days - 5, 7);
+        const standardDays = days;
+        const flexibleDays = days + 3;
+
+        return [
+          {
+            message: `Express delivery: ${expeditedDays} days at $${(basePrice + priceAdjust).toFixed(2)} per unit with ${terms} terms. Fastest option available.`,
+            price: basePrice + priceAdjust,
+            paymentTerms: terms,
+            deliveryDate: dd,
+            deliveryDays: expeditedDays,
+            emphasis: 'delivery' as SuggestionEmphasis,
+          },
+          {
+            message: `Priority delivery: ${standardDays} days guaranteed at $${basePrice.toFixed(2)} per unit with ${terms} terms and tracking.`,
+            price: basePrice,
+            paymentTerms: terms,
+            deliveryDate: dd,
+            deliveryDays: standardDays,
+            emphasis: 'delivery' as SuggestionEmphasis,
+          },
+          {
+            message: `Flexible delivery window: ${standardDays}-${flexibleDays} days at $${(basePrice - priceAdjust * 0.5).toFixed(2)} per unit with ${acceptableTerms} terms.`,
+            price: basePrice - priceAdjust * 0.5,
+            paymentTerms: acceptableTerms,
+            deliveryDate: dd,
+            deliveryDays: standardDays,
+            emphasis: 'delivery' as SuggestionEmphasis,
+          },
+          {
+            message: `Standard delivery: ${standardDays} days with ${terms} terms at our best price of $${(basePrice - priceAdjust * 0.3).toFixed(2)} per unit.`,
+            price: basePrice - priceAdjust * 0.3,
+            paymentTerms: terms,
+            deliveryDate: dd,
+            deliveryDays: standardDays,
+            emphasis: 'delivery' as SuggestionEmphasis,
+          },
+        ];
+      };
+
+      // Helper for multi-emphasis (blend all selected emphases)
+      const generateMultiEmphasisVariations = (
+        basePrice: number,
+        terms: string,
+        scenarioType: 'HARD' | 'MEDIUM' | 'SOFT' | 'WALK_AWAY'
+      ): StructuredSuggestion[] => {
+        const emphasisList = emphases!.join(' + ');
+        const priceAdjust = scenarioType === 'HARD' ? 2 : scenarioType === 'MEDIUM' ? 4 : scenarioType === 'SOFT' ? 3 : 6;
+
+        return [
+          {
+            message: `Balanced ${emphasisList}: $${basePrice.toFixed(2)} per unit, ${idealTerms} terms, ${days}-day delivery - optimized across all priorities.`,
+            price: basePrice,
+            paymentTerms: idealTerms,
+            deliveryDate: dd,
+            deliveryDays: days,
+            emphasis: 'value' as SuggestionEmphasis,
+          },
+          {
+            message: `${emphasisList} focused: $${(basePrice + priceAdjust).toFixed(2)} with ${acceptableTerms} terms and guaranteed ${days}-day delivery.`,
+            price: basePrice + priceAdjust,
+            paymentTerms: acceptableTerms,
+            deliveryDate: dd,
+            deliveryDays: days,
+            emphasis: 'value' as SuggestionEmphasis,
+          },
+          {
+            message: `Premium ${emphasisList} package: $${(basePrice + priceAdjust * 1.5).toFixed(2)}, ${acceptableTerms} terms, expedited ${Math.max(days - 3, 7)}-day delivery.`,
+            price: basePrice + priceAdjust * 1.5,
+            paymentTerms: acceptableTerms,
+            deliveryDate: dd,
+            deliveryDays: Math.max(days - 3, 7),
+            emphasis: 'value' as SuggestionEmphasis,
+          },
+          {
+            message: `Flexible ${emphasisList} option: $${(basePrice + priceAdjust * 0.5).toFixed(2)} per unit, ${flexibleTerms} terms, ${days}-day delivery with tracking.`,
+            price: basePrice + priceAdjust * 0.5,
+            paymentTerms: flexibleTerms,
+            deliveryDate: dd,
+            deliveryDays: days,
+            emphasis: 'value' as SuggestionEmphasis,
+          },
+        ];
+      };
+
+      // Generate suggestions based on emphasis selection
+      const generateForScenario = (
+        scenarioType: 'HARD' | 'MEDIUM' | 'SOFT' | 'WALK_AWAY',
+        basePrice: number,
+        defaultTerms: string
+      ): StructuredSuggestion[] => {
+        if (isMultiEmphasis) {
+          return generateMultiEmphasisVariations(basePrice, defaultTerms, scenarioType);
+        }
+        if (primaryEmphasis === 'price') {
+          return generatePriceFocusedVariations(basePrice, defaultTerms, scenarioType);
+        }
+        if (primaryEmphasis === 'terms') {
+          return generateTermsFocusedVariations(basePrice, scenarioType);
+        }
+        if (primaryEmphasis === 'delivery') {
+          return generateDeliveryFocusedVariations(basePrice, defaultTerms, scenarioType);
+        }
+        // Default: mixed emphasis (one of each type)
+        return [
+          {
+            message: `After careful analysis, our best offer is $${basePrice.toFixed(2)} per unit with ${defaultTerms} payment terms. We commit to delivery within ${days} days.`,
+            price: basePrice,
+            paymentTerms: defaultTerms,
+            deliveryDate: dd,
+            deliveryDays: days,
+            emphasis: 'price' as SuggestionEmphasis,
+          },
+          {
+            message: `We can work with ${defaultTerms} payment terms at $${(basePrice + 2).toFixed(2)} per unit, ensuring delivery within ${days} days as requested.`,
+            price: basePrice + 2,
+            paymentTerms: defaultTerms,
+            deliveryDate: dd,
+            deliveryDays: days,
+            emphasis: 'terms' as SuggestionEmphasis,
+          },
+          {
+            message: `To meet your ${days}-day delivery requirement, we're offering $${(basePrice + 5).toFixed(2)} per unit with ${acceptableTerms} terms.`,
+            price: basePrice + 5,
+            paymentTerms: acceptableTerms,
+            deliveryDate: dd,
+            deliveryDays: days,
+            emphasis: 'delivery' as SuggestionEmphasis,
+          },
+          {
+            message: `Considering the complete package - competitive pricing at $${(basePrice + 8).toFixed(2)}, ${flexibleTerms} terms, and guaranteed ${days}-day delivery - this represents excellent value.`,
+            price: basePrice + 8,
+            paymentTerms: flexibleTerms,
+            deliveryDate: dd,
+            deliveryDays: days,
+            emphasis: 'value' as SuggestionEmphasis,
+          },
+        ];
+      };
+
+      return {
+        HARD: generateForScenario('HARD', priceConfig.anchor, idealTerms),
+        MEDIUM: generateForScenario('MEDIUM', priceConfig.target - 5, acceptableTerms),
+        SOFT: generateForScenario('SOFT', priceConfig.target, acceptableTerms),
+        WALK_AWAY: generateForScenario('WALK_AWAY', priceConfig.max_acceptable, idealTerms),
+      };
+    };
+
+    // LLM generation promise - now returns structured suggestions
+    const llmGenerationPromise = async (): Promise<ScenarioSuggestions> => {
       const llmResponse = await chatCompletion(
         [{ role: 'user', content: prompt }],
-        { temperature: 0.7, maxTokens: 500 }  // Reduced from 1000
+        { temperature: 0.7, maxTokens: 2000 }  // Increased for structured JSON
       );
       // Clean response - remove markdown code blocks if present
       const cleanedResponse = llmResponse.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-      return JSON.parse(cleanedResponse);
+      return JSON.parse(cleanedResponse) as ScenarioSuggestions;
     };
 
     // Timeout promise that returns fallback after 500ms
-    const timeoutPromise = new Promise<Record<string, string[]>>((resolve) => {
+    const timeoutPromise = new Promise<ScenarioSuggestions>((resolve) => {
       setTimeout(() => {
         logger.info('[ScenarioSuggestions] LLM timeout reached, using instant fallback', {
           dealId,
@@ -1795,10 +2652,15 @@ Each offer should be a short message (under 50 chars) like "We can do $92 Net 30
       suggestions = generateFallbackSuggestions();
     }
 
-    logger.info('[ScenarioSuggestions] Generated suggestions', { dealId, round: dealWithMessages.round });
+    logger.info('[ScenarioSuggestions] Generated suggestions', {
+      dealId,
+      round: dealWithMessages.round,
+      emphases: emphases || 'all',
+    });
 
-    // Cache the suggestions for future requests
-    await cacheSuggestions(dealId, dealWithMessages.round, suggestions, generationSource);
+    // Cache the suggestions for future requests (including delivery config and emphases)
+    // When no emphases provided, cache as "all" for later filtering
+    await cacheSuggestions(dealId, dealWithMessages.round, suggestions, generationSource, deliveryConfig, emphases);
 
     // Log to training data for future LLM fine-tuning (non-blocking)
     setImmediate(async () => {
@@ -3460,6 +4322,11 @@ import {
 
 /**
  * Extract PM stance from deal's wizard config
+ *
+ * UPDATED January 2026: Now handles multiple config structures:
+ * 1. wizardConfig.priceQuantity.targetUnitPrice (new wizard deals)
+ * 2. parameters.unit_price.target (engine config format)
+ * 3. Root level targetPrice/maxAcceptablePrice (legacy seeded deals)
  */
 const extractPmStance = (deal: ChatbotDeal): PmStance => {
   const configJson = deal.negotiationConfigJson as Record<string, unknown> | null;
@@ -3471,9 +4338,38 @@ const extractPmStance = (deal: ChatbotDeal): PmStance => {
   const delivery = (wizardConfig?.delivery || {}) as Record<string, string>;
   const negotiationControl = (wizardConfig?.negotiationControl || {}) as Record<string, number>;
 
+  // Also check for engine config format (parameters.unit_price)
+  const parameters = configJson?.parameters as Record<string, Record<string, number>> | undefined;
+  const unitPriceConfig = parameters?.unit_price || {};
+
+  // Also check for legacy root-level config (seeded deals)
+  const rootConfig = configJson as Record<string, number> | null;
+
+  // Extract target price with fallback chain:
+  // 1. wizardConfig.priceQuantity.targetUnitPrice (new wizard deals)
+  // 2. parameters.unit_price.target (engine config format)
+  // 3. root level targetPrice (legacy seeded deals)
+  // 4. default 100
+  const targetUnitPrice =
+    priceQuantity.targetUnitPrice ||
+    unitPriceConfig.target ||
+    (rootConfig?.targetPrice as number) ||
+    100;
+
+  // Extract max price with fallback chain:
+  // 1. wizardConfig.priceQuantity.maxAcceptablePrice (new wizard deals)
+  // 2. parameters.unit_price.max_acceptable (engine config format)
+  // 3. root level maxAcceptablePrice (legacy seeded deals)
+  // 4. default to target * 1.2
+  const maxAcceptablePrice =
+    priceQuantity.maxAcceptablePrice ||
+    unitPriceConfig.max_acceptable ||
+    (rootConfig?.maxAcceptablePrice as number) ||
+    targetUnitPrice * 1.2;
+
   return {
-    targetUnitPrice: priceQuantity.targetUnitPrice || 100,
-    maxAcceptablePrice: priceQuantity.maxAcceptablePrice || 120,
+    targetUnitPrice,
+    maxAcceptablePrice,
     idealPaymentDays: paymentTerms.minDays || 30,
     maxPaymentDays: paymentTerms.maxDays || 60,
     requiredDeliveryDate: delivery.requiredDate || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
@@ -3630,21 +4526,26 @@ export const getVendorScenariosService = async (dealId: string): Promise<{
     // Get product category from requisition or default
     const productCategory = (deal.Requisition as any)?.category || 'default';
 
-    // Extract PM stance to get vendor cost base (use target price as base)
+    // Extract PM stance to get target and max prices
     const pmStance = extractPmStance(deal);
-    const vendorCostBase = pmStance.targetUnitPrice * 0.8; // Assume vendor cost is 80% of PM's target
+    const pmTargetPrice = pmStance.targetUnitPrice;
+    const pmMaxPrice = pmStance.maxAcceptablePrice;
 
-    // Generate vendor scenarios
+    // Generate vendor scenarios using PM's price range
+    // UPDATED January 2026: Now uses PM's target and max prices for realistic vendor offers
     const scenarios = generateVendorScenarios(
       pmLastOffer,
       productCategory,
-      vendorCostBase,
+      pmTargetPrice,
+      pmMaxPrice,
       1 // quantity
     );
 
     logger.info('[GetVendorScenarios] Scenarios generated', {
       dealId,
       pmLastOffer,
+      pmTargetPrice,
+      pmMaxPrice,
       scenarioCount: scenarios.length,
     });
 

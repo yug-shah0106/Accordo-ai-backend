@@ -1,14 +1,56 @@
 import { z } from "zod";
 
+/**
+ * Standard payment terms enum (for backwards compatibility)
+ */
+export const StandardPaymentTerms = ["Net 30", "Net 60", "Net 90"] as const;
+export type StandardPaymentTerm = typeof StandardPaymentTerms[number];
+
+/**
+ * Payment terms can now be any "Net X" format where X is 1-120 days
+ * We store as string format "Net X" for consistency
+ */
 export const OfferSchema = z.object({
   unit_price: z.number().nullable(),
-  payment_terms: z.enum(["Net 30", "Net 60", "Net 90"]).nullable(),
+  // Accept any "Net X" format (X = 1-120 days) or standard terms
+  payment_terms: z.string().nullable(),
+  // Payment terms in days for calculations (e.g., 45 for "Net 45")
+  payment_terms_days: z.number().nullable().optional(),
+  // Delivery fields
+  delivery_date: z.string().nullable().optional(),      // ISO date string (YYYY-MM-DD)
+  delivery_days: z.number().nullable().optional(),      // Days from today
   meta: z.object({
     raw_terms_days: z.number().optional(),
     non_standard_terms: z.boolean().optional(),
+    // Delivery meta
+    delivery_source: z.enum(['explicit_date', 'relative_days', 'timeframe']).optional(),
+    raw_delivery_text: z.string().optional(),
   }).optional(),
 });
 export type Offer = z.infer<typeof OfferSchema>;
+
+/**
+ * Helper to check if a payment term is standard (Net 30/60/90)
+ */
+export function isStandardPaymentTerm(term: string | null): term is StandardPaymentTerm {
+  return term !== null && StandardPaymentTerms.includes(term as StandardPaymentTerm);
+}
+
+/**
+ * Extract days from payment terms string (e.g., "Net 45" -> 45)
+ */
+export function extractPaymentDays(term: string | null): number | null {
+  if (!term) return null;
+  const match = term.match(/Net\s*(\d+)/i);
+  return match ? parseInt(match[1], 10) : null;
+}
+
+/**
+ * Format days as payment terms string (e.g., 45 -> "Net 45")
+ */
+export function formatPaymentTerms(days: number): string {
+  return `Net ${days}`;
+}
 
 export const DecisionSchema = z.object({
   action: z.enum(["ACCEPT", "COUNTER", "WALK_AWAY", "ESCALATE", "ASK_CLARIFY"]),
@@ -190,6 +232,49 @@ export function getStatusColor(status: ParameterStatus): string {
     case 'warning': return '#eab308';    // yellow-500
     case 'critical': return '#ef4444';   // red-500
   }
+}
+
+// ============================================
+// STRUCTURED SUGGESTION TYPES
+// ============================================
+
+/**
+ * Emphasis type for suggestion message variety
+ * Each suggestion within a scenario emphasizes a different aspect
+ */
+export type SuggestionEmphasis = 'price' | 'terms' | 'delivery' | 'value';
+
+/**
+ * Scenario types for suggestions
+ */
+export type ScenarioType = 'HARD' | 'MEDIUM' | 'SOFT' | 'WALK_AWAY';
+
+/**
+ * Structured suggestion with price, terms, and delivery
+ * Replaces the old string-only suggestion format
+ */
+export interface StructuredSuggestion {
+  message: string;              // Human-like message text including all terms
+  price: number;                // Unit price value
+  paymentTerms: string;         // e.g., "Net 30", "Net 60", "Net 90"
+  deliveryDate: string;         // ISO date string (YYYY-MM-DD)
+  deliveryDays: number;         // Days from today
+  emphasis: SuggestionEmphasis; // What this message emphasizes
+}
+
+/**
+ * Complete scenario suggestions map
+ */
+export type ScenarioSuggestions = Record<ScenarioType, StructuredSuggestion[]>;
+
+/**
+ * Delivery configuration extracted from deal for suggestion generation
+ * Note: For response generation, use DeliveryConfig from deliveryUtility.ts
+ */
+export interface SuggestionDeliveryConfig {
+  date: string;                 // ISO date string
+  daysFromToday: number;        // Calculated days
+  isDefault: boolean;           // Whether using 30-day fallback
 }
 
 /**

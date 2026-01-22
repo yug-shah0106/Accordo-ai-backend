@@ -86,6 +86,28 @@ export async function generateNextVendorMessage(
 
     const lastAccordoOffer = (lastAccordoMessage?.counterOffer as Offer) || null;
 
+    // Extract PM's price config from deal configuration
+    // This ensures vendor offers are ABOVE PM's target price
+    const configJson = deal.negotiationConfigJson as Record<string, unknown> | null;
+    const wizardConfig = configJson?.wizardConfig as Record<string, unknown> | undefined;
+    const priceQuantity = (wizardConfig?.priceQuantity || configJson?.priceQuantity || {}) as {
+      targetUnitPrice?: number;
+      maxAcceptablePrice?: number;
+    };
+
+    const pmPriceConfig = priceQuantity.targetUnitPrice && priceQuantity.maxAcceptablePrice
+      ? {
+          targetUnitPrice: priceQuantity.targetUnitPrice,
+          maxAcceptablePrice: priceQuantity.maxAcceptablePrice,
+        }
+      : undefined;
+
+    logger.info('[VendorSimulator] PM price config extracted', {
+      dealId,
+      pmPriceConfig,
+      hasConfig: !!pmPriceConfig,
+    });
+
     // Generate vendor reply using vendorAgent
     const vendorReplyResult = await generateVendorReply({
       dealId,
@@ -93,6 +115,7 @@ export async function generateNextVendorMessage(
       lastAccordoOffer,
       scenario,
       customPolicy: undefined, // Use default scenario policy
+      pmPriceConfig, // Pass PM's price config for correct vendor pricing
     });
 
     if (!vendorReplyResult.success || !vendorReplyResult.data) {

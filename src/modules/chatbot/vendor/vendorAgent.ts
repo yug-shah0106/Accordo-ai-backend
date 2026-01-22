@@ -60,7 +60,7 @@ Keep responses brief (2-3 sentences).`,
 export async function generateVendorReply(
   input: GenerateVendorReplyInput
 ): Promise<VendorReplyResult> {
-  const { dealId, round, lastAccordoOffer, scenario = 'SOFT', customPolicy } = input;
+  const { dealId, round, lastAccordoOffer, scenario = 'SOFT', customPolicy, pmPriceConfig } = input;
 
   try {
     logger.info('[VendorAgent] Generating vendor reply', {
@@ -68,10 +68,22 @@ export async function generateVendorReply(
       round,
       scenario,
       lastAccordoOffer,
+      pmPriceConfig,
     });
 
-    // Get vendor policy for scenario
-    const basePrice = lastAccordoOffer?.unit_price || 100;
+    // IMPORTANT: Vendor prices should be ABOVE PM's target price
+    // Use PM's max acceptable price as the baseline for vendor policy calculations
+    // This ensures vendor starts with offers that are competitive but above PM's target
+    //
+    // From PM's perspective:
+    // - targetUnitPrice = lowest price PM wants to pay (ideal)
+    // - maxAcceptablePrice = ceiling PM will pay (walkaway above this)
+    //
+    // From VENDOR's perspective:
+    // - Vendor should start ABOVE PM's max (for HARD scenario)
+    // - Vendor's floor (minPrice) should be around PM's target to max range
+    // - Vendor wants to maximize profit, so starts high and makes concessions
+    const basePrice = pmPriceConfig?.maxAcceptablePrice || lastAccordoOffer?.unit_price || 100;
     const policy = mergeVendorPolicy(scenario, customPolicy || {}, basePrice);
 
     // Check if vendor should walk away

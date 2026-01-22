@@ -21,6 +21,13 @@ interface CompanyRepository {
   getCompany: (companyId: number) => Promise<Company | null>;
   updateCompany: (companyId: number, companyData: Partial<Company>, transaction?: Transaction | null) => Promise<[affectedCount: number]>;
   deleteCompany: (companyId: number) => Promise<number>;
+  getAddresses: (userId: number) => Promise<{
+    id: string;
+    name: string;
+    address: string;
+    type: 'company' | 'project';
+    isDefault: boolean;
+  }[]>;
 }
 
 const repo: CompanyRepository = {

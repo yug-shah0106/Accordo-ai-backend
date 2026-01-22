@@ -175,9 +175,9 @@ async function seedRoles(): Promise<void> {
     const roles = [
       { id: 1, name: 'Super Admin', companyId: 1, isArchived: false },
       { id: 2, name: 'Procurement Manager', companyId: 1, isArchived: false },
-      { id: 3, name: 'L1 Approver', companyId: 1, isArchived: false },
-      { id: 4, name: 'L2 Approver', companyId: 1, isArchived: false },
-      { id: 5, name: 'L3 Approver', companyId: 1, isArchived: false },
+      { id: 3, name: 'Procurement Manager Approver', companyId: 1, isArchived: false },
+      { id: 4, name: 'HOD Approver', companyId: 1, isArchived: false },
+      { id: 5, name: 'CFO Approver', companyId: 1, isArchived: false },
       { id: 6, name: 'Vendor User', companyId: null, isArchived: false },
     ];
 
@@ -218,21 +218,21 @@ async function seedRolePermissions(): Promise<void> {
       { roleId: 2, moduleId: 5, permission: 7 },  // Vendors - read/write/update
     ];
 
-    // L1 Approver - can view and approve requisitions up to $50,000
+    // Procurement Manager Approver (L1) - can view and approve requisitions up to $50,000
     const l1ApproverPermissions = [
       { roleId: 3, moduleId: 1, permission: 1 },  // Dashboard - read
       { roleId: 3, moduleId: 4, permission: 3 },  // Requisitions - read/write
       { roleId: 3, moduleId: 6, permission: 7 },  // Approvals - read/write/update
     ];
 
-    // L2 Approver - can view and approve requisitions up to $250,000
+    // HOD Approver (L2) - can view and approve requisitions up to $250,000
     const l2ApproverPermissions = [
       { roleId: 4, moduleId: 1, permission: 1 },  // Dashboard - read
       { roleId: 4, moduleId: 4, permission: 3 },  // Requisitions - read/write
       { roleId: 4, moduleId: 6, permission: 7 },  // Approvals - read/write/update
     ];
 
-    // L3 Approver - can view and approve all requisitions
+    // CFO Approver (L3) - can view and approve all requisitions
     const l3ApproverPermissions = [
       { roleId: 5, moduleId: 1, permission: 1 },  // Dashboard - read
       { roleId: 5, moduleId: 4, permission: 3 },  // Requisitions - read/write
@@ -303,10 +303,10 @@ async function seedUsers(): Promise<void> {
         approvalLevel: 'NONE' as const,
         approvalLimit: null,
       },
-      // L1 Approver - can approve up to $50,000
+      // Procurement Manager Approver (L1) - can approve up to $50,000
       {
         id: 3,
-        name: 'L1 Approver - Tom',
+        name: 'Tom - Procurement Manager',
         email: 'l1.approver@accordo.ai',
         password: defaultPassword,
         userType: 'customer' as const,
@@ -316,10 +316,10 @@ async function seedUsers(): Promise<void> {
         approvalLevel: 'L1' as const,
         approvalLimit: 50000,
       },
-      // L2 Approver - can approve up to $250,000
+      // HOD Approver (L2) - can approve up to $250,000
       {
         id: 4,
-        name: 'L2 Approver - Sarah',
+        name: 'Sarah - HOD',
         email: 'l2.approver@accordo.ai',
         password: defaultPassword,
         userType: 'customer' as const,
@@ -329,10 +329,10 @@ async function seedUsers(): Promise<void> {
         approvalLevel: 'L2' as const,
         approvalLimit: 250000,
       },
-      // L3 Approver - can approve any amount (CFO level)
+      // CFO Approver (L3) - can approve any amount
       {
         id: 5,
-        name: 'L3 Approver - Michael (CFO)',
+        name: 'Michael - CFO',
         email: 'l3.approver@accordo.ai',
         password: defaultPassword,
         userType: 'customer' as const,
@@ -367,10 +367,10 @@ async function seedUsers(): Promise<void> {
         approvalLevel: 'NONE' as const,
         approvalLimit: null,
       },
-      // Additional L1 Approver for testing reassignment
+      // Additional Procurement Manager Approver for testing reassignment
       {
         id: 8,
-        name: 'L1 Approver - Lisa',
+        name: 'Lisa - Procurement Manager',
         email: 'l1.approver2@accordo.ai',
         password: defaultPassword,
         userType: 'customer' as const,
@@ -1449,11 +1449,11 @@ export async function seedAll(): Promise<void> {
     logger.info('All seeders completed successfully');
     logger.info('');
     logger.info('=== Test Users Created ===');
-    logger.info('Admin:           admin@accordo.ai / password123');
-    logger.info('Procurement:     jane.procurement@accordo.ai / password123');
-    logger.info('L1 Approver:     l1.approver@accordo.ai / password123 (limit: $50,000)');
-    logger.info('L2 Approver:     l2.approver@accordo.ai / password123 (limit: $250,000)');
-    logger.info('L3 Approver:     l3.approver@accordo.ai / password123 (limit: $10,000,000)');
+    logger.info('Admin:                    admin@accordo.ai / password123');
+    logger.info('Procurement:              jane.procurement@accordo.ai / password123');
+    logger.info('Procurement Manager (L1): l1.approver@accordo.ai / password123 (limit: $50,000)');
+    logger.info('HOD (L2):                 l2.approver@accordo.ai / password123 (limit: $250,000)');
+    logger.info('CFO (L3):                 l3.approver@accordo.ai / password123 (limit: $10,000,000)');
     logger.info('Vendor 1:        sales@techsupply.com / password123');
     logger.info('Vendor 2:        accounts@globalparts.eu / password123');
     logger.info('');

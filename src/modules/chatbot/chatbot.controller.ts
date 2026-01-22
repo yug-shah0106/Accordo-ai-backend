@@ -614,15 +614,35 @@ export const resumeDeal = async (
  * counter-offer suggestions for each scenario type (HARD, MEDIUM, SOFT, WALK_AWAY).
  *
  * Request: dealId in params
+ * Query: ?emphasis=price,delivery (optional, comma-separated emphases to prioritize)
+ *
  * Response: {
  *   "message": "Scenario suggestions generated successfully",
  *   "data": {
- *     "HARD": ["suggestion1", "suggestion2", "suggestion3", "suggestion4"],
- *     "MEDIUM": ["suggestion1", "suggestion2", "suggestion3", "suggestion4"],
- *     "SOFT": ["suggestion1", "suggestion2", "suggestion3", "suggestion4"],
- *     "WALK_AWAY": ["suggestion1", "suggestion2", "suggestion3", "suggestion4"]
+ *     "HARD": [
+ *       { "message": "...", "price": 92.00, "paymentTerms": "Net 30", "deliveryDate": "2026-02-15", "deliveryDays": 25, "emphasis": "price" },
+ *       { "message": "...", "price": 93.00, "paymentTerms": "Net 30", "deliveryDate": "2026-02-15", "deliveryDays": 25, "emphasis": "terms" },
+ *       { "message": "...", "price": 94.00, "paymentTerms": "Net 30", "deliveryDate": "2026-02-15", "deliveryDays": 25, "emphasis": "delivery" },
+ *       { "message": "...", "price": 95.00, "paymentTerms": "Net 30", "deliveryDate": "2026-02-15", "deliveryDays": 25, "emphasis": "value" }
+ *     ],
+ *     "MEDIUM": [...],
+ *     "SOFT": [...],
+ *     "WALK_AWAY": [...]
  *   }
  * }
+ *
+ * Each suggestion includes:
+ * - message: Human-like negotiation message including all terms
+ * - price: Unit price value
+ * - paymentTerms: Payment terms (e.g., "Net 30", "Net 60", "Net 90")
+ * - deliveryDate: ISO date string (YYYY-MM-DD)
+ * - deliveryDays: Days from today
+ * - emphasis: What this message emphasizes ("price" | "terms" | "delivery" | "value")
+ *
+ * When emphasis filter is provided:
+ * - Returns suggestions that prioritize the selected emphasis(es)
+ * - Multiple emphases are weighted equally (blend approach)
+ * - Original 4 suggestions per scenario maintained, but prioritized by selected emphases
  */
 export const suggestCounters = async (
   req: Request,
@@ -633,10 +653,21 @@ export const suggestCounters = async (
     const { dealId } = req.params;
     const userId = req.context.userId;
 
-    const suggestions = await chatbotService.generateScenarioSuggestionsService(dealId, userId);
+    // Parse emphasis query parameter (comma-separated: "price,delivery")
+    const emphasisParam = req.query.emphasis as string | undefined;
+    const emphases = emphasisParam
+      ? emphasisParam.split(',').filter(e => ['price', 'terms', 'delivery', 'value'].includes(e)) as Array<'price' | 'terms' | 'delivery' | 'value'>
+      : undefined;
+
+    const suggestions = await chatbotService.generateScenarioSuggestionsService(
+      dealId,
+      userId,
+      emphases
+    );
 
     logger.info(`[SuggestCounters] Generated scenario suggestions for deal: ${dealId}`, {
       userId,
+      emphases: emphases || 'all',
     });
 
     res.status(200).json({
@@ -952,9 +983,9 @@ export const sendMessage = async (
         data: {
           deal: dealWithMessages.deal,
           messages: dealWithMessages.messages,
-          latestMessage: result.data.accordoMessage,
-          conversationState: result.data.conversationState,
-          dealStatus: result.data.dealStatus,
+          latestMessage: result.data?.accordoMessage,
+          conversationState: result.data?.conversationState,
+          dealStatus: result.data?.dealStatus,
         },
       });
     } else {
@@ -1168,6 +1199,181 @@ export const vendorSendMessage = async (
     res.status(200).json({
       message: 'Message processed successfully',
       data: result,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// ============================================================================
+// TWO-PHASE MESSAGE PROCESSING CONTROLLERS (PM Response Enhancement)
+// ============================================================================
+// Part A: Instant Vendor Message Display
+// Part B: Human-like PM Responses with Delivery Terms
+// ============================================================================
+
+/**
+ * Phase 1: Save vendor message only (instant API)
+ * POST /api/chatbot/requisitions/:rfqId/vendors/:vendorId/deals/:dealId/vendor-message-instant
+ *
+ * This endpoint saves the vendor message immediately and returns quickly.
+ * The frontend should call /pm-response-async next to get the PM response.
+ *
+ * Response:
+ * {
+ *   "message": "Vendor message saved",
+ *   "data": {
+ *     "message": Message,
+ *     "deal": Deal,
+ *     "extractedOffer": Offer,
+ *     "pmProcessing": true
+ *   }
+ * }
+ */
+export const saveVendorMessageInstant = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const { dealId } = req.params;
+    const { content } = req.body;
+    const userId = req.context.userId;
+
+    if (!content || !content.trim()) {
+      throw new CustomError('Message content is required', 400);
+    }
+
+    const result = await chatbotService.saveVendorMessageOnlyService({
+      dealId,
+      content,
+      userId,
+    });
+
+    logger.info(`[Phase1] Vendor message saved instantly for deal ${dealId}`);
+    res.status(200).json({
+      message: 'Vendor message saved',
+      data: {
+        vendorMessage: result.message,  // Named vendorMessage for frontend consistency
+        deal: result.deal,
+        extractedOffer: result.extractedOffer,
+        pmProcessing: result.pmProcessing,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Phase 2: Generate PM response asynchronously
+ * POST /api/chatbot/requisitions/:rfqId/vendors/:vendorId/deals/:dealId/pm-response-async
+ *
+ * This endpoint generates a human-like PM response using LLM.
+ * It may take 1-5 seconds. Frontend should show typing indicator while waiting.
+ *
+ * Request:
+ * { "vendorMessageId": "uuid-of-vendor-message" }
+ *
+ * Response:
+ * {
+ *   "message": "PM response generated",
+ *   "data": {
+ *     "message": Message,
+ *     "decision": Decision,
+ *     "explainability": Explainability,
+ *     "deal": Deal,
+ *     "generationSource": "llm" | "fallback"
+ *   }
+ * }
+ */
+export const generatePMResponseAsync = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const { dealId } = req.params;
+    const { vendorMessageId } = req.body;
+    const userId = req.context.userId;
+
+    if (!vendorMessageId) {
+      throw new CustomError('vendorMessageId is required', 400);
+    }
+
+    const result = await chatbotService.generatePMResponseAsyncService({
+      dealId,
+      vendorMessageId,
+      userId,
+    });
+
+    logger.info(`[Phase2] PM response generated for deal ${dealId}: ${result.decision.action}`);
+    res.status(200).json({
+      message: 'PM response generated',
+      data: {
+        pmMessage: result.message,  // Named pmMessage for frontend consistency
+        decision: result.decision,
+        explainability: result.explainability,
+        deal: result.deal,
+        generationSource: result.generationSource,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Fallback: Generate PM response when async times out
+ * POST /api/chatbot/requisitions/:rfqId/vendors/:vendorId/deals/:dealId/pm-response-fallback
+ *
+ * This endpoint generates a quick fallback response when the LLM takes too long.
+ * It uses enhanced templates with delivery terms.
+ *
+ * Request:
+ * { "vendorMessageId": "uuid-of-vendor-message" }
+ *
+ * Response:
+ * {
+ *   "message": "PM fallback response generated",
+ *   "data": {
+ *     "message": Message,
+ *     "decision": Decision,
+ *     "deal": Deal,
+ *     "generationSource": "fallback"
+ *   }
+ * }
+ */
+export const generatePMResponseFallback = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const { dealId } = req.params;
+    const { vendorMessageId } = req.body;
+    const userId = req.context.userId;
+
+    if (!vendorMessageId) {
+      throw new CustomError('vendorMessageId is required', 400);
+    }
+
+    const result = await chatbotService.generatePMFallbackResponseService({
+      dealId,
+      vendorMessageId,
+      userId,
+    });
+
+    logger.info(`[Fallback] PM fallback response generated for deal ${dealId}`);
+    res.status(200).json({
+      message: 'PM fallback response generated',
+      data: {
+        pmMessage: result.message,  // Named pmMessage for frontend consistency
+        decision: result.decision,
+        explainability: result.explainability,
+        deal: result.deal,
+        generationSource: result.generationSource,
+      },
     });
   } catch (error) {
     next(error);

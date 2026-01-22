@@ -24,6 +24,23 @@ type SendmailFunction = (options: SendmailOptions, callback: SendmailCallback) =
 
 const { smtp, emailProvider, nodeEnv } = env;
 
+// Approval level display label mapping
+const APPROVAL_LEVEL_LABELS: Record<string, string> = {
+  'L1': 'Procurement Manager',
+  'L2': 'HOD',
+  'L3': 'CFO',
+  'NONE': 'None',
+};
+
+/**
+ * Convert approval level code to display label
+ * @param level - Approval level code (L1, L2, L3, NONE)
+ * @returns Display label (Procurement Manager, HOD, CFO, None)
+ */
+const getApprovalLevelLabel = (level: string): string => {
+  return APPROVAL_LEVEL_LABELS[level] || level;
+};
+
 // Log the email provider being used on startup
 logger.info(`Email service initialized with provider: ${emailProvider}`, {
   provider: emailProvider,
@@ -664,7 +681,7 @@ const generateApprovalPendingEmailHTML = (
     </head>
     <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
       <div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px;">
-        <h1 style="color: #0066cc; margin-top: 0;">Approval Required - ${requisitionData.approvalLevel}</h1>
+        <h1 style="color: #0066cc; margin-top: 0;">Approval Required - ${getApprovalLevelLabel(requisitionData.approvalLevel)}</h1>
         <p>Dear ${approverName},</p>
         <p>A requisition requires your approval:</p>
 
@@ -674,7 +691,7 @@ const generateApprovalPendingEmailHTML = (
           <p><strong>Project:</strong> ${requisitionData.projectName}</p>
           <p><strong>Submitted By:</strong> ${requisitionData.submittedBy}</p>
           <p><strong>Amount:</strong> $${requisitionData.amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
-          <p><strong>Approval Level:</strong> <span style="background-color: #0066cc; color: white; padding: 2px 8px; border-radius: 3px;">${requisitionData.approvalLevel}</span></p>
+          <p><strong>Approval Level:</strong> <span style="background-color: #0066cc; color: white; padding: 2px 8px; border-radius: 3px;">${getApprovalLevelLabel(requisitionData.approvalLevel)}</span></p>
           <p><strong>Priority:</strong> <span style="background-color: ${priorityColor}; color: white; padding: 2px 8px; border-radius: 3px;">${requisitionData.priority}</span></p>
           ${requisitionData.dueDate ? `<p><strong>Due Date:</strong> ${requisitionData.dueDate.toLocaleDateString()}</p>` : ''}
         </div>
@@ -709,7 +726,7 @@ const generateApprovalPendingEmailText = (
   approvalLink: string
 ): string => {
   return `
-Approval Required - ${requisitionData.approvalLevel}
+Approval Required - ${getApprovalLevelLabel(requisitionData.approvalLevel)}
 
 Dear ${approverName},
 
@@ -720,7 +737,7 @@ Requisition Details:
 - Project: ${requisitionData.projectName}
 - Submitted By: ${requisitionData.submittedBy}
 - Amount: $${requisitionData.amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-- Approval Level: ${requisitionData.approvalLevel}
+- Approval Level: ${getApprovalLevelLabel(requisitionData.approvalLevel)}
 - Priority: ${requisitionData.priority}
 ${requisitionData.dueDate ? `- Due Date: ${requisitionData.dueDate.toLocaleDateString()}` : ''}
 
@@ -755,7 +772,7 @@ const generateApprovalApprovedEmailHTML = (
     </head>
     <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
       <div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px;">
-        <h1 style="color: #28a745; margin-top: 0;">Requisition Approved - ${requisitionData.approvalLevel}</h1>
+        <h1 style="color: #28a745; margin-top: 0;">Requisition Approved - ${getApprovalLevelLabel(requisitionData.approvalLevel)}</h1>
         <p>Dear ${recipientName},</p>
         <p>Good news! A requisition has been approved.</p>
 
@@ -765,8 +782,8 @@ const generateApprovalApprovedEmailHTML = (
           <p><strong>Project:</strong> ${requisitionData.projectName}</p>
           <p><strong>Amount:</strong> $${requisitionData.amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
           <p><strong>Approved By:</strong> ${requisitionData.approvedBy}</p>
-          <p><strong>Approval Level:</strong> <span style="background-color: #28a745; color: white; padding: 2px 8px; border-radius: 3px;">${requisitionData.approvalLevel} APPROVED</span></p>
-          ${requisitionData.nextLevel ? `<p><strong>Next Step:</strong> Pending ${requisitionData.nextLevel} Approval</p>` : '<p><strong>Status:</strong> <span style="background-color: #28a745; color: white; padding: 2px 8px; border-radius: 3px;">FULLY APPROVED</span></p>'}
+          <p><strong>Approval Level:</strong> <span style="background-color: #28a745; color: white; padding: 2px 8px; border-radius: 3px;">${getApprovalLevelLabel(requisitionData.approvalLevel)} APPROVED</span></p>
+          ${requisitionData.nextLevel ? `<p><strong>Next Step:</strong> Pending ${getApprovalLevelLabel(requisitionData.nextLevel)} Approval</p>` : '<p><strong>Status:</strong> <span style="background-color: #28a745; color: white; padding: 2px 8px; border-radius: 3px;">FULLY APPROVED</span></p>'}
         </div>
 
         <div style="margin: 30px 0;">
@@ -794,7 +811,7 @@ const generateApprovalApprovedEmailText = (
   portalLink: string
 ): string => {
   return `
-Requisition Approved - ${requisitionData.approvalLevel}
+Requisition Approved - ${getApprovalLevelLabel(requisitionData.approvalLevel)}
 
 Dear ${recipientName},
 
@@ -805,8 +822,8 @@ Approval Details:
 - Project: ${requisitionData.projectName}
 - Amount: $${requisitionData.amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
 - Approved By: ${requisitionData.approvedBy}
-- Approval Level: ${requisitionData.approvalLevel} APPROVED
-${requisitionData.nextLevel ? `- Next Step: Pending ${requisitionData.nextLevel} Approval` : '- Status: FULLY APPROVED'}
+- Approval Level: ${getApprovalLevelLabel(requisitionData.approvalLevel)} APPROVED
+${requisitionData.nextLevel ? `- Next Step: Pending ${getApprovalLevelLabel(requisitionData.nextLevel)} Approval` : '- Status: FULLY APPROVED'}
 
 View Requisition: ${portalLink}
   `;
@@ -847,7 +864,7 @@ const generateApprovalRejectedEmailHTML = (
           <p><strong>Project:</strong> ${requisitionData.projectName}</p>
           <p><strong>Amount:</strong> $${requisitionData.amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
           <p><strong>Rejected By:</strong> ${requisitionData.rejectedBy}</p>
-          <p><strong>Approval Level:</strong> <span style="background-color: #dc3545; color: white; padding: 2px 8px; border-radius: 3px;">${requisitionData.approvalLevel} REJECTED</span></p>
+          <p><strong>Approval Level:</strong> <span style="background-color: #dc3545; color: white; padding: 2px 8px; border-radius: 3px;">${getApprovalLevelLabel(requisitionData.approvalLevel)} REJECTED</span></p>
 
           <div style="background-color: #f8d7da; border: 1px solid #f5c6cb; border-radius: 5px; padding: 15px; margin-top: 15px;">
             <h3 style="color: #721c24; margin-top: 0;">Rejection Reason:</h3>
@@ -895,7 +912,7 @@ Rejection Details:
 - Project: ${requisitionData.projectName}
 - Amount: $${requisitionData.amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
 - Rejected By: ${requisitionData.rejectedBy}
-- Approval Level: ${requisitionData.approvalLevel} REJECTED
+- Approval Level: ${getApprovalLevelLabel(requisitionData.approvalLevel)} REJECTED
 
 Rejection Reason:
 ${requisitionData.reason}

@@ -477,6 +477,20 @@ function validatePreference(
  * @param offer - Offer to validate
  * @returns Valid offer or null
  */
+/**
+ * Validate payment terms string
+ * UPDATED January 2026: Now accepts any "Net X" format (X = 1-120 days)
+ */
+function validatePaymentTerms(terms: any): string | null {
+  if (typeof terms !== 'string') return null;
+  // Match "Net X" pattern where X is 1-120
+  const match = terms.match(/^Net\s*(\d+)$/i);
+  if (!match) return null;
+  const days = parseInt(match[1], 10);
+  if (days < 1 || days > 120) return null;
+  return `Net ${days}`; // Normalize format
+}
+
 function validateOffer(offer: any): Offer | null {
   if (!offer || typeof offer !== 'object') {
     return null;
@@ -484,12 +498,10 @@ function validateOffer(offer: any): Offer | null {
 
   const validatedOffer: Offer = {
     unit_price: typeof offer.unit_price === 'number' ? offer.unit_price : null,
-    payment_terms:
-      offer.payment_terms === 'Net 30' ||
-      offer.payment_terms === 'Net 60' ||
-      offer.payment_terms === 'Net 90'
-        ? offer.payment_terms
-        : null,
+    payment_terms: validatePaymentTerms(offer.payment_terms),
+    payment_terms_days: typeof offer.payment_terms_days === 'number' ? offer.payment_terms_days : undefined,
+    delivery_date: typeof offer.delivery_date === 'string' ? offer.delivery_date : undefined,
+    delivery_days: typeof offer.delivery_days === 'number' ? offer.delivery_days : undefined,
     meta: offer.meta || undefined,
   };
 
