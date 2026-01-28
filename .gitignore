@@ -37,3 +37,4 @@ Thumbs.db
 yarn.lock
 
 CLAUDE.md
+.claude/
