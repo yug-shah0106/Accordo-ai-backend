@@ -546,6 +546,8 @@ interface SmartDefaultsResponse {
   };
   delivery: {
     typicalDeliveryDays: number | null;
+    maxDeliveryDate?: string | null;
+    negotiationClosureDate?: string | null;
   };
   source: 'vendor_history' | 'similar_deals' | 'industry_default' | 'combined';
   confidence: number;
@@ -584,6 +586,15 @@ export const getSmartDefaultsService = async (
     }
 
     const averageTarget = totalQuantity > 0 ? totalTarget / totalQuantity : 100;
+
+    // Extract requisition-level dates
+    const maxDeliveryDate = requisition.maxDeliveryDate
+      ? new Date(requisition.maxDeliveryDate).toISOString().split('T')[0]
+      : null;
+
+    const negotiationClosureDate = requisition.negotiationClosureDate
+      ? new Date(requisition.negotiationClosureDate).toISOString().split('T')[0]
+      : null;
 
     // Look for historical deals with this vendor
     const historicalDeals = await models.ChatbotDeal.findAll({
@@ -627,6 +638,8 @@ export const getSmartDefaultsService = async (
       },
       delivery: {
         typicalDeliveryDays: avgDeliveryDays,
+        maxDeliveryDate,
+        negotiationClosureDate,
       },
       source,
       confidence,
@@ -1451,7 +1464,7 @@ export const retryDealEmailService = async (
             {
               model: models.Product,
               as: 'Product',
-              attributes: ['id', 'productName', 'unit'],
+              attributes: ['id', 'productName', 'UOM'],
             },
           ],
         },
