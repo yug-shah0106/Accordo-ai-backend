@@ -75,92 +75,309 @@ async function seedCompanies(): Promise<void> {
       {
         id: 2,
         companyName: 'TechSupply Corp',
+        establishmentDate: '2015-03-15',
         nature: 'Domestic' as const,
-        type: 'Vendor',
+        type: 'Technology Hardware & Software',
         numberOfEmployees: '10-100' as const,
         industryType: 'Industry1' as const,
         typeOfCurrency: 'USD' as const,
         pocName: 'Sarah Vendor',
+        pocDesignation: 'Sales Manager',
         pocEmail: 'contact@techsupply.com',
         pocPhone: '+1-555-0201',
+        pocWebsite: 'https://www.techsupply.com',
         fullAddress: '456 Industrial Blvd, Austin, TX 78701',
+        gstNumber: '29ABCDE1234F1Z5',
+        panNumber: 'ABCDE1234F',
+        msmeNumber: 'UDYAM-TX-00-1234567',
+        ciNumber: 'U74999TX2015PTC012345',
+        bankName: 'Chase Bank',
+        beneficiaryName: 'TechSupply Corp',
+        accountNumber: '1234567890',
+        iBanNumber: 'US64SVBKUS6S3300958879',
+        swiftCode: 'CHASUS33',
+        bankAccountType: 'Business Checking',
+        ifscCode: 'CHAS0001234',
       },
       {
         id: 3,
         companyName: 'GlobalParts Inc',
+        establishmentDate: '2010-06-20',
         nature: 'Interational' as const,
-        type: 'Vendor',
+        type: 'Manufacturing & Distribution',
         numberOfEmployees: '1000+' as const,
         industryType: 'Industry2' as const,
         typeOfCurrency: 'EUR' as const,
         pocName: 'Mike Global',
+        pocDesignation: 'Business Development Director',
         pocEmail: 'sales@globalparts.eu',
         pocPhone: '+44-20-5550300',
+        pocWebsite: 'https://www.globalparts.eu',
         fullAddress: '789 Commerce St, London, UK EC1A 1BB',
+        gstNumber: 'GB123456789',
+        panNumber: 'AAAAA0000A',
+        msmeNumber: 'UK-MSME-2010-001',
+        ciNumber: 'GB00123456',
+        bankName: 'Barclays Bank',
+        beneficiaryName: 'GlobalParts Inc',
+        accountNumber: '20001234567890',
+        iBanNumber: 'GB29NWBK60161331926819',
+        swiftCode: 'BARCGB22',
+        bankAccountType: 'Corporate Account',
+        ifscCode: 'BARC0012345',
       },
       // === NEW VENDOR COMPANIES FOR WIZARD TESTING ===
       {
         id: 4,
         companyName: 'ServerDirect USA',
+        establishmentDate: '2018-01-10',
         nature: 'Domestic' as const,
-        type: 'Vendor',
+        type: 'IT Infrastructure & Cloud Services',
         numberOfEmployees: '100-1000' as const,
         industryType: 'Industry1' as const,
         typeOfCurrency: 'USD' as const,
         pocName: 'Tom Server',
+        pocDesignation: 'Head of Enterprise Sales',
         pocEmail: 'orders@serverdirect.us',
         pocPhone: '+1-555-0401',
+        pocWebsite: 'https://www.serverdirect.us',
         fullAddress: '100 Data Center Way, Dallas, TX 75201',
+        gstNumber: '48ZYXWV9876E1Z5',
+        panNumber: 'ZYXWV9876E',
+        msmeNumber: 'UDYAM-TX-00-9876543',
+        ciNumber: 'U74999TX2018PTC098765',
+        bankName: 'Bank of America',
+        beneficiaryName: 'ServerDirect USA Inc',
+        accountNumber: '9876543210',
+        iBanNumber: 'US64BOFA03301234567890',
+        swiftCode: 'BOFAUS3N',
+        bankAccountType: 'Business Savings',
+        ifscCode: 'BOFA0009876',
       },
       {
         id: 5,
         companyName: 'OfficeMax Pro',
+        establishmentDate: '2012-08-05',
         nature: 'Domestic' as const,
-        type: 'Vendor',
+        type: 'Office Supplies & Furniture',
         numberOfEmployees: '10-100' as const,
         industryType: 'Industry2' as const,
         typeOfCurrency: 'USD' as const,
         pocName: 'Lisa Office',
+        pocDesignation: 'B2B Sales Director',
         pocEmail: 'b2b@officemaxpro.com',
         pocPhone: '+1-555-0501',
+        pocWebsite: 'https://www.officemaxpro.com',
         fullAddress: '250 Supply Chain Dr, Chicago, IL 60601',
+        gstNumber: '17PQRST5432G1Z5',
+        panNumber: 'PQRST5432G',
+        msmeNumber: 'UDYAM-IL-00-5432109',
+        ciNumber: 'U74999IL2012PTC054321',
+        bankName: 'Wells Fargo Bank',
+        beneficiaryName: 'OfficeMax Pro LLC',
+        accountNumber: '5432109876',
+        iBanNumber: 'US64WFBI03305432109876',
+        swiftCode: 'WFBIUS6S',
+        bankAccountType: 'Business Current',
+        ifscCode: 'WFBI0005432',
       },
       {
         id: 6,
         companyName: 'MetalWorks Global',
+        establishmentDate: '2008-11-30',
         nature: 'Interational' as const,
-        type: 'Vendor',
+        type: 'Steel & Metal Manufacturing',
         numberOfEmployees: '1000+' as const,
         industryType: 'Industry2' as const,
         typeOfCurrency: 'USD' as const,
         pocName: 'Hans Metal',
+        pocDesignation: 'Global Sales Manager',
         pocEmail: 'sales@metalworksglobal.com',
         pocPhone: '+49-30-5550600',
+        pocWebsite: 'https://www.metalworksglobal.com',
         fullAddress: '500 Industrial Park, Hamburg, Germany 20095',
+        gstNumber: 'DE987654321',
+        panNumber: 'BBBBB1111B',
+        msmeNumber: 'DE-MSME-2008-002',
+        ciNumber: 'DE00987654',
+        bankName: 'Deutsche Bank',
+        beneficiaryName: 'MetalWorks Global GmbH',
+        accountNumber: '30009876543210',
+        iBanNumber: 'DE89370400440532013000',
+        swiftCode: 'DEUTDEFF',
+        bankAccountType: 'Corporate Account',
+        ifscCode: 'DEUT0009876',
       },
       {
         id: 7,
         companyName: 'SoftwareDirect',
+        establishmentDate: '2016-04-12',
         nature: 'Domestic' as const,
-        type: 'Vendor',
+        type: 'Software Licensing & Distribution',
         numberOfEmployees: '10-100' as const,
         industryType: 'Industry1' as const,
         typeOfCurrency: 'USD' as const,
         pocName: 'Emily Software',
+        pocDesignation: 'Licensing Manager',
         pocEmail: 'licensing@softwaredirect.com',
         pocPhone: '+1-555-0701',
+        pocWebsite: 'https://www.softwaredirect.com',
         fullAddress: '789 License Blvd, Seattle, WA 98101',
+        gstNumber: '53MNOPQ4321H1Z5',
+        panNumber: 'MNOPQ4321H',
+        msmeNumber: 'UDYAM-WA-00-4321098',
+        ciNumber: 'U74999WA2016PTC043210',
+        bankName: 'US Bank',
+        beneficiaryName: 'SoftwareDirect Inc',
+        accountNumber: '4321098765',
+        iBanNumber: 'US64USBI04304321098765',
+        swiftCode: 'USBKUS44',
+        bankAccountType: 'Business Checking',
+        ifscCode: 'USBK0004321',
+      },
+      // === THREE NEW VENDORS (February 2026) ===
+      // Vendor 1: NexGen Electronics Inc. - Small Tech Company (USA, USD)
+      {
+        id: 8,
+        companyName: 'NexGen Electronics Inc.',
+        establishmentDate: '2021-06-15',
+        nature: 'Domestic' as const,
+        type: 'Technology Hardware & IoT Devices',
+        numberOfEmployees: '0-10' as const,
+        industryType: 'Industry1' as const,
+        typeOfCurrency: 'USD' as const,
+        annualTurnover: '$2,500,000',
+        // Primary Contact
+        pocName: 'Alex Chen',
+        pocDesignation: 'Founder & CEO',
+        pocEmail: 'alex@nexgenelectronics.com',
+        pocPhone: '+1-415-555-0801',
+        pocWebsite: 'https://www.nexgenelectronics.com',
+        // Escalation Contact
+        escalationName: 'Jordan Lee',
+        escalationDesignation: 'Operations Director',
+        escalationEmail: 'jordan@nexgenelectronics.com',
+        escalationPhone: '+1-415-555-0802',
+        // Address
+        address: '1200 Innovation Way, Suite 400',
+        city: 'San Francisco',
+        state: 'California',
+        country: 'USA',
+        zipCode: '94107',
+        fullAddress: '1200 Innovation Way, Suite 400, San Francisco, CA 94107',
+        // Compliance Documents
+        gstNumber: '06NEXGE1234A1Z8',
+        panNumber: 'NEXGE1234A',
+        msmeNumber: 'UDYAM-CA-21-0012345',
+        ciNumber: 'U74999CA2021PTC001234',
+        // Banking Details
+        bankName: 'Silicon Valley Bank',
+        beneficiaryName: 'NexGen Electronics Inc.',
+        accountNumber: '3001234567',
+        iBanNumber: 'US64SIVB03003001234567',
+        swiftCode: 'SVBKUS6S',
+        bankAccountType: 'Business Checking',
+        ifscCode: 'SIVB0003001',
+        taxInPercentage: 8.5,
+      },
+      // Vendor 2: EuroSteel Manufacturing GmbH - Medium Manufacturing Company (Germany, EUR)
+      {
+        id: 9,
+        companyName: 'EuroSteel Manufacturing GmbH',
+        establishmentDate: '2012-03-20',
+        nature: 'Interational' as const,
+        type: 'Industrial Manufacturing & Steel Processing',
+        numberOfEmployees: '10-100' as const,
+        industryType: 'Industry2' as const,
+        typeOfCurrency: 'EUR' as const,
+        annualTurnover: '€18,500,000',
+        // Primary Contact
+        pocName: 'Klaus Weber',
+        pocDesignation: 'Head of International Sales',
+        pocEmail: 'k.weber@eurosteel.de',
+        pocPhone: '+49-89-555-0901',
+        pocWebsite: 'https://www.eurosteel-manufacturing.de',
+        // Escalation Contact
+        escalationName: 'Anna Schmidt',
+        escalationDesignation: 'Managing Director',
+        escalationEmail: 'a.schmidt@eurosteel.de',
+        escalationPhone: '+49-89-555-0900',
+        // Address
+        address: 'Industriestraße 45',
+        city: 'Munich',
+        state: 'Bavaria',
+        country: 'Germany',
+        zipCode: '80339',
+        fullAddress: 'Industriestraße 45, 80339 Munich, Bavaria, Germany',
+        // Compliance Documents
+        gstNumber: 'DE298765432',
+        panNumber: 'EURSTL2012B',
+        msmeNumber: 'DE-KMU-2012-089456',
+        ciNumber: 'HRB 198765 München',
+        // Banking Details
+        bankName: 'Commerzbank AG',
+        beneficiaryName: 'EuroSteel Manufacturing GmbH',
+        accountNumber: '40098765432',
+        iBanNumber: 'DE89370400440098765432',
+        swiftCode: 'COBADEFFXXX',
+        bankAccountType: 'Geschäftskonto',
+        ifscCode: 'COBA0400440',
+        taxInPercentage: 19.0,
+      },
+      // Vendor 3: Pinnacle Business Solutions Pvt Ltd - Large IT Services Company (India, INR)
+      {
+        id: 10,
+        companyName: 'Pinnacle Business Solutions Pvt Ltd',
+        establishmentDate: '2008-09-01',
+        nature: 'Interational' as const,
+        type: 'IT Services & Business Consulting',
+        numberOfEmployees: '100-1000' as const,
+        industryType: 'Industry1' as const,
+        typeOfCurrency: 'INR' as const,
+        annualTurnover: '₹850,00,00,000',
+        // Primary Contact
+        pocName: 'Vikram Patel',
+        pocDesignation: 'Vice President - Global Sales',
+        pocEmail: 'vikram.patel@pinnaclebiz.in',
+        pocPhone: '+91-80-4567-1002',
+        pocWebsite: 'https://www.pinnaclebusinesssolutions.in',
+        // Escalation Contact
+        escalationName: 'Priya Venkatesh',
+        escalationDesignation: 'Chief Operating Officer',
+        escalationEmail: 'priya.v@pinnaclebiz.in',
+        escalationPhone: '+91-80-4567-1000',
+        // Address
+        address: 'Pinnacle Tower, 5th Floor, Outer Ring Road',
+        city: 'Bangalore',
+        state: 'Karnataka',
+        country: 'India',
+        zipCode: '560103',
+        fullAddress: 'Pinnacle Tower, 5th Floor, Outer Ring Road, Marathahalli, Bangalore 560103',
+        // Compliance Documents
+        gstNumber: '29AABCP1234M1ZX',
+        panNumber: 'AABCP1234M',
+        msmeNumber: 'UDYAM-KA-08-0098765',
+        ciNumber: 'U72200KA2008PTC098765',
+        // Banking Details
+        bankName: 'HDFC Bank Ltd',
+        beneficiaryName: 'Pinnacle Business Solutions Pvt Ltd',
+        accountNumber: '50100234567890',
+        iBanNumber: null, // IBAN not used in India
+        swiftCode: 'HDFCINBBXXX',
+        bankAccountType: 'Current Account',
+        ifscCode: 'HDFC0001234',
+        taxInPercentage: 18.0,
       },
     ];
 
     for (const companyData of companies) {
-      await Company.findOrCreate({
-        where: { id: companyData.id },
-        defaults: companyData,
+      // Use upsert to update existing records or create new ones
+      await Company.upsert(companyData as any, {
+        conflictFields: ['id'],
       });
     }
 
-    logger.info('Companies seeded successfully');
+    logger.info('Companies seeded successfully (using upsert to update existing records)');
   } catch (error) {
     logger.error('Error seeding companies:', error);
     throw error;
@@ -276,7 +493,23 @@ async function seedUsers(): Promise<void> {
     // Hash the default password once
     const defaultPassword = await bcrypt.hash('password123', 10);
 
+    // Super Admin password (protected user - do not delete)
+    const superAdminPassword = await bcrypt.hash('Welcome@56', 10);
+
     const users = [
+      // Super Admin User (PROTECTED - DO NOT DELETE)
+      {
+        id: 100,
+        name: 'Super Admin',
+        email: 'ak75963@gmail.com',
+        password: superAdminPassword,
+        userType: 'admin' as const,
+        companyId: 1,
+        roleId: 1,
+        status: 'active',
+        approvalLevel: 'NONE' as const,
+        approvalLimit: null,
+      },
       // Admin User
       {
         id: 1,
@@ -424,6 +657,46 @@ async function seedUsers(): Promise<void> {
         password: defaultPassword,
         userType: 'vendor' as const,
         companyId: 7,
+        roleId: 6,
+        status: 'active',
+        approvalLevel: 'NONE' as const,
+        approvalLimit: null,
+      },
+      // === THREE NEW VENDOR USERS (February 2026) ===
+      {
+        id: 16,
+        name: 'Alex Chen',
+        email: 'alex@nexgenelectronics.com',
+        phone: '+1-415-555-0801',
+        password: defaultPassword,
+        userType: 'vendor' as const,
+        companyId: 8, // NexGen Electronics Inc.
+        roleId: 6,
+        status: 'active',
+        approvalLevel: 'NONE' as const,
+        approvalLimit: null,
+      },
+      {
+        id: 17,
+        name: 'Klaus Weber',
+        email: 'k.weber@eurosteel.de',
+        phone: '+49-89-555-0901',
+        password: defaultPassword,
+        userType: 'vendor' as const,
+        companyId: 9, // EuroSteel Manufacturing GmbH
+        roleId: 6,
+        status: 'active',
+        approvalLevel: 'NONE' as const,
+        approvalLimit: null,
+      },
+      {
+        id: 18,
+        name: 'Vikram Patel',
+        email: 'vikram.patel@pinnaclebiz.in',
+        phone: '+91-80-4567-1002',
+        password: defaultPassword,
+        userType: 'vendor' as const,
+        companyId: 10, // Pinnacle Business Solutions Pvt Ltd
         roleId: 6,
         status: 'active',
         approvalLevel: 'NONE' as const,
@@ -605,6 +878,102 @@ async function seedAddresses(): Promise<void> {
         postalCode: '98101',
         isDefault: true,
       },
+
+      // === THREE NEW VENDOR ADDRESSES (February 2026) ===
+
+      // NexGen Electronics Inc. (Company ID 8) - 2 addresses
+      {
+        id: 14,
+        companyId: 8,
+        label: 'San Francisco HQ',
+        address: '1200 Innovation Way, Suite 400',
+        city: 'San Francisco',
+        state: 'California',
+        country: 'USA',
+        postalCode: '94107',
+        isDefault: true,
+      },
+      {
+        id: 15,
+        companyId: 8,
+        label: 'R&D Lab',
+        address: '550 Tech Park Drive',
+        city: 'Palo Alto',
+        state: 'California',
+        country: 'USA',
+        postalCode: '94304',
+        isDefault: false,
+      },
+
+      // EuroSteel Manufacturing GmbH (Company ID 9) - 3 addresses
+      {
+        id: 16,
+        companyId: 9,
+        label: 'Munich Headquarters',
+        address: 'Industriestraße 45',
+        city: 'Munich',
+        state: 'Bavaria',
+        country: 'Germany',
+        postalCode: '80339',
+        isDefault: true,
+      },
+      {
+        id: 17,
+        companyId: 9,
+        label: 'Production Facility',
+        address: 'Stahlwerk-Allee 120',
+        city: 'Duisburg',
+        state: 'North Rhine-Westphalia',
+        country: 'Germany',
+        postalCode: '47053',
+        isDefault: false,
+      },
+      {
+        id: 18,
+        companyId: 9,
+        label: 'Distribution Center',
+        address: 'Logistikzentrum 8',
+        city: 'Frankfurt',
+        state: 'Hesse',
+        country: 'Germany',
+        postalCode: '60329',
+        isDefault: false,
+      },
+
+      // Pinnacle Business Solutions Pvt Ltd (Company ID 10) - 3 addresses
+      {
+        id: 19,
+        companyId: 10,
+        label: 'Bangalore Corporate HQ',
+        address: 'Pinnacle Tower, 5th Floor, Outer Ring Road, Marathahalli',
+        city: 'Bangalore',
+        state: 'Karnataka',
+        country: 'India',
+        postalCode: '560103',
+        isDefault: true,
+      },
+      {
+        id: 20,
+        companyId: 10,
+        label: 'Mumbai Office',
+        address: 'Pinnacle House, Bandra Kurla Complex',
+        city: 'Mumbai',
+        state: 'Maharashtra',
+        country: 'India',
+        postalCode: '400051',
+        isDefault: false,
+      },
+      {
+        id: 21,
+        companyId: 10,
+        label: 'Hyderabad Tech Center',
+        address: 'Plot 42, HITEC City, Madhapur',
+        city: 'Hyderabad',
+        state: 'Telangana',
+        country: 'India',
+        postalCode: '500081',
+        isDefault: false,
+      },
     ];
 
     for (const addressData of addresses) {
@@ -614,7 +983,7 @@ async function seedAddresses(): Promise<void> {
       });
     }
 
-    logger.info('Vendor addresses seeded successfully (13 addresses for 6 vendors)');
+    logger.info('Vendor addresses seeded successfully (21 addresses for 9 vendors)');
   } catch (error) {
     logger.error('Error seeding addresses:', error);
     throw error;
@@ -637,6 +1006,10 @@ async function seedVendorCompanies(): Promise<void> {
       { id: 4, vendorId: 10, companyId: 1 }, // OfficeMax Pro Sales
       { id: 5, vendorId: 11, companyId: 1 }, // MetalWorks Sales
       { id: 6, vendorId: 12, companyId: 1 }, // SoftwareDirect Licensing
+      // === THREE NEW VENDOR ASSOCIATIONS (February 2026) ===
+      { id: 10, vendorId: 16, companyId: 1 },  // NexGen Electronics - Alex Chen
+      { id: 11, vendorId: 17, companyId: 1 },  // EuroSteel Manufacturing - Klaus Weber
+      { id: 12, vendorId: 18, companyId: 1 },  // Pinnacle Business Solutions - Vikram Patel
     ];
 
     for (const vcData of vendorCompanyAssociations) {
@@ -646,7 +1019,7 @@ async function seedVendorCompanies(): Promise<void> {
       });
     }
 
-    logger.info('Vendor-company associations seeded successfully (6 vendors linked to Accordo Technologies)');
+    logger.info('Vendor-company associations seeded successfully (9 vendors linked to Accordo Technologies)');
   } catch (error) {
     logger.error('Error seeding vendor-company associations:', error);
     throw error;
@@ -666,6 +1039,8 @@ async function seedProducts(): Promise<void> {
         brandName: 'Dell',
         gstType: 'GST' as const,
         gstPercentage: 18,
+        tds: 84309876,
+        type: 'Goods',
         UOM: 'unit',
         companyId: 1,
       },
@@ -676,6 +1051,8 @@ async function seedProducts(): Promise<void> {
         brandName: 'Herman Miller',
         gstType: 'GST' as const,
         gstPercentage: 12,
+        tds: 94032011,
+        type: 'Goods',
         UOM: 'unit',
         companyId: 1,
       },
@@ -686,6 +1063,8 @@ async function seedProducts(): Promise<void> {
         brandName: 'Cisco',
         gstType: 'GST' as const,
         gstPercentage: 18,
+        tds: 85176200,
+        type: 'Goods',
         UOM: 'unit',
         companyId: 1,
       },
@@ -696,6 +1075,8 @@ async function seedProducts(): Promise<void> {
         brandName: 'APC',
         gstType: 'GST' as const,
         gstPercentage: 18,
+        tds: 94038200,
+        type: 'Goods',
         UOM: 'unit',
         companyId: 1,
       },
@@ -706,6 +1087,8 @@ async function seedProducts(): Promise<void> {
         brandName: 'Microsoft',
         gstType: 'GST' as const,
         gstPercentage: 18,
+        tds: 99711000,
+        type: 'Services',
         UOM: 'license',
         companyId: 1,
       },
@@ -717,6 +1100,8 @@ async function seedProducts(): Promise<void> {
         brandName: 'Dell',
         gstType: 'GST' as const,
         gstPercentage: 18,
+        tds: 84715000,
+        type: 'Goods',
         UOM: 'unit',
         companyId: 1,
       },
@@ -727,6 +1112,8 @@ async function seedProducts(): Promise<void> {
         brandName: 'Cisco',
         gstType: 'GST' as const,
         gstPercentage: 18,
+        tds: 85176200,
+        type: 'Goods',
         UOM: 'unit',
         companyId: 1,
       },
@@ -737,6 +1124,8 @@ async function seedProducts(): Promise<void> {
         brandName: 'NetApp',
         gstType: 'GST' as const,
         gstPercentage: 18,
+        tds: 84717010,
+        type: 'Goods',
         UOM: 'unit',
         companyId: 1,
       },
@@ -747,6 +1136,8 @@ async function seedProducts(): Promise<void> {
         brandName: 'HP',
         gstType: 'GST' as const,
         gstPercentage: 5,
+        tds: 48025990,
+        type: 'Goods',
         UOM: 'box',
         companyId: 1,
       },
@@ -757,6 +1148,8 @@ async function seedProducts(): Promise<void> {
         brandName: 'HP',
         gstType: 'GST' as const,
         gstPercentage: 18,
+        tds: 32159000,
+        type: 'Goods',
         UOM: 'pack',
         companyId: 1,
       },
@@ -767,6 +1160,8 @@ async function seedProducts(): Promise<void> {
         brandName: 'ArcelorMittal',
         gstType: 'GST' as const,
         gstPercentage: 18,
+        tds: 72081000,
+        type: 'Goods',
         UOM: 'ton',
         companyId: 1,
       },
@@ -777,6 +1172,8 @@ async function seedProducts(): Promise<void> {
         brandName: 'Alcoa',
         gstType: 'GST' as const,
         gstPercentage: 18,
+        tds: 76061100,
+        type: 'Goods',
         UOM: 'sheet',
         companyId: 1,
       },
@@ -787,6 +1184,8 @@ async function seedProducts(): Promise<void> {
         brandName: 'Southwire',
         gstType: 'GST' as const,
         gstPercentage: 18,
+        tds: 74081900,
+        type: 'Goods',
         UOM: 'roll',
         companyId: 1,
       },
@@ -797,6 +1196,8 @@ async function seedProducts(): Promise<void> {
         brandName: 'Microsoft',
         gstType: 'GST' as const,
         gstPercentage: 18,
+        tds: 99711000,
+        type: 'Services',
         UOM: 'license',
         companyId: 1,
       },
@@ -807,6 +1208,8 @@ async function seedProducts(): Promise<void> {
         brandName: 'Adobe',
         gstType: 'GST' as const,
         gstPercentage: 18,
+        tds: 99711000,
+        type: 'Services',
         UOM: 'license',
         companyId: 1,
       },
@@ -888,6 +1291,7 @@ async function seedRequisitions(): Promise<void> {
         subject: 'IT Equipment Procurement - Q1 2026',
         category: 'IT Equipment',
         deliveryDate: new Date('2026-03-15'),
+        maxDeliveryDate: new Date('2026-03-30'),  // Hard deadline: 15 days after preferred
         negotiationClosureDate: new Date('2026-02-28'),
         typeOfCurrency: 'USD' as const,
         totalPrice: 75000,
@@ -911,6 +1315,7 @@ async function seedRequisitions(): Promise<void> {
         subject: 'Office Furniture - Building B',
         category: 'Furniture',
         deliveryDate: new Date('2026-04-30'),
+        maxDeliveryDate: new Date('2026-05-15'),  // Hard deadline: 15 days after preferred
         negotiationClosureDate: new Date('2026-03-31'),
         typeOfCurrency: 'USD' as const,
         totalPrice: 45000,
@@ -934,6 +1339,7 @@ async function seedRequisitions(): Promise<void> {
         subject: 'Annual Software Licenses',
         category: 'Software',
         deliveryDate: new Date('2026-02-15'),
+        maxDeliveryDate: new Date('2026-02-28'),  // Hard deadline: 13 days after preferred
         negotiationClosureDate: new Date('2026-02-10'),
         typeOfCurrency: 'USD' as const,
         totalPrice: 15000,
@@ -958,6 +1364,7 @@ async function seedRequisitions(): Promise<void> {
         subject: 'Enterprise Server Infrastructure Q1 2026',
         category: 'IT Hardware',
         deliveryDate: new Date('2026-03-01'),
+        maxDeliveryDate: new Date('2026-03-15'),  // Hard deadline: 14 days after preferred
         negotiationClosureDate: new Date('2026-02-15'),
         typeOfCurrency: 'USD' as const,
         totalPrice: 250000,
@@ -981,6 +1388,7 @@ async function seedRequisitions(): Promise<void> {
         subject: 'Office Supplies Bulk Order 2026',
         category: 'Office Supplies',
         deliveryDate: new Date('2026-02-28'),
+        maxDeliveryDate: new Date('2026-03-15'),  // Hard deadline: 15 days after preferred
         negotiationClosureDate: new Date('2026-01-31'),
         typeOfCurrency: 'USD' as const,
         totalPrice: 35000,
@@ -1004,6 +1412,7 @@ async function seedRequisitions(): Promise<void> {
         subject: 'Steel & Aluminum Raw Materials Q1',
         category: 'Raw Materials',
         deliveryDate: new Date('2026-04-01'),
+        maxDeliveryDate: new Date('2026-04-15'),  // Hard deadline: 14 days after preferred
         negotiationClosureDate: new Date('2026-03-01'),
         typeOfCurrency: 'USD' as const,
         totalPrice: 500000,
@@ -1027,6 +1436,7 @@ async function seedRequisitions(): Promise<void> {
         subject: 'Enterprise Software License Renewal',
         category: 'Software',
         deliveryDate: new Date('2026-03-15'),
+        maxDeliveryDate: new Date('2026-03-30'),  // Hard deadline: 15 days after preferred
         negotiationClosureDate: new Date('2026-02-28'),
         typeOfCurrency: 'USD' as const,
         totalPrice: 75000,
@@ -1046,10 +1456,8 @@ async function seedRequisitions(): Promise<void> {
     ];
 
     for (const reqData of requisitions) {
-      await Requisition.findOrCreate({
-        where: { id: reqData.id },
-        defaults: reqData,
-      });
+      // Use upsert to update existing requisitions with new fields (maxDeliveryDate)
+      await Requisition.upsert(reqData);
     }
 
     logger.info('Requisitions seeded successfully');
@@ -1462,6 +1870,11 @@ export async function seedAll(): Promise<void> {
     logger.info('Vendor 4:        sales@officemaxpro.com / password123 (OfficeMax Pro)');
     logger.info('Vendor 5:        sales@metalworksglobal.com / password123 (MetalWorks Global)');
     logger.info('Vendor 6:        sales@softwaredirect.com / password123 (SoftwareDirect)');
+    logger.info('');
+    logger.info('=== NEW Vendors Added (February 2026) ===');
+    logger.info('Vendor 7:        alex@nexgenelectronics.com / password123 (NexGen Electronics Inc. - USA, USD)');
+    logger.info('Vendor 8:        k.weber@eurosteel.de / password123 (EuroSteel Manufacturing GmbH - Germany, EUR)');
+    logger.info('Vendor 9:        vikram.patel@pinnaclebiz.in / password123 (Pinnacle Business Solutions - India, INR)');
     logger.info('');
     logger.info('=== Requisitions Created ===');
     logger.info('RFQ0001: IT Equipment Procurement ($75,000) - 2 vendors attached');

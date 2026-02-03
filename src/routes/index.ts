@@ -31,7 +31,8 @@ router.use('/company', companyRoutes);
 router.use('/requisition', requisitionRoutes);
 router.use('/contract', contractRoutes);
 router.use('/po', poRoutes);
-router.use('/vendor', vendorRoutes);
+router.use('/vendor-management', vendorRoutes);
+router.use('/vendor', vendorRoutes); // Alias for backward compatibility
 router.use('/product', productRoutes);
 router.use('/project', projectRoutes);
 router.use('/role', roleRoutes);

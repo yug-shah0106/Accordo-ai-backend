@@ -71,7 +71,26 @@ export const createMockProject = (overrides: any = {}) => ({
 
 export const createMockProduct = (overrides: any = {}) => ({
   productName: 'Test Product',
-  UOM: 'pieces',
+  category: 'Electronics',
+  brandName: 'Test Brand',
+  gstType: 'GST' as const,
+  gstPercentage: 18,
+  tds: 12345,
+  type: 'Goods' as const,
+  UOM: 'pieces' as const,
+  companyId: 1,
+  ...overrides,
+});
+
+export const createMockProductNonGst = (overrides: any = {}) => ({
+  productName: 'Non-GST Product',
+  category: 'Services',
+  brandName: 'Service Brand',
+  gstType: 'Non-GST' as const,
+  gstPercentage: null,
+  tds: 67890,
+  type: 'Services' as const,
+  UOM: 'pieces' as const,
   companyId: 1,
   ...overrides,
 });

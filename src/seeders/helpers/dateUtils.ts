@@ -65,8 +65,15 @@ export function getMonthlyDates(monthsBack: number = 12): Date[] {
 
 /**
  * Generate deadline dates based on status
+ * - deliveryDate: Preferred/target delivery date
+ * - maxDeliveryDate: Hard deadline (latest acceptable delivery)
+ * - negotiationClosureDate: Deadline for vendor negotiations
  */
-export function generateDeadlines(status: string): { deliveryDate: Date; negotiationClosureDate: Date } {
+export function generateDeadlines(status: string): {
+  deliveryDate: Date;
+  maxDeliveryDate: Date;
+  negotiationClosureDate: Date;
+} {
   const now = new Date();
 
   switch (status) {
@@ -75,7 +82,8 @@ export function generateDeadlines(status: string): { deliveryDate: Date; negotia
     case 'NegotiationStarted':
       // Future deadlines
       return {
-        deliveryDate: daysFromNow(60),
+        deliveryDate: daysFromNow(60),          // Preferred delivery
+        maxDeliveryDate: daysFromNow(75),       // Hard deadline (15 days buffer)
         negotiationClosureDate: daysFromNow(30),
       };
     case 'Fulfilled':
@@ -83,6 +91,7 @@ export function generateDeadlines(status: string): { deliveryDate: Date; negotia
       // Past deadlines (completed)
       return {
         deliveryDate: daysFromNow(-30),
+        maxDeliveryDate: daysFromNow(-15),      // Was 15 days after preferred
         negotiationClosureDate: daysFromNow(-60),
       };
     case 'Expired':
@@ -90,11 +99,13 @@ export function generateDeadlines(status: string): { deliveryDate: Date; negotia
       // Past deadlines
       return {
         deliveryDate: daysFromNow(-15),
+        maxDeliveryDate: daysFromNow(-5),       // Was 10 days after preferred
         negotiationClosureDate: daysFromNow(-45),
       };
     default:
       return {
         deliveryDate: daysFromNow(45),
+        maxDeliveryDate: daysFromNow(60),       // 15 days buffer
         negotiationClosureDate: daysFromNow(21),
       };
   }

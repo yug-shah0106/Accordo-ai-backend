@@ -105,12 +105,38 @@ export const createContractService = async (
 
     // Create contract with chatbot deal ID
     const uniqueToken = crypto.randomBytes(16).toString('hex');
-    const contract = await repo.createContract({
-      ...cleanContractData,
-      status: 'Created',
-      uniqueToken,
-      chatbotDealId: dealId,
-    });
+    let contract: Contract;
+
+    try {
+      contract = await repo.createContract({
+        ...cleanContractData,
+        status: 'Created',
+        uniqueToken,
+        chatbotDealId: dealId,
+      });
+    } catch (createError) {
+      // Check if this is a sequence sync error (id must be unique)
+      if (
+        (createError as any).name === 'SequelizeUniqueConstraintError' &&
+        (createError as any).errors?.some((e: any) => e.path === 'id')
+      ) {
+        logger.warn('Contract sequence out of sync, attempting to fix...');
+
+        // Reset the sequence and retry once
+        await repo.resetContractSequence();
+
+        contract = await repo.createContract({
+          ...cleanContractData,
+          status: 'Created',
+          uniqueToken,
+          chatbotDealId: dealId,
+        });
+
+        logger.info('Contract created successfully after sequence reset');
+      } else {
+        throw createError;
+      }
+    }
 
     // Send email notification to vendor (unless skipped)
     if (!skipEmail && vendor.email) {

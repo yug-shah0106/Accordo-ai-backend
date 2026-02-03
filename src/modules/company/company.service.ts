@@ -5,8 +5,9 @@ import type { Company, CompanyNature, EmployeesRange, IndustryType, CurrencyType
 
 /**
  * Enum definitions for company fields
+ * Note: 'Interational' is a legacy typo, 'International' is the correct spelling
  */
-const natureEnum: readonly CompanyNature[] = ['Domestic', 'Interational'] as const;
+const natureEnum: readonly CompanyNature[] = ['Domestic', 'Interational', 'International'] as const;
 const employeesEnum: readonly EmployeesRange[] = ['0-10', '10-100', '100-1000', '1000+'] as const;
 const industryEnum: readonly IndustryType[] = ['Industry1', 'Industry2'] as const;
 const currencyEnum: readonly CurrencyType[] = ['INR', 'USD', 'EUR'] as const;

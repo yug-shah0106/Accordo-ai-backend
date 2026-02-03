@@ -38,11 +38,7 @@ export interface SMTPConfig {
   user?: string;
   pass?: string;
   from?: string;
-  devPort?: number;
-  mailhogWebPort?: number;
 }
-
-export type EmailProvider = 'nodemailer' | 'sendmail';
 
 export interface LLMConfig {
   baseURL: string;
@@ -75,7 +71,6 @@ export interface EnvironmentConfig {
   database: DatabaseConfig;
   jwt: JWTConfig;
   rateLimit: RateLimitConfig;
-  emailProvider: EmailProvider;
   smtp: SMTPConfig;
   redisUrl?: string;
   llm: LLMConfig;
@@ -115,23 +110,12 @@ export const env: EnvironmentConfig = {
     windowMs: Number(process.env.RATE_LIMIT_WINDOW || 15 * 60 * 1000),
     max: Number(process.env.RATE_LIMIT_MAX || 100),
   },
-  // Auto-detect email provider: use sendmail if SMTP_HOST not set, otherwise nodemailer
-  emailProvider: ((): EmailProvider => {
-    const provider = process.env.EMAIL_PROVIDER?.toLowerCase();
-    if (provider === 'nodemailer' || provider === 'sendmail') {
-      return provider as EmailProvider;
-    }
-    // Auto-detection: if SMTP_HOST is configured, use nodemailer, else sendmail
-    return process.env.SMTP_HOST ? 'nodemailer' : 'sendmail';
-  })(),
   smtp: {
     host: process.env.SMTP_HOST,
     port: process.env.SMTP_PORT ? Number(process.env.SMTP_PORT) : undefined,
     user: process.env.SMTP_USER,
     pass: process.env.SMTP_PASS,
     from: process.env.SMTP_FROM_EMAIL,
-    devPort: process.env.SENDMAIL_DEV_PORT ? Number(process.env.SENDMAIL_DEV_PORT) : 5004,
-    mailhogWebPort: process.env.MAILHOG_WEB_PORT ? Number(process.env.MAILHOG_WEB_PORT) : 5005,
   },
   redisUrl: process.env.REDIS_URL,
   llm: {

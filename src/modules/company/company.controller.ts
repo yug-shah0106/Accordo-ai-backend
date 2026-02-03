@@ -47,7 +47,29 @@ export const getCompany = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const data = await getCompanyService(Number(req.params.companyid));
+    const companyId = req.params.companyid;
+
+    // Validate company ID - check if it's undefined, null, or not a valid number
+    if (!companyId || companyId === 'undefined' || companyId === 'null') {
+      res.status(400).json({
+        message: 'Invalid company ID',
+        data: null,
+        error: 'Company ID is required'
+      });
+      return;
+    }
+
+    const companyIdNum = Number(companyId);
+    if (isNaN(companyIdNum)) {
+      res.status(400).json({
+        message: 'Invalid company ID',
+        data: null,
+        error: 'Company ID must be a valid number'
+      });
+      return;
+    }
+
+    const data = await getCompanyService(companyIdNum);
     res.status(200).json({ message: 'Company Details', data });
   } catch (error) {
     next(error);

@@ -275,6 +275,7 @@ async function seedProjects(): Promise<void> {
 
 /**
  * Seed requisitions and their products
+ * Uses upsert to update existing records with new fields (maxDeliveryDate, companyId)
  */
 async function seedRequisitions(): Promise<void> {
   // Reset the RequisitionProducts sequence to avoid ID conflicts
@@ -286,31 +287,30 @@ async function seedRequisitions(): Promise<void> {
   await sequelize.query(`SELECT setval('"RequisitionProducts_id_seq"', ${nextId}, false)`);
 
   for (const req of allRequisitions) {
-    await Requisition.findOrCreate({
-      where: { id: req.id },
-      defaults: {
-        id: req.id,
-        projectId: req.projectId,
-        rfqId: req.rfqId,
-        subject: req.title,
-        category: req.products[0]?.productId ? 'Mixed' : 'General',
-        deliveryDate: req.deliveryDate,
-        negotiationClosureDate: req.negotiationClosureDate,
-        typeOfCurrency: 'USD',
-        totalPrice: req.estimatedValue,
-        status: req.status,
-        payment_terms: 'Net 30',
-        net_payment_day: '30',
-        pricePriority: req.priority.toLowerCase(),
-        deliveryPriority: 'medium',
-        paymentTermsPriority: 'medium',
-        batna: req.estimatedValue * 0.9,
-        maxDiscount: 15,
-        createdBy: req.createdById,
-        approvalStatus: 'FULLY_APPROVED',
-        totalEstimatedAmount: req.estimatedValue,
-        requiredApprovalLevel: req.estimatedValue > 50000 ? 'L2' : 'L1',
-      },
+    // Use upsert to update existing requisitions with new fields
+    await Requisition.upsert({
+      id: req.id,
+      projectId: req.projectId,
+      rfqId: req.rfqId,
+      subject: req.title,
+      category: req.products[0]?.productId ? 'Mixed' : 'General',
+      deliveryDate: req.deliveryDate,
+      maxDeliveryDate: req.maxDeliveryDate,  // Hard deadline for delivery
+      negotiationClosureDate: req.negotiationClosureDate,
+      typeOfCurrency: 'USD',
+      totalPrice: req.estimatedValue,
+      status: req.status,
+      payment_terms: 'Net 30',
+      net_payment_day: '30',
+      pricePriority: req.priority.toLowerCase(),
+      deliveryPriority: 'medium',
+      paymentTermsPriority: 'medium',
+      batna: req.estimatedValue * 0.9,
+      maxDiscount: 15,
+      createdBy: req.createdById,
+      approvalStatus: 'FULLY_APPROVED',
+      totalEstimatedAmount: req.estimatedValue,
+      requiredApprovalLevel: req.estimatedValue > 50000 ? 'L2' : 'L1',
     });
 
     // Seed requisition products

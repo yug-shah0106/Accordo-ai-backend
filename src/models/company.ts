@@ -8,7 +8,7 @@ import {
   ModelStatic,
 } from 'sequelize';
 
-const natureEnum = ['Domestic', 'Interational'] as const;
+const natureEnum = ['Domestic', 'Interational', 'International'] as const;
 const employeesEnum = ['0-10', '10-100', '100-1000', '1000+'] as const;
 const industryEnum = ['Industry1', 'Industry2'] as const;
 const currencyEnum = ['INR', 'USD', 'EUR'] as const;

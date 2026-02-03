@@ -1,6 +1,5 @@
 import nodemailer from 'nodemailer';
 import type { Transporter } from 'nodemailer';
-import sendmailPackage from 'sendmail';
 import env from '../config/env.js';
 import logger from '../config/logger.js';
 import models from '../models/index.js';
@@ -10,19 +9,7 @@ import type { VendorCompany } from '../models/vendorCompany.js';
 import type { Product } from '../models/product.js';
 import type { EmailType, EmailStatus, EmailMetadata } from '../models/emailLog.js';
 
-// Define sendmail types (since @types/sendmail doesn't export these properly)
-interface SendmailOptions {
-  from: string;
-  to: string;
-  subject: string;
-  html?: string;
-  text?: string;
-}
-
-type SendmailCallback = (err: Error | null, reply: any) => void;
-type SendmailFunction = (options: SendmailOptions, callback: SendmailCallback) => void;
-
-const { smtp, emailProvider, nodeEnv } = env;
+const { smtp } = env;
 
 // Approval level display label mapping
 const APPROVAL_LEVEL_LABELS: Record<string, string> = {
@@ -41,43 +28,29 @@ const getApprovalLevelLabel = (level: string): string => {
   return APPROVAL_LEVEL_LABELS[level] || level;
 };
 
-// Log the email provider being used on startup
-logger.info(`Email service initialized with provider: ${emailProvider}`, {
-  provider: emailProvider,
-  isDevelopment: nodeEnv === 'development',
+// Log the email service initialization
+logger.info('Email service initialized with AWS SES', {
   smtpHost: smtp.host || 'not configured',
-  devPort: smtp.devPort,
+  smtpPort: smtp.port,
+  smtpUser: smtp.user ? '***configured***' : 'not configured',
 });
 
 /**
- * Build nodemailer transporter
+ * Build nodemailer transporter for AWS SES
  */
 const buildNodemailerTransporter = (): Transporter => {
   if (!smtp.host || !smtp.user) {
-    throw new Error('SMTP configuration missing for nodemailer');
+    throw new Error('AWS SES SMTP configuration missing. Please configure SMTP_HOST, SMTP_USER, and SMTP_PASS in .env');
   }
   return nodemailer.createTransport({
     host: smtp.host,
     port: smtp.port || 587,
-    secure: smtp.port === 465,
+    secure: smtp.port === 465, // true for 465, false for other ports
     auth: {
       user: smtp.user,
       pass: smtp.pass,
     },
   });
-};
-
-/**
- * Build sendmail function
- */
-const buildSendmailFunction = (): SendmailFunction => {
-  const options: any = {
-    silent: false,
-    // In development, use devPort for local SMTP testing (MailHog/Mailpit)
-    ...(nodeEnv === 'development' && smtp.devPort ? { devPort: smtp.devPort, devHost: 'localhost' } : {}),
-  };
-
-  return sendmailPackage(options) as SendmailFunction;
 };
 
 /**
@@ -302,43 +275,16 @@ interface EmailOptions {
 }
 
 /**
- * Send email using nodemailer
+ * Send email using AWS SES (nodemailer) - internal function
  */
-const sendWithNodemailer = async (mailOptions: EmailOptions): Promise<{ messageId: string }> => {
+const sendEmailInternal = async (mailOptions: EmailOptions): Promise<{ messageId: string }> => {
   const transporter = buildNodemailerTransporter();
   const info = await transporter.sendMail(mailOptions);
   return { messageId: info.messageId };
 };
 
 /**
- * Send email using sendmail
- */
-const sendWithSendmail = async (mailOptions: EmailOptions): Promise<{ messageId: string }> => {
-  const sendmail = buildSendmailFunction();
-
-  return new Promise((resolve, reject) => {
-    const sendmailOptions: SendmailOptions = {
-      from: mailOptions.from,
-      to: mailOptions.to,
-      subject: mailOptions.subject,
-      html: mailOptions.html,
-      text: mailOptions.text,
-    };
-
-    sendmail(sendmailOptions, (err: Error | null, reply: any) => {
-      if (err) {
-        reject(err);
-      } else {
-        // Sendmail doesn't return a messageId like nodemailer, generate one
-        const messageId = `<${Date.now()}.${Math.random().toString(36).substr(2, 9)}@sendmail>`;
-        resolve({ messageId });
-      }
-    });
-  });
-};
-
-/**
- * Send email with retry logic (supports both providers)
+ * Send email with retry logic using AWS SES
  */
 const sendEmailWithRetry = async (
   mailOptions: EmailOptions,
@@ -348,16 +294,9 @@ const sendEmailWithRetry = async (
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      let info: { messageId: string };
+      const info = await sendEmailInternal(mailOptions);
 
-      if (emailProvider === 'sendmail') {
-        info = await sendWithSendmail(mailOptions);
-      } else {
-        info = await sendWithNodemailer(mailOptions);
-      }
-
-      logger.info('Email sent successfully', {
-        provider: emailProvider,
+      logger.info('Email sent successfully via AWS SES', {
         to: mailOptions.to,
         subject: mailOptions.subject,
         messageId: info.messageId,
@@ -367,7 +306,6 @@ const sendEmailWithRetry = async (
     } catch (error) {
       lastError = error as Error;
       logger.warn(`Email send attempt ${attempt} failed`, {
-        provider: emailProvider,
         to: mailOptions.to,
         subject: mailOptions.subject,
         error: (error as Error).message,

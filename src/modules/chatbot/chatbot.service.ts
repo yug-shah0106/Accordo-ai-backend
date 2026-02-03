@@ -191,8 +191,9 @@ export const buildConfigFromRequisition = async (
         },
       },
     },
-    accept_threshold: 0.7,
-    walkaway_threshold: 0.45,
+    accept_threshold: 0.70,
+    escalate_threshold: 0.50,
+    walkaway_threshold: 0.30, // Lowered from 0.45 to prevent premature walk-away
     max_rounds: 6,
   };
 };
@@ -326,27 +327,46 @@ export const createDealWithConfigService = async (
       'Net 90': 1.0,
     } as const;
 
-    // Adjust accept/walkaway thresholds based on priority
-    let acceptThreshold = 0.7;
-    let walkawayThreshold = 0.45;
+    // Adjust thresholds, weights, and max rounds based on priority (negotiation strategy)
+    // HIGH = Maximize Savings (aggressive, PM-focused)
+    // MEDIUM = Fair Deal (balanced)
+    // LOW = Quick Close (flexible, faster resolution)
+    let acceptThreshold = 0.70;
+    let walkawayThreshold = 0.30;
+    let priceWeight = 0.60;
+    let termsWeight = 0.25;
+    let deliveryWeight = 0.15;
+    let maxRounds = negotiationControl?.maxRounds || 6;
 
     if (input.priority === 'HIGH') {
-      acceptThreshold = 0.8;
-      walkawayThreshold = 0.55;
-    } else if (input.priority === 'LOW') {
-      acceptThreshold = 0.6;
+      // Maximize Savings: Stricter thresholds, focus on price, more rounds
+      acceptThreshold = 0.75;
       walkawayThreshold = 0.35;
+      priceWeight = 0.70;
+      termsWeight = 0.20;
+      deliveryWeight = 0.10;
+      maxRounds = negotiationControl?.maxRounds || 10;
+    } else if (input.priority === 'LOW') {
+      // Quick Close: Relaxed thresholds, balanced weights, fewer rounds
+      acceptThreshold = 0.65;
+      walkawayThreshold = 0.25;
+      priceWeight = 0.50;
+      termsWeight = 0.30;
+      deliveryWeight = 0.20;
+      maxRounds = negotiationControl?.maxRounds || 4;
     }
 
     // Apply custom walkaway threshold if provided
-    if (negotiationControl?.walkawayThreshold) {
-      walkawayThreshold = (100 - negotiationControl.walkawayThreshold) / 100;
+    // NOTE: walkawayThreshold from frontend is the minimum acceptable utility percentage (e.g., 20 means walk away if utility < 20%)
+    // This should be a LOW value - we walk away when utility drops BELOW this threshold
+    if (negotiationControl?.walkawayThreshold !== undefined && negotiationControl?.walkawayThreshold !== null) {
+      walkawayThreshold = negotiationControl.walkawayThreshold / 100; // Convert percentage to decimal (20% -> 0.20)
     }
 
     const negotiationConfig: NegotiationConfig = {
       parameters: {
         unit_price: {
-          weight: 0.6,
+          weight: priceWeight,
           direction: 'minimize',
           anchor: priceQuantity.targetUnitPrice * 0.85,
           target: priceQuantity.targetUnitPrice,
@@ -354,14 +374,16 @@ export const createDealWithConfigService = async (
           concession_step: concessionStep,
         },
         payment_terms: {
-          weight: 0.4,
+          weight: termsWeight + deliveryWeight, // Combined terms weight (delivery included)
           options: paymentTermsOptions,
           utility: paymentTermsUtility,
         },
       },
       accept_threshold: acceptThreshold,
       walkaway_threshold: walkawayThreshold,
-      max_rounds: negotiationControl?.maxRounds || 10,
+      max_rounds: maxRounds,
+      // Store priority for counter-offer logic
+      priority: input.priority,
     };
 
     // Store the full wizard configuration in a separate JSON field
@@ -538,16 +560,39 @@ interface SmartDefaultsResponse {
     targetUnitPrice: number | null;
     maxAcceptablePrice: number | null;
     volumeDiscountExpectation: number | null;
+    // New fields for auto-populating from requisition totals
+    totalQuantity: number | null;
+    totalTargetPrice: number | null;
+    totalMaxPrice: number | null;
   };
   paymentTerms: {
     minDays: number;
     maxDays: number;
     advancePaymentLimit: number | null;
+    // Additional payment fields from requisition
+    paymentTermsText: string | null;      // e.g., "Net 30", "Net 60"
+    netPaymentDay: number | null;         // Parsed net payment day
+    prePaymentPercentage: number | null;  // Pre-payment percentage
+    postPaymentPercentage: number | null; // Post-payment percentage
   };
   delivery: {
     typicalDeliveryDays: number | null;
-    maxDeliveryDate?: string | null;
-    negotiationClosureDate?: string | null;
+    // Date fields from requisition for auto-populating wizard
+    deliveryDate?: string | null;         // Maps to preferredDate in wizard
+    maxDeliveryDate?: string | null;      // Maps to requiredDate in wizard
+    negotiationClosureDate?: string | null; // Maps to deadline in wizard Step 3
+  };
+  // Requisition priorities for auto-populating Step 4 weights
+  priorities: {
+    pricePriority: number | null;         // 0-100, weight for price parameters
+    deliveryPriority: number | null;      // 0-100, weight for delivery parameters
+    paymentTermsPriority: number | null;  // 0-100, weight for payment terms
+  };
+  // BATNA and discount limits from requisition
+  negotiationLimits: {
+    batna: number | null;                 // Best Alternative to Negotiated Agreement
+    maxDiscount: number | null;           // Maximum discount allowed
+    discountedValue: number | null;       // Discounted value calculation
   };
   source: 'vendor_history' | 'similar_deals' | 'industry_default' | 'combined';
   confidence: number;
@@ -572,26 +617,59 @@ export const getSmartDefaultsService = async (
       throw new CustomError('Requisition not found', 404);
     }
 
-    // Calculate base target from requisition products
-    let totalTarget = 0;
+    // Calculate totals from requisition products
+    let totalTargetValue = 0;
+    let totalMaxValue = 0;
     let totalQuantity = 0;
+    let hasValidProducts = false;
 
     if (requisition.RequisitionProduct && requisition.RequisitionProduct.length > 0) {
       for (const reqProduct of requisition.RequisitionProduct) {
-        const quantity = (reqProduct as any).qty || 1;
-        const targetPrice = (reqProduct as any).targetPrice || 100;
-        totalTarget += targetPrice * quantity;
-        totalQuantity += quantity;
+        const quantity = (reqProduct as any).qty || 0;
+        const targetPrice = (reqProduct as any).targetPrice;
+        const maxPrice = (reqProduct as any).maximum_price;
+
+        if (quantity > 0) {
+          totalQuantity += quantity;
+
+          // Only add to totals if price values exist
+          if (targetPrice !== null && targetPrice !== undefined) {
+            totalTargetValue += targetPrice * quantity;
+            hasValidProducts = true;
+          }
+          if (maxPrice !== null && maxPrice !== undefined) {
+            totalMaxValue += maxPrice * quantity;
+          }
+        }
       }
     }
 
-    const averageTarget = totalQuantity > 0 ? totalTarget / totalQuantity : 100;
+    // Calculate average for backward compatibility (unit prices)
+    const averageTarget = totalQuantity > 0 && hasValidProducts
+      ? totalTargetValue / totalQuantity
+      : 100;
 
-    // Extract requisition-level dates
+    // Prepare total values - return null if no valid data (user requirement: leave fields empty)
+    const finalTotalQuantity = totalQuantity > 0 ? totalQuantity : null;
+    const finalTotalTargetPrice = hasValidProducts && totalTargetValue > 0
+      ? Math.round(totalTargetValue * 100) / 100
+      : null;
+    const finalTotalMaxPrice = totalMaxValue > 0
+      ? Math.round(totalMaxValue * 100) / 100
+      : null;
+
+    // Extract requisition-level dates for auto-populating wizard
+    // deliveryDate → preferredDate (ideal delivery date)
+    const deliveryDate = requisition.deliveryDate
+      ? new Date(requisition.deliveryDate).toISOString().split('T')[0]
+      : null;
+
+    // maxDeliveryDate → requiredDate (hard deadline)
     const maxDeliveryDate = requisition.maxDeliveryDate
       ? new Date(requisition.maxDeliveryDate).toISOString().split('T')[0]
       : null;
 
+    // negotiationClosureDate → deadline in Step 3
     const negotiationClosureDate = requisition.negotiationClosureDate
       ? new Date(requisition.negotiationClosureDate).toISOString().split('T')[0]
       : null;
@@ -625,21 +703,84 @@ export const getSmartDefaultsService = async (
     const targetUnitPrice = Math.round(averageTarget * 100) / 100;
     const maxAcceptablePrice = Math.round(averageTarget * 1.2 * 100) / 100;
 
+    // Helper to convert priority string ('high', 'medium', 'low') to numeric value (0-100)
+    // If already numeric, parse it directly
+    const convertPriorityToNumber = (priority: string | null | undefined): number | null => {
+      if (!priority) return null;
+
+      // Check if it's already a number
+      const numericValue = parseFloat(priority);
+      if (!isNaN(numericValue)) return numericValue;
+
+      // Convert string priority to numeric scale
+      const priorityLower = priority.toLowerCase().trim();
+      switch (priorityLower) {
+        case 'high':
+          return 50;  // High priority = 50 weight
+        case 'medium':
+          return 30;  // Medium priority = 30 weight
+        case 'low':
+          return 20;  // Low priority = 20 weight
+        default:
+          return null;
+      }
+    };
+
+    // Extract priority values from requisition (stored as strings like 'high', 'medium', 'low' or as numbers)
+    const pricePriority = convertPriorityToNumber(requisition.pricePriority);
+    const deliveryPriority = convertPriorityToNumber(requisition.deliveryPriority);
+    const paymentTermsPriority = convertPriorityToNumber(requisition.paymentTermsPriority);
+
+    // Extract payment terms details from requisition
+    const paymentTermsText = requisition.payment_terms || null;
+    const netPaymentDay = requisition.net_payment_day
+      ? parseInt(requisition.net_payment_day, 10)
+      : null;
+    const prePaymentPercentage = requisition.pre_payment_percentage || null;
+    const postPaymentPercentage = requisition.post_payment_percentage || null;
+
+    // Extract BATNA and discount limits
+    const batna = requisition.batna || null;
+    const maxDiscount = requisition.maxDiscount || null;
+    const discountedValue = requisition.discountedValue || null;
+
     return {
       priceQuantity: {
         targetUnitPrice,
         maxAcceptablePrice,
         volumeDiscountExpectation: avgVolumeDiscount,
+        // New total fields from requisition
+        totalQuantity: finalTotalQuantity,
+        totalTargetPrice: finalTotalTargetPrice,
+        totalMaxPrice: finalTotalMaxPrice,
       },
       paymentTerms: {
-        minDays: 30,
-        maxDays: avgPaymentDays + 15,
-        advancePaymentLimit: 20, // Default 20% advance payment limit
+        minDays: netPaymentDay || 30,  // Use requisition's net payment day if available
+        maxDays: (netPaymentDay || 30) + 30,  // Allow 30 days flexibility
+        advancePaymentLimit: prePaymentPercentage || 20, // Use requisition's pre-payment or default 20%
+        // Additional payment fields from requisition
+        paymentTermsText,
+        netPaymentDay,
+        prePaymentPercentage,
+        postPaymentPercentage,
       },
       delivery: {
         typicalDeliveryDays: avgDeliveryDays,
-        maxDeliveryDate,
-        negotiationClosureDate,
+        deliveryDate,           // Maps to preferredDate in wizard
+        maxDeliveryDate,        // Maps to requiredDate in wizard
+        negotiationClosureDate, // Maps to deadline in wizard Step 3
+      },
+      // Requisition priorities for auto-populating Step 4 weights
+      priorities: {
+        pricePriority,
+        deliveryPriority,
+        paymentTermsPriority,
+      },
+      // BATNA and discount limits from requisition
+      negotiationLimits: {
+        batna,
+        maxDiscount,
+        discountedValue,
       },
       source,
       confidence,
@@ -738,10 +879,25 @@ export const processVendorMessageService = async (
       throw new CustomError('Deal is not in negotiating status', 400);
     }
 
-    // Build negotiation config from requisition or contract
+    // Use stored negotiation config from deal (includes priority-adjusted thresholds and weights)
+    // This ensures the priority settings from deal creation are respected during negotiation
     let config: NegotiationConfig;
-    if (deal.requisitionId) {
+    if (deal.negotiationConfigJson) {
+      // Use the stored config which includes priority-based thresholds, weights, and strategy
+      const storedConfig = deal.negotiationConfigJson as NegotiationConfig & { wizardConfig?: unknown };
+      config = {
+        parameters: storedConfig.parameters,
+        accept_threshold: storedConfig.accept_threshold,
+        escalate_threshold: storedConfig.escalate_threshold,
+        walkaway_threshold: storedConfig.walkaway_threshold,
+        max_rounds: storedConfig.max_rounds,
+        priority: storedConfig.priority,
+      };
+      logger.debug(`Using stored negotiation config for deal ${input.dealId} (priority: ${config.priority})`);
+    } else if (deal.requisitionId) {
+      // Fallback: rebuild from requisition (legacy deals without stored config)
       config = await buildConfigFromRequisition(deal.requisitionId);
+      logger.warn(`Deal ${input.dealId} has no stored config, rebuilding from requisition`);
     } else if (deal.contractId) {
       config = await buildConfigFromContract(deal.contractId);
     } else {
@@ -997,9 +1153,19 @@ export const generatePMResponseAsyncService = async (
       order: [['createdAt', 'ASC']],
     });
 
-    // Build negotiation config
+    // Use stored negotiation config from deal (includes priority-adjusted thresholds and weights)
     let config: NegotiationConfig;
-    if (deal.requisitionId) {
+    if (deal.negotiationConfigJson) {
+      const storedConfig = deal.negotiationConfigJson as NegotiationConfig & { wizardConfig?: unknown };
+      config = {
+        parameters: storedConfig.parameters,
+        accept_threshold: storedConfig.accept_threshold,
+        escalate_threshold: storedConfig.escalate_threshold,
+        walkaway_threshold: storedConfig.walkaway_threshold,
+        max_rounds: storedConfig.max_rounds,
+        priority: storedConfig.priority,
+      };
+    } else if (deal.requisitionId) {
       config = await buildConfigFromRequisition(deal.requisitionId);
     } else if (deal.contractId) {
       config = await buildConfigFromContract(deal.contractId);
@@ -1143,9 +1309,19 @@ export const generatePMFallbackResponseService = async (
       throw new CustomError('Vendor message not found', 404);
     }
 
-    // Build negotiation config
+    // Use stored negotiation config from deal (includes priority-adjusted thresholds and weights)
     let config: NegotiationConfig;
-    if (deal.requisitionId) {
+    if (deal.negotiationConfigJson) {
+      const storedConfig = deal.negotiationConfigJson as NegotiationConfig & { wizardConfig?: unknown };
+      config = {
+        parameters: storedConfig.parameters,
+        accept_threshold: storedConfig.accept_threshold,
+        escalate_threshold: storedConfig.escalate_threshold,
+        walkaway_threshold: storedConfig.walkaway_threshold,
+        max_rounds: storedConfig.max_rounds,
+        priority: storedConfig.priority,
+      };
+    } else if (deal.requisitionId) {
       config = await buildConfigFromRequisition(deal.requisitionId);
     } else if (deal.contractId) {
       config = await buildConfigFromContract(deal.contractId);
@@ -1603,21 +1779,24 @@ export const getDealConfigService = async (dealId: string): Promise<ExtendedNego
       throw new CustomError('Deal not found', 404);
     }
 
-    // Check if deal has stored negotiationConfigJson with wizardConfig
+    // Check if deal has stored negotiationConfigJson (with or without wizardConfig)
     const configJson = deal.negotiationConfigJson as Record<string, unknown> | null;
-    if (configJson && configJson.wizardConfig) {
-      // Return the full config including wizardConfig
+    if (configJson && configJson.parameters) {
+      // Return the stored config including wizardConfig if present
+      // This preserves priority-based thresholds set during deal creation
       return {
         parameters: configJson.parameters as NegotiationConfig['parameters'],
         accept_threshold: configJson.accept_threshold as number,
+        escalate_threshold: (configJson.escalate_threshold as number) ?? 0.50,
         walkaway_threshold: configJson.walkaway_threshold as number,
         max_rounds: configJson.max_rounds as number,
+        priority: configJson.priority as 'HIGH' | 'MEDIUM' | 'LOW' | undefined,
         wizardConfig: configJson.wizardConfig as ExtendedNegotiationConfig['wizardConfig'],
         parameterWeights: configJson.parameterWeights as Record<string, number> | undefined,
       };
     }
 
-    // Fallback: Build config from requisition or contract
+    // Fallback: Build config from requisition or contract (legacy deals)
     let baseConfig: NegotiationConfig;
     if (deal.requisitionId) {
       baseConfig = await buildConfigFromRequisition(deal.requisitionId);
@@ -2327,11 +2506,11 @@ Each suggestion must be a complete, human-like negotiation message that naturall
 
 ${emphasisExamples}
 
-SCENARIO GUIDELINES:
-- HARD: Most aggressive - use anchor price, best terms for buyer
-- MEDIUM: Balanced - use target price, moderate terms
-- SOFT: Flexible - slightly above target, flexible on terms
-- WALK_AWAY: Final position - near max price, signals limit reached
+SCENARIO GUIDELINES (VENDOR PERSPECTIVE - vendors want HIGHER prices):
+- HARD (Strong Position): HIGHEST price - 10% below max acceptable, strong but realistic vendor stance
+- MEDIUM (Balanced Offer): MID price - 50% of range from target to max, fair middle ground
+- SOFT (Flexible Offer): LOWEST price - 25% of range from target to max, near buyer's target, quick close
+- WALK_AWAY: Final position - at max acceptable, signals vendor's absolute limit
 
 Return JSON only (no markdown, no explanation):
 {
@@ -2602,11 +2781,27 @@ Return JSON only (no markdown, no explanation):
         ];
       };
 
+      // VENDOR PERSPECTIVE: Higher prices = better for vendor
+      // Calculate prices relative to buyer's target and max acceptable
+      const priceRange = priceConfig.max_acceptable - priceConfig.target;
+
+      // HARD (Strong Position): 10% below max - strong but realistic vendor stance
+      // Example: If max=$100, HARD=$90
+      const hardPrice = Math.round(priceConfig.max_acceptable * 0.90 * 100) / 100;
+      // MEDIUM (Balanced Offer): 50% of range from target - middle ground
+      // Example: If target=$80, max=$100, MEDIUM=$90 (midpoint)
+      const mediumPrice = Math.round((priceConfig.target + priceRange * 0.50) * 100) / 100;
+      // SOFT (Flexible Offer): 25% of range from target - near target, quick close
+      // Example: If target=$80, max=$100, SOFT=$85
+      const softPrice = Math.round((priceConfig.target + priceRange * 0.25) * 100) / 100;
+      // WALK_AWAY: At max acceptable - final position, vendor's limit
+      const walkAwayPrice = Math.round(priceConfig.max_acceptable * 100) / 100;
+
       return {
-        HARD: generateForScenario('HARD', priceConfig.anchor, idealTerms),
-        MEDIUM: generateForScenario('MEDIUM', priceConfig.target - 5, acceptableTerms),
-        SOFT: generateForScenario('SOFT', priceConfig.target, acceptableTerms),
-        WALK_AWAY: generateForScenario('WALK_AWAY', priceConfig.max_acceptable, idealTerms),
+        HARD: generateForScenario('HARD', hardPrice, idealTerms),
+        MEDIUM: generateForScenario('MEDIUM', mediumPrice, acceptableTerms),
+        SOFT: generateForScenario('SOFT', softPrice, flexibleTerms),
+        WALK_AWAY: generateForScenario('WALK_AWAY', walkAwayPrice, idealTerms),
       };
     };
 

@@ -56,13 +56,13 @@ interface VendorCountResult {
 
 interface VendorStatsResult {
   totalVendors: string;
-  activeActiveVendors: string;
+  activeVendors: string;
   totalInactiveVendors: string;
 }
 
 interface VendorCountStats {
   totalVendors: number;
-  activeActiveVendors: number;
+  activeVendors: number;
   totalInactiveVendors: number;
 }
 
@@ -212,7 +212,7 @@ const repo = {
     const statsQuery = `
       SELECT
         COALESCE(COUNT(*), 0) AS "totalVendors",
-        COALESCE(SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END), 0) AS "activeActiveVendors",
+        COALESCE(SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END), 0) AS "activeVendors",
         COALESCE(SUM(CASE WHEN status = 'inactive' THEN 1 ELSE 0 END), 0) AS "totalInactiveVendors"
       FROM "User"
       WHERE "userType" = 'vendor';
@@ -229,7 +229,7 @@ const repo = {
       },
       vendorCount: {
         totalVendors: Number.parseInt(stats?.totalVendors, 10) || 0,
-        activeActiveVendors: Number.parseInt(stats?.activeActiveVendors, 10) || 0,
+        activeVendors: Number.parseInt(stats?.activeVendors, 10) || 0,
         totalInactiveVendors: Number.parseInt(stats?.totalInactiveVendors, 10) || 0,
       },
     };
@@ -323,7 +323,7 @@ const repo = {
     const statsQuery = `
       SELECT
         COALESCE(COUNT(*), 0) AS "totalVendors",
-        COALESCE(SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END), 0) AS "activeActiveVendors",
+        COALESCE(SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END), 0) AS "activeVendors",
         COALESCE(SUM(CASE WHEN status = 'inactive' THEN 1 ELSE 0 END), 0) AS "totalInactiveVendors"
       FROM "User"
       WHERE "companyId" = :companyId AND "userType" = 'vendor';
@@ -341,7 +341,7 @@ const repo = {
       },
       vendorCount: {
         totalVendors: Number.parseInt(stats?.totalVendors, 10) || 0,
-        activeActiveVendors: Number.parseInt(stats?.activeActiveVendors, 10) || 0,
+        activeVendors: Number.parseInt(stats?.activeVendors, 10) || 0,
         totalInactiveVendors: Number.parseInt(stats?.totalInactiveVendors, 10) || 0,
       },
     };

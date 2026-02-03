@@ -1,5 +1,5 @@
 import { expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
-import sequelize from '../config/database.js';
+import sequelize from '../src/config/database.js';
 
 // Set NODE_ENV to test
 process.env.NODE_ENV = 'test';

@@ -15,6 +15,11 @@ export const createRequisition = async (
   next: NextFunction
 ): Promise<void> => {
   try {
+    console.log('=== CREATE REQUISITION CONTROLLER ===');
+    console.log('Request body:', JSON.stringify(req.body, null, 2));
+    console.log('Content-Type:', req.headers['content-type']);
+    console.log('User context:', req.context);
+
     const attachmentFiles = req.files as Express.Multer.File[];
     const data = await createRequisionService(
       req.body,
@@ -23,6 +28,7 @@ export const createRequisition = async (
     );
     res.status(201).json({ message: 'Requisition created successfully', data });
   } catch (error) {
+    console.error('createRequisition controller error:', error);
     next(error);
   }
 };
@@ -72,12 +78,18 @@ export const updateRequisition = async (
   next: NextFunction
 ): Promise<void> => {
   try {
+    console.log('updateRequisition controller - params:', req.params);
+    console.log('updateRequisition controller - body keys:', Object.keys(req.body));
+    console.log('updateRequisition controller - body:', req.body);
+
     const requisitionId = Number(req.params.requisitionid);
     if (Number.isNaN(requisitionId)) {
       res.status(400).json({ message: 'Invalid requisition ID' });
       return;
     }
     const attachmentFiles = req.files as Express.Multer.File[];
+    console.log('updateRequisition controller - files:', attachmentFiles?.length || 0);
+
     const data = await updateRequisitionService(
       requisitionId,
       req.body,
@@ -86,6 +98,7 @@ export const updateRequisition = async (
     );
     res.status(200).json({ message: 'Requisition updated successfully', data });
   } catch (error) {
+    console.error('updateRequisition controller error:', error);
     next(error);
   }
 };

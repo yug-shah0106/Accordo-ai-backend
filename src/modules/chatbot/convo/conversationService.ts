@@ -208,9 +208,21 @@ export async function processConversationMessage(
     // 2. Get conversation state
     let conversationState = (deal.convoStateJson as ConversationState) || initializeConversationState();
 
-    // 3. Get negotiation config
+    // 3. Get negotiation config - CRITICAL: Use stored config to preserve priority-based thresholds
     let config: NegotiationConfig;
-    if (deal.requisitionId) {
+    if (deal.negotiationConfigJson) {
+      // Use stored negotiation config from deal (includes priority-adjusted thresholds and weights)
+      const storedConfig = deal.negotiationConfigJson as NegotiationConfig & { wizardConfig?: unknown };
+      config = {
+        parameters: storedConfig.parameters,
+        accept_threshold: storedConfig.accept_threshold,
+        escalate_threshold: storedConfig.escalate_threshold,
+        walkaway_threshold: storedConfig.walkaway_threshold,
+        max_rounds: storedConfig.max_rounds,
+        priority: storedConfig.priority,
+      };
+    } else if (deal.requisitionId) {
+      // Fallback to building from requisition (for legacy deals without stored config)
       config = await buildConfigFromRequisition(deal.requisitionId);
     } else {
       throw new CustomError('Deal must be linked to a requisition for negotiation config', 400);

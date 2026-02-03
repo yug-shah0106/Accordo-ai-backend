@@ -39,6 +39,8 @@ export interface NegotiationConfig {
   /** Walk away threshold - utility < this triggers WALK_AWAY (default: 0.30 = 30%) */
   walkaway_threshold: number;
   max_rounds: number;
+  /** Negotiation priority/strategy: HIGH=Maximize Savings, MEDIUM=Fair Deal, LOW=Quick Close */
+  priority?: 'HIGH' | 'MEDIUM' | 'LOW';
 }
 
 const clamp01 = (x: number) => Math.max(0, Math.min(1, x));

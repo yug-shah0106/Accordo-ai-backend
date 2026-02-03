@@ -49,7 +49,11 @@ export const createProjectService = async (
       throw new CustomError('User company not found', 400);
     }
 
-    const payload = { ...projectData, companyId: user.companyId };
+    // Remove pointOfContact from projectData as it's not a model field
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { pointOfContact: _poc, ...cleanProjectData } = projectData as ProjectData & { pointOfContact?: number[] };
+
+    const payload = { ...cleanProjectData, companyId: user.companyId };
     const project = await repo.createProject(payload);
 
     await Promise.all(
@@ -58,7 +62,14 @@ export const createProjectService = async (
 
     return project;
   } catch (error) {
-    const err = error as Error;
+    const err = error as Error & { name?: string; errors?: Array<{ message: string }> };
+    // Provide more specific error messages for Sequelize errors
+    if (err.name === 'SequelizeUniqueConstraintError') {
+      throw new CustomError('A project with this ID already exists', 400);
+    }
+    if (err.name === 'SequelizeValidationError' && err.errors?.length) {
+      throw new CustomError(err.errors.map(e => e.message).join(', '), 400);
+    }
     throw new CustomError(err.message || String(error), 400);
   }
 };

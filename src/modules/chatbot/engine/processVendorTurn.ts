@@ -64,11 +64,26 @@ export interface ProcessVendorTurnResult {
 // ============================================================================
 
 /**
- * Load negotiation config from deal's template
+ * Load negotiation config from deal's stored config or template
+ * CRITICAL: Prioritize stored negotiationConfigJson to preserve priority-based thresholds
  */
 async function loadNegotiationConfig(deal: ChatbotDeal): Promise<NegotiationConfig> {
+  // Priority 1: Use stored negotiation config (includes priority-adjusted thresholds and weights)
+  if (deal.negotiationConfigJson) {
+    const storedConfig = deal.negotiationConfigJson as NegotiationConfig & { wizardConfig?: unknown };
+    return {
+      parameters: storedConfig.parameters,
+      accept_threshold: storedConfig.accept_threshold,
+      escalate_threshold: storedConfig.escalate_threshold,
+      walkaway_threshold: storedConfig.walkaway_threshold,
+      max_rounds: storedConfig.max_rounds,
+      priority: storedConfig.priority,
+    };
+  }
+
+  // Priority 2: Fallback to template config (for legacy deals)
   if (!deal.templateId) {
-    throw new Error('Deal has no template configured');
+    throw new Error('Deal has no negotiation config or template configured');
   }
 
   const template = await models.ChatbotTemplate.findByPk(deal.templateId);
