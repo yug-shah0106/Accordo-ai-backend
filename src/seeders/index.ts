@@ -391,11 +391,13 @@ async function seedRoles(): Promise<void> {
   try {
     const roles = [
       { id: 1, name: 'Super Admin', companyId: 1, isArchived: false },
-      { id: 2, name: 'Procurement Manager', companyId: 1, isArchived: false },
-      { id: 3, name: 'Procurement Manager Approver', companyId: 1, isArchived: false },
-      { id: 4, name: 'HOD Approver', companyId: 1, isArchived: false },
-      { id: 5, name: 'CFO Approver', companyId: 1, isArchived: false },
+      { id: 2, name: 'Admin', companyId: 1, isArchived: false },
+      { id: 3, name: 'CEO', companyId: 1, isArchived: false },
+      { id: 4, name: 'CFO', companyId: 1, isArchived: false },
+      { id: 5, name: 'HOD', companyId: 1, isArchived: false },
       { id: 6, name: 'Vendor User', companyId: null, isArchived: false },
+      { id: 7, name: 'Procurement Manager', companyId: 1, isArchived: false },
+      { id: 8, name: 'Procurement Manager Approver', companyId: 1, isArchived: false },
     ];
 
     for (const roleData of roles) {
@@ -408,6 +410,23 @@ async function seedRoles(): Promise<void> {
     logger.info('Roles seeded successfully');
   } catch (error) {
     logger.error('Error seeding roles:', error);
+    throw error;
+  }
+}
+
+/**
+ * Update roles with createdBy after users are created
+ */
+async function updateRolesCreatedBy(): Promise<void> {
+  try {
+    // Update all roles to set createdBy to Super Admin (user ID 100)
+    await Role.update(
+      { createdBy: 100, updatedBy: 100 },
+      { where: { createdBy: null } }
+    );
+    logger.info('Roles createdBy updated successfully');
+  } catch (error) {
+    logger.error('Error updating roles createdBy:', error);
     throw error;
   }
 }
@@ -427,33 +446,44 @@ async function seedRolePermissions(): Promise<void> {
       { roleId: 1, moduleId: 6, permission: 15 }, // Approvals - full
     ];
 
-    // Procurement Manager - access to projects, requisitions, vendors
-    const procurementPermissions = [
-      { roleId: 2, moduleId: 1, permission: 1 },  // Dashboard - read
+    // Admin - full access (same as Super Admin)
+    const adminPermissions = [
+      { roleId: 2, moduleId: 1, permission: 15 }, // Dashboard - full
+      { roleId: 2, moduleId: 2, permission: 15 }, // User Management - full
       { roleId: 2, moduleId: 3, permission: 15 }, // Projects - full
       { roleId: 2, moduleId: 4, permission: 15 }, // Requisitions - full
-      { roleId: 2, moduleId: 5, permission: 7 },  // Vendors - read/write/update
+      { roleId: 2, moduleId: 5, permission: 15 }, // Vendors - full
+      { roleId: 2, moduleId: 6, permission: 15 }, // Approvals - full
     ];
 
-    // Procurement Manager Approver (L1) - can view and approve requisitions up to $50,000
-    const l1ApproverPermissions = [
-      { roleId: 3, moduleId: 1, permission: 1 },  // Dashboard - read
-      { roleId: 3, moduleId: 4, permission: 3 },  // Requisitions - read/write
-      { roleId: 3, moduleId: 6, permission: 7 },  // Approvals - read/write/update
+    // CEO - full access (same as Super Admin)
+    const ceoPermissions = [
+      { roleId: 3, moduleId: 1, permission: 15 }, // Dashboard - full
+      { roleId: 3, moduleId: 2, permission: 15 }, // User Management - full
+      { roleId: 3, moduleId: 3, permission: 15 }, // Projects - full
+      { roleId: 3, moduleId: 4, permission: 15 }, // Requisitions - full
+      { roleId: 3, moduleId: 5, permission: 15 }, // Vendors - full
+      { roleId: 3, moduleId: 6, permission: 15 }, // Approvals - full
     ];
 
-    // HOD Approver (L2) - can view and approve requisitions up to $250,000
-    const l2ApproverPermissions = [
-      { roleId: 4, moduleId: 1, permission: 1 },  // Dashboard - read
-      { roleId: 4, moduleId: 4, permission: 3 },  // Requisitions - read/write
-      { roleId: 4, moduleId: 6, permission: 7 },  // Approvals - read/write/update
+    // CFO - high level access
+    const cfoPermissions = [
+      { roleId: 4, moduleId: 1, permission: 15 }, // Dashboard - full
+      { roleId: 4, moduleId: 2, permission: 7 },  // User Management - read/write/update
+      { roleId: 4, moduleId: 3, permission: 15 }, // Projects - full
+      { roleId: 4, moduleId: 4, permission: 15 }, // Requisitions - full
+      { roleId: 4, moduleId: 5, permission: 15 }, // Vendors - full
+      { roleId: 4, moduleId: 6, permission: 15 }, // Approvals - full
     ];
 
-    // CFO Approver (L3) - can view and approve all requisitions
-    const l3ApproverPermissions = [
-      { roleId: 5, moduleId: 1, permission: 1 },  // Dashboard - read
-      { roleId: 5, moduleId: 4, permission: 3 },  // Requisitions - read/write
-      { roleId: 5, moduleId: 6, permission: 15 }, // Approvals - full
+    // HOD - department head level
+    const hodPermissions = [
+      { roleId: 5, moduleId: 1, permission: 7 },  // Dashboard - read/write/update
+      { roleId: 5, moduleId: 2, permission: 3 },  // User Management - read/write
+      { roleId: 5, moduleId: 3, permission: 15 }, // Projects - full
+      { roleId: 5, moduleId: 4, permission: 15 }, // Requisitions - full
+      { roleId: 5, moduleId: 5, permission: 7 },  // Vendors - read/write/update
+      { roleId: 5, moduleId: 6, permission: 7 },  // Approvals - read/write/update
     ];
 
     // Vendor User - limited access
@@ -462,13 +492,30 @@ async function seedRolePermissions(): Promise<void> {
       { roleId: 6, moduleId: 4, permission: 1 },  // Requisitions - read
     ];
 
+    // Procurement Manager - access to projects, requisitions, vendors
+    const procurementManagerPermissions = [
+      { roleId: 7, moduleId: 1, permission: 1 },  // Dashboard - read
+      { roleId: 7, moduleId: 3, permission: 15 }, // Projects - full
+      { roleId: 7, moduleId: 4, permission: 15 }, // Requisitions - full
+      { roleId: 7, moduleId: 5, permission: 7 },  // Vendors - read/write/update
+    ];
+
+    // Procurement Manager Approver - can approve requisitions
+    const procurementApproverPermissions = [
+      { roleId: 8, moduleId: 1, permission: 1 },  // Dashboard - read
+      { roleId: 8, moduleId: 4, permission: 3 },  // Requisitions - read/write
+      { roleId: 8, moduleId: 6, permission: 7 },  // Approvals - read/write/update
+    ];
+
     const allPermissions = [
       ...superAdminPermissions,
-      ...procurementPermissions,
-      ...l1ApproverPermissions,
-      ...l2ApproverPermissions,
-      ...l3ApproverPermissions,
+      ...adminPermissions,
+      ...ceoPermissions,
+      ...cfoPermissions,
+      ...hodPermissions,
       ...vendorPermissions,
+      ...procurementManagerPermissions,
+      ...procurementApproverPermissions,
     ];
 
     for (const permData of allPermissions) {
@@ -509,6 +556,7 @@ async function seedUsers(): Promise<void> {
         status: 'active',
         approvalLevel: 'NONE' as const,
         approvalLimit: null,
+        isProtected: true,
       },
       // Admin User
       {
@@ -1841,6 +1889,7 @@ export async function seedAll(): Promise<void> {
 
     // Test data
     await seedUsers();
+    await updateRolesCreatedBy(); // Update roles with createdBy after users exist
     await seedAddresses();
     await seedVendorCompanies(); // Link vendors to customer company
     await seedProducts();

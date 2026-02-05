@@ -53,9 +53,10 @@ export type ConversationIntent =
  * Offer structure (from engine/types.ts)
  * Using snake_case to match engine types
  * UPDATED January 2026: payment_terms now accepts any "Net X" format (X = 1-120 days)
+ * UPDATED February 2026: Changed from unit_price to total_price
  */
 export interface Offer {
-  unit_price: number | null;
+  total_price: number | null;
   payment_terms: string | null;  // Any "Net X" format (e.g., "Net 45", "Net 30", etc.)
   payment_terms_days?: number | null;  // Days value for utility calculations
   delivery_date?: string | null;  // ISO date string (YYYY-MM-DD)

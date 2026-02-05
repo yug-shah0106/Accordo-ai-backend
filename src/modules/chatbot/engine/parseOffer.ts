@@ -135,7 +135,8 @@ export function parseOfferRegex(text: string): Offer {
     }
   }
 
-  const unit_price = priceMatch ? Number(priceMatch[1]) : null;
+  // UPDATED Feb 2026: Changed from unit_price to total_price
+  const total_price = priceMatch ? Number(priceMatch[1]) : null;
 
   // Match various term formats:
   // UPDATED January 2026: Now accepts ANY "Net X" format (X = 1-120 days)
@@ -215,8 +216,9 @@ export function parseOfferRegex(text: string): Offer {
   }
 
   // Return offer with delivery and meta information
+  // UPDATED Feb 2026: Changed from unit_price to total_price
   return {
-    unit_price,
+    total_price,
     payment_terms,
     payment_terms_days,
     delivery_date: delivery.delivery_date,

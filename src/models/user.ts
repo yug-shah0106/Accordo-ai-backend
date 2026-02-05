@@ -34,6 +34,7 @@ export class User extends Model<
   declare status: string;
   declare approvalLevel: CreationOptional<ApprovalLevel>;
   declare approvalLimit: number | null;
+  declare isProtected: CreationOptional<boolean>;
   declare createdAt: CreationOptional<Date>;
   declare updatedAt: CreationOptional<Date>;
 
@@ -108,6 +109,11 @@ export default function userModel(sequelize: Sequelize): typeof User {
         type: DataTypes.DECIMAL(15, 2),
         allowNull: true,
         defaultValue: null,
+      },
+      isProtected: {
+        type: DataTypes.BOOLEAN,
+        allowNull: false,
+        defaultValue: false,
       },
       createdAt: DataTypes.DATE,
       updatedAt: DataTypes.DATE,

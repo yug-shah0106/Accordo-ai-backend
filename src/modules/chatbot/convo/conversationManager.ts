@@ -56,8 +56,8 @@ export function detectVendorPreference(
     if (!prev || !current) continue;
 
     // Check if price changed
-    if (prev.unit_price !== null && current.unit_price !== null) {
-      if (prev.unit_price !== current.unit_price) {
+    if (prev.total_price !== null && current.total_price !== null) {
+      if (prev.total_price !== current.total_price) {
         priceChanges++;
       }
     }
@@ -138,7 +138,7 @@ export function mergeWithLastOffer(
   }
 
   return {
-    unit_price: newOffer.unit_price ?? lastOffer.unit_price,
+    total_price: newOffer.total_price ?? lastOffer.total_price,
     payment_terms: newOffer.payment_terms ?? lastOffer.payment_terms,
   };
 }
@@ -162,7 +162,7 @@ export function determineIntent(
   }
 
   // If no offer extracted yet, ask for one
-  if (vendorOfferExtracted === null || vendorOfferExtracted.unit_price === null) {
+  if (vendorOfferExtracted === null || vendorOfferExtracted.total_price === null) {
     if (round === 0) {
       return 'GREET'; // First message from Accordo
     }
@@ -187,7 +187,7 @@ export function determineIntent(
       }
 
       // If counter-offer has specific values, use direct language
-      if (decision.counterOffer?.unit_price !== null) {
+      if (decision.counterOffer?.total_price !== null) {
         return 'COUNTER_DIRECT';
       }
 
@@ -224,9 +224,9 @@ export function updateConversationState(
   };
 
   // Update last vendor offer
-  if (vendorOffer && vendorOffer.unit_price !== null) {
+  if (vendorOffer && vendorOffer.total_price !== null) {
     newState.lastVendorOffer = {
-      unit_price: vendorOffer.unit_price,
+      total_price: vendorOffer.total_price,
       payment_terms: vendorOffer.payment_terms,
     };
   }

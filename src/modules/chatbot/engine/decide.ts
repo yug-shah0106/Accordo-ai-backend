@@ -115,17 +115,20 @@ function bestTerms(config: NegotiationConfig): string {
 /**
  * Calculate counter-offer price based on priority strategy
  *
- * Priority strategies:
- * - HIGH (Maximize Savings): Counter at 10-20% above target (aggressive, near PM's ideal)
- * - MEDIUM (Fair Deal): Counter at 30-50% of range above target (midpoint compromise)
- * - LOW (Quick Close): Counter at 75-80% of max acceptable (closer to vendor, fast close)
+ * Priority strategies (aggressiveness = how much PM moves toward vendor's offer):
+ * - HIGH (Maximize Savings): 15% of range - PM stays very close to target (hardest negotiator)
+ * - MEDIUM (Fair Deal): 40% of range - PM moves moderately toward vendor
+ * - LOW (Quick Close): 55% of range - PM moves more toward vendor (faster closure)
+ *
+ * Formula: Counter = PM's Target + (Aggressiveness × Range)
+ * Where Range = Vendor's Offer - PM's Target
  */
 function calculateCounterPrice(
   config: NegotiationConfig,
   vendorOffer: Offer,
   round: number
 ): number {
-  const { target, max_acceptable, anchor, concession_step } = config.parameters.unit_price;
+  const { target, max_acceptable, anchor, concession_step } = config.parameters.total_price;
   const priceRange = max_acceptable - target;
   const priority = config.priority || 'MEDIUM';
 
@@ -133,30 +136,32 @@ function calculateCounterPrice(
 
   switch (priority) {
     case 'HIGH': {
-      // Maximize Savings: Counter at 10-20% above target
-      // Use small concessions as rounds progress
-      const aggressiveOffset = Math.min(0.20, 0.10 + round * 0.02); // 10% + 2% per round, max 20%
+      // Maximize Savings: Counter at 15% of range above target (very aggressive)
+      // Small concessions as rounds progress: starts at 10%, max 15%
+      const aggressiveOffset = Math.min(0.15, 0.10 + round * 0.01); // 10% + 1% per round, max 15%
       counterPrice = target + priceRange * aggressiveOffset;
       break;
     }
     case 'LOW': {
-      // Quick Close: Counter at 75-80% of max acceptable
-      // More willing to meet vendor halfway
-      const quickCloseMultiplier = Math.min(0.80, 0.75 + round * 0.01); // 75% + 1% per round, max 80%
-      counterPrice = max_acceptable * quickCloseMultiplier;
+      // Quick Close: Counter at 55% of range above target
+      // More willing to meet vendor halfway for faster closure
+      const quickCloseOffset = Math.min(0.55, 0.50 + round * 0.01); // 50% + 1% per round, max 55%
+      counterPrice = target + priceRange * quickCloseOffset;
       break;
     }
     case 'MEDIUM':
     default: {
-      // Fair Deal: Counter at 30-50% of range above target
-      const balancedOffset = Math.min(0.50, 0.30 + round * 0.05); // 30% + 5% per round, max 50%
+      // Fair Deal: Counter at 40% of range above target
+      const balancedOffset = Math.min(0.40, 0.35 + round * 0.01); // 35% + 1% per round, max 40%
       counterPrice = target + priceRange * balancedOffset;
       break;
     }
   }
 
   // Never counter above vendor's offer (would be illogical)
-  counterPrice = Math.min(counterPrice, vendorOffer.unit_price);
+  if (vendorOffer.total_price !== null) {
+    counterPrice = Math.min(counterPrice, vendorOffer.total_price);
+  }
 
   // Never exceed max acceptable
   counterPrice = Math.min(counterPrice, max_acceptable);
@@ -187,10 +192,10 @@ export function decideNextMove(
     maxRounds: config.max_rounds,
   });
   console.log('[DecideNextMove] Vendor offer:', {
-    unit_price: vendorOffer.unit_price,
+    total_price: vendorOffer.total_price,
     payment_terms: vendorOffer.payment_terms,
-    max_acceptable: config.parameters.unit_price.max_acceptable,
-    target: config.parameters.unit_price.target,
+    max_acceptable: config.parameters.total_price.max_acceptable,
+    target: config.parameters.total_price.target,
   });
 
   // Allow rounds 1..max_rounds, escalate after that
@@ -205,36 +210,36 @@ export function decideNextMove(
 
   // Clarify if missing
   if (
-    vendorOffer.unit_price == null ||
+    vendorOffer.total_price == null ||
     vendorOffer.payment_terms == null
   ) {
     return {
       action: 'ASK_CLARIFY',
       utilityScore: 0,
       counterOffer: null,
-      reasons: ['Missing unit_price or payment_terms in vendor offer.'],
+      reasons: ['Missing total_price or payment_terms in vendor offer.'],
     };
   }
 
-  const max = config.parameters.unit_price.max_acceptable;
+  const max = config.parameters.total_price.max_acceptable;
   const minRoundsBeforeWalkaway = priority === 'HIGH' ? 3 : priority === 'MEDIUM' ? 2 : 1;
 
   // If price exceeds max acceptable
-  if (vendorOffer.unit_price > max) {
+  if (vendorOffer.total_price > max) {
     // In early rounds, counter with max acceptable price instead of walking away
     // This gives vendors a chance to come down to an acceptable range
     if (round < minRoundsBeforeWalkaway) {
       const delivery = getDeliveryForCounter(vendorOffer, config);
       const counterPrice = calculateCounterPrice(config, vendorOffer, round);
       const counter: Offer = {
-        unit_price: counterPrice,
+        total_price: counterPrice,
         payment_terms: bestTerms(config),
         delivery_date: delivery.delivery_date,
         delivery_days: delivery.delivery_days,
       };
 
       console.log('[DecideNextMove] Price exceeds max but protecting early rounds - countering', {
-        vendorPrice: vendorOffer.unit_price,
+        vendorPrice: vendorOffer.total_price,
         maxAcceptable: max,
         counterPrice,
         round,
@@ -245,13 +250,13 @@ export function decideNextMove(
         action: 'COUNTER',
         utilityScore: 0,
         counterOffer: counter,
-        reasons: [`Price $${vendorOffer.unit_price} exceeds our budget of $${max}. I can offer $${counterPrice.toFixed(2)} - can you work within this range?`],
+        reasons: [`Price $${vendorOffer.total_price} exceeds our budget of $${max}. I can offer $${counterPrice.toFixed(2)} - can you work within this range?`],
       };
     }
 
     // After minimum rounds, walk away if price still exceeds max
     console.log('[DecideNextMove] WALK_AWAY: Price exceeds max acceptable after minimum rounds', {
-      vendorPrice: vendorOffer.unit_price,
+      vendorPrice: vendorOffer.total_price,
       maxAcceptable: max,
       round,
       minRoundsBeforeWalkaway,
@@ -260,7 +265,7 @@ export function decideNextMove(
       action: 'WALK_AWAY',
       utilityScore: 0,
       counterOffer: null,
-      reasons: [`Price ${vendorOffer.unit_price} > max acceptable ${max} after ${round} rounds of negotiation`],
+      reasons: [`Price ${vendorOffer.total_price} > max acceptable ${max} after ${round} rounds of negotiation`],
     };
   }
 
@@ -309,7 +314,7 @@ export function decideNextMove(
     const delivery = getDeliveryForCounter(vendorOffer, config);
     const counterPrice = calculateCounterPrice(config, vendorOffer, round);
     const counter: Offer = {
-      unit_price: counterPrice,
+      total_price: counterPrice,
       payment_terms: bestTerms(config),
       delivery_date: delivery.delivery_date,
       delivery_days: delivery.delivery_days,
@@ -332,7 +337,10 @@ export function decideNextMove(
   }
 
   // Escalate Zone: 30% <= utility < 50%
+  // UPDATED Feb 2026: Added minimum rounds protection before escalating
   // For LOW priority (Quick Close), we may want to COUNTER instead of ESCALATE
+  const minRoundsBeforeEscalate = priority === 'HIGH' ? 3 : priority === 'MEDIUM' ? 3 : 2;
+
   if (u < escalateThreshold) {
     const bestTermsOption = bestTerms(config);
     const delivery = getDeliveryForCounter(vendorOffer, config);
@@ -341,7 +349,7 @@ export function decideNextMove(
     const counterPrice = calculateCounterPrice(config, vendorOffer, round);
 
     const counter: Offer = {
-      unit_price: counterPrice,
+      total_price: counterPrice,
       payment_terms: priority === 'LOW' ? nextBetterTerms(config, vendorOffer.payment_terms) : bestTermsOption,
       delivery_date: delivery.delivery_date,
       delivery_days: delivery.delivery_days,
@@ -358,11 +366,38 @@ export function decideNextMove(
       };
     }
 
+    // Early rounds protection: COUNTER instead of ESCALATE in first 2-3 rounds
+    // This gives the negotiation a fair chance before involving human review
+    if (round < minRoundsBeforeEscalate) {
+      console.log('[DecideNextMove] Utility in escalate zone but protecting early rounds - countering instead', {
+        round,
+        minRoundsBeforeEscalate,
+        utility: u,
+        escalateThreshold,
+        counterPrice,
+      });
+
+      return {
+        action: 'COUNTER',
+        utilityScore: u,
+        counterOffer: counter,
+        reasons: [`Utility ${(u * 100).toFixed(0)}% in escalate zone, but round ${round}/${minRoundsBeforeEscalate} - continuing negotiation at $${counterPrice.toFixed(2)}.`],
+      };
+    }
+
+    // After minimum rounds, escalate for human review
+    console.log('[DecideNextMove] Escalating after minimum rounds', {
+      round,
+      minRoundsBeforeEscalate,
+      utility: u,
+      escalateThreshold,
+    });
+
     return {
       action: 'ESCALATE',
       utilityScore: u,
       counterOffer: counter,
-      reasons: [`Utility ${(u * 100).toFixed(0)}% in escalate zone (${(walkawayThreshold * 100).toFixed(0)}%-${(escalateThreshold * 100).toFixed(0)}%). Proposing counter at $${counterPrice.toFixed(2)} but needs human review.`],
+      reasons: [`Utility ${(u * 100).toFixed(0)}% in escalate zone (${(walkawayThreshold * 100).toFixed(0)}%-${(escalateThreshold * 100).toFixed(0)}%) after ${round} rounds. Proposing counter at $${counterPrice.toFixed(2)} but needs human review.`],
     };
   }
 
@@ -387,7 +422,7 @@ export function decideNextMove(
     reasons.push(`Quick Close strategy: Counter at $${counterPrice.toFixed(2)} with ${chosenTerms} terms for faster resolution.`);
   } else {
     // Fair Deal: Try to improve terms while being reasonable on price
-    const wP = config.parameters.unit_price.weight;
+    const wP = config.parameters.total_price.weight;
     const wT = config.parameters.payment_terms.weight;
     const priceUtil = priceUtility(config, counterPrice);
     const priceContribution = wP * priceUtil;
@@ -409,7 +444,7 @@ export function decideNextMove(
   }
 
   const counter: Offer = {
-    unit_price: counterPrice,
+    total_price: counterPrice,
     payment_terms: chosenTerms,
     delivery_date: delivery.delivery_date,
     delivery_days: delivery.delivery_days,

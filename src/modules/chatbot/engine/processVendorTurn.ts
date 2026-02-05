@@ -106,10 +106,10 @@ function generateAccordoResponse(decision: Decision, round: number): string {
       return `Great! I accept your offer. Let's finalize the agreement.`;
 
     case 'COUNTER':
-      if (!counterOffer || !counterOffer.unit_price || !counterOffer.payment_terms) {
+      if (!counterOffer || !counterOffer.total_price || !counterOffer.payment_terms) {
         return `I'd like to discuss this further. Can we explore other options?`;
       }
-      return `Thank you for your offer. I'd like to propose a counter-offer: $${counterOffer.unit_price.toFixed(
+      return `Thank you for your offer. I'd like to propose a counter-offer: $${counterOffer.total_price.toFixed(
         2
       )} per unit with ${counterOffer.payment_terms} payment terms. Does this work for you?`;
 
@@ -207,7 +207,7 @@ export async function processVendorTurn(
     const extractedOffer = parseOfferRegex(vendorMessage);
 
     logger.info(`Extracted offer:`, {
-      unit_price: extractedOffer.unit_price,
+      total_price: extractedOffer.total_price,
       payment_terms: extractedOffer.payment_terms,
       meta: extractedOffer.meta,
     });
@@ -234,7 +234,7 @@ export async function processVendorTurn(
 
     let explainability: Explainability | null = null;
 
-    if (extractedOffer.unit_price !== null && extractedOffer.payment_terms !== null) {
+    if (extractedOffer.total_price !== null && extractedOffer.payment_terms !== null) {
       explainability = computeExplainability(config, extractedOffer, decision);
       logger.info(`Computed explainability:`, {
         total_utility: explainability.utilities.total,
@@ -263,7 +263,7 @@ export async function processVendorTurn(
         role: 'VENDOR',
         content: vendorMessage,
         extractedOffer:
-          extractedOffer.unit_price !== null || extractedOffer.payment_terms !== null
+          extractedOffer.total_price !== null || extractedOffer.payment_terms !== null
             ? (extractedOffer as any)
             : null,
         engineDecision: null, // Vendor messages don't have engine decisions

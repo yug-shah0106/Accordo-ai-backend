@@ -343,9 +343,17 @@ export function buildWeightedConfig(
 /**
  * Convert legacy negotiation config to weighted format
  * For backwards compatibility with existing deals
+ * UPDATED Feb 2026: Now accepts both total_price (new) and unit_price (legacy)
  */
 export function convertLegacyConfig(
   legacyConfig: {
+    total_price?: {
+      weight?: number;
+      anchor?: number;
+      target?: number;
+      max_acceptable?: number;
+      concession_step?: number;
+    };
     unit_price?: {
       weight?: number;
       anchor?: number;
@@ -365,12 +373,12 @@ export function convertLegacyConfig(
 ): WeightedNegotiationConfig {
   const parameters: Record<string, WeightedParameterConfig> = {};
 
-  // Convert unit price
-  if (legacyConfig.unit_price) {
-    const priceConfig = legacyConfig.unit_price;
-    parameters.unitPrice = {
-      id: "unitPrice",
-      name: "Unit Price",
+  // Convert total price (new format) or unit price (legacy)
+  const priceConfig = legacyConfig.total_price || legacyConfig.unit_price;
+  if (priceConfig) {
+    parameters.totalPrice = {
+      id: "totalPrice",
+      name: "Total Price",
       weight: priceConfig.weight ?? 60,
       source: "step2",
       utilityType: "linear",
@@ -407,17 +415,20 @@ export function convertLegacyConfig(
     walkAway: legacyConfig.walkaway_threshold ?? DEFAULT_THRESHOLDS.walkAway,
   };
 
+  // Use total_price (new) or fall back to unit_price (legacy) for output
+  const outputPriceConfig = legacyConfig.total_price || legacyConfig.unit_price;
+
   return {
     parameters,
     thresholds,
     maxRounds: legacyConfig.max_rounds ?? 5,
     legacyConfig: {
-      unit_price: {
-        weight: legacyConfig.unit_price?.weight ?? 60,
-        anchor: legacyConfig.unit_price?.anchor ?? 0,
-        target: legacyConfig.unit_price?.target ?? 0,
-        max_acceptable: legacyConfig.unit_price?.max_acceptable ?? 0,
-        concession_step: legacyConfig.unit_price?.concession_step ?? 0,
+      total_price: {
+        weight: outputPriceConfig?.weight ?? 60,
+        anchor: outputPriceConfig?.anchor ?? 0,
+        target: outputPriceConfig?.target ?? 0,
+        max_acceptable: outputPriceConfig?.max_acceptable ?? 0,
+        concession_step: outputPriceConfig?.concession_step ?? 0,
       },
       payment_terms: {
         weight: legacyConfig.payment_terms?.weight ?? 40,

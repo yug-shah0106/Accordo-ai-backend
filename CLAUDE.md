@@ -119,7 +119,7 @@ Copy `.env.example` to `.env`. Key settings:
 - `PORT=5002` - Backend API port
 - `DB_*` - PostgreSQL connection
 - `JWT_*` - Authentication tokens
-- `LLM_BASE_URL`, `LLM_MODEL` - Ollama config (default: llama3.2)
+- `LLM_BASE_URL`, `LLM_MODEL` - Ollama config (default: qwen3)
 - `EMAIL_PROVIDER` - 'nodemailer' or 'sendmail'
 - `EMBEDDING_SERVICE_URL` - Python embedding service
 

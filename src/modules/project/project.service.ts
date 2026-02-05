@@ -107,9 +107,21 @@ export const getProjectsService = async (
     };
 
     if (search) {
-      (queryOptions.where as Record<string, unknown>).projectName = {
-        [Op.like]: `%${search}%`,
-      };
+      // Multi-field OR search: Project ID, Project Name, Business Category, Tenure
+      // Note: POC search is handled via include in repo
+      const searchConditions: Record<string, unknown>[] = [
+        { projectId: { [Op.iLike]: `%${search}%` } },
+        { projectName: { [Op.iLike]: `%${search}%` } },
+        { typeOfProject: { [Op.iLike]: `%${search}%` } },
+      ];
+
+      // If search is a number, also search by tenure
+      const numericSearch = Number(search);
+      if (!isNaN(numericSearch)) {
+        searchConditions.push({ tenureInDays: numericSearch });
+      }
+
+      (queryOptions.where as Record<string, unknown>)[Op.or as unknown as string] = searchConditions;
     }
 
     if (filters) {
@@ -124,7 +136,7 @@ export const getProjectsService = async (
       }
     }
 
-    const { rows, count } = await repo.getProjects(queryOptions, userId);
+    const { rows, count } = await repo.getProjects(queryOptions, userId, search);
     return {
       data: rows,
       total: count,

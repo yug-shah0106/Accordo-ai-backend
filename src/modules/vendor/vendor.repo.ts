@@ -82,8 +82,11 @@ const applyFilters = (rows: VendorWithCounts[], queryOptions: QueryOptions): Ven
 
   if (queryOptions.search) {
     const term = queryOptions.search.toLowerCase();
+    // Multi-field OR search: Vendor ID, Name, Email
     filtered = filtered.filter((row) =>
-      row.Vendor?.name?.toLowerCase().includes(term)
+      String(row.Vendor?.id || '').toLowerCase().includes(term) ||
+      row.Vendor?.name?.toLowerCase().includes(term) ||
+      row.Vendor?.email?.toLowerCase().includes(term)
     );
   }
 

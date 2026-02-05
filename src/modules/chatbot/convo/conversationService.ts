@@ -40,7 +40,7 @@ import {
   shouldAutoStartConversation,
   getDefaultGreeting,
 } from './conversationManager.js';
-import { generateAccordoReply } from './llamaReplyGenerator.js';
+import { generateAccordoReply } from './openaiReplyGenerator.js';
 
 /**
  * Start a new conversation
@@ -241,7 +241,7 @@ export async function processConversationMessage(
     let decision: Decision;
     let explainability: Explainability | null = null;
 
-    if (vendorOffer.unit_price !== null && vendorOffer.payment_terms !== null) {
+    if (vendorOffer.total_price !== null && vendorOffer.payment_terms !== null) {
       decision = decideNextMove(config, vendorOffer, deal.round + 1);
       explainability = computeExplainability(config, vendorOffer, decision);
     } else {
@@ -250,7 +250,7 @@ export async function processConversationMessage(
         action: 'ASK_CLARIFY',
         utilityScore: 0,
         counterOffer: null,
-        reasons: ['Missing complete offer (unit_price or payment_terms)'],
+        reasons: ['Missing complete offer (total_price or payment_terms)'],
       };
     }
 
@@ -281,14 +281,14 @@ export async function processConversationMessage(
       content: msg.content,
     }));
 
-    // 11. Generate Accordo reply using LLM
+    // 11. Generate Accordo reply using OpenAI GPT-3.5 (with Qwen3 fallback)
     const accordoReplyContent = await generateAccordoReply(intent, conversationHistory, {
       counterOffer: decision.counterOffer || undefined,
       vendorOffer,
       decision,
       preference: detectedPreference,
       refusalType,
-    });
+    }, dealId);
 
     // 12. Update conversation state
     const newConversationState = updateConversationState(

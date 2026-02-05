@@ -35,10 +35,10 @@ OPENAI_API_KEY=
 # Base URL where Ollama is running (default: http://localhost:11434)
 LLM_BASE_URL=http://localhost:11434
 
-# Model name to use (default: llama3.2)
-# Available models: llama3.2, llama3.1:8b, mistral, llama3:70b, etc.
+# Model name to use (default: qwen3)
+# Available models: qwen3, llama3.2, mistral, etc.
 # Run 'ollama list' to see available models
-LLM_MODEL=llama3.2
+LLM_MODEL=qwen3
 
 # Request timeout in milliseconds (default: 60000 = 60 seconds)
 LLM_TIMEOUT=60000

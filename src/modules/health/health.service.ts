@@ -1,6 +1,7 @@
 import { sequelize } from '../../config/database.js';
 import env from '../../config/env.js';
 import logger from '../../config/logger.js';
+import { checkHealth as checkOpenAIHealth } from '../../services/openai.service.js';
 
 export interface ServiceStatus {
   name: string;
@@ -109,49 +110,30 @@ async function checkLLM(): Promise<ServiceStatus> {
 }
 
 /**
- * Check Python embedding service
+ * Check embedding service via the provider-based embedding client
  */
 async function checkEmbeddingService(): Promise<ServiceStatus> {
   const start = Date.now();
   try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 5000);
-
-    const response = await fetch(`${env.vector.embeddingServiceUrl}/health`, {
-      signal: controller.signal,
-    });
-    clearTimeout(timeout);
-
+    const { embeddingClient } = await import('../vector/embedding.client.js');
+    const health = await embeddingClient.checkHealth();
     const latency = Date.now() - start;
 
-    if (response.ok) {
-      const data = await response.json() as {
-        status: string;
-        device?: string;
-        model?: string;
-        embedding_dim?: number;
-      };
-
-      return {
-        name: 'embedding',
-        status: 'healthy',
-        latency,
-        message: `Embedding service running on ${data.device || 'unknown device'}`,
-        details: {
-          url: env.vector.embeddingServiceUrl,
-          model: data.model || env.vector.embeddingModel,
-          dimension: data.embedding_dim || env.vector.embeddingDimension,
-          device: data.device,
-        },
-      };
-    } else {
-      return {
-        name: 'embedding',
-        status: 'unhealthy',
-        latency,
-        message: `Embedding service responded with status ${response.status}`,
-      };
-    }
+    const isHealthy = health.status === 'healthy';
+    return {
+      name: 'embedding',
+      status: isHealthy ? 'healthy' : health.status === 'initializing' ? 'degraded' : 'unhealthy',
+      latency,
+      message: isHealthy
+        ? `Embedding provider '${env.vector.embeddingProvider}' running on ${health.device}`
+        : `Embedding provider '${env.vector.embeddingProvider}' status: ${health.status}`,
+      details: {
+        provider: env.vector.embeddingProvider,
+        model: health.model,
+        dimension: health.dimension,
+        device: health.device,
+      },
+    };
   } catch (error) {
     const latency = Date.now() - start;
     return {
@@ -160,7 +142,7 @@ async function checkEmbeddingService(): Promise<ServiceStatus> {
       latency,
       message: error instanceof Error ? error.message : 'Embedding service unavailable',
       details: {
-        url: env.vector.embeddingServiceUrl,
+        provider: env.vector.embeddingProvider,
       },
     };
   }
@@ -236,6 +218,43 @@ async function checkRedis(): Promise<ServiceStatus | null> {
 }
 
 /**
+ * Check OpenAI GPT-3.5 service
+ */
+async function checkOpenAI(): Promise<ServiceStatus> {
+  const start = Date.now();
+  try {
+    const health = await checkOpenAIHealth();
+    const latency = Date.now() - start;
+
+    return {
+      name: 'openai',
+      status: health.available ? 'healthy' : 'degraded',
+      latency,
+      message: health.available
+        ? `OpenAI GPT-3.5 available (${health.model})`
+        : health.error || 'OpenAI not available (will use Qwen3 fallback)',
+      details: {
+        model: health.model,
+        available: health.available,
+        fallbackAvailable: true,
+      },
+    };
+  } catch (error) {
+    const latency = Date.now() - start;
+    return {
+      name: 'openai',
+      status: 'degraded',
+      latency,
+      message: 'OpenAI check failed (will use Qwen3 fallback)',
+      details: {
+        error: error instanceof Error ? error.message : String(error),
+        fallbackAvailable: true,
+      },
+    };
+  }
+}
+
+/**
  * Check AWS SES email service
  */
 async function checkEmailService(): Promise<ServiceStatus> {
@@ -274,6 +293,7 @@ export async function getHealthReport(): Promise<HealthReport> {
   const checks = await Promise.all([
     checkDatabase(),
     checkLLM(),
+    checkOpenAI(),
     checkEmbeddingService(),
     checkRedis(),
     checkEmailService(),

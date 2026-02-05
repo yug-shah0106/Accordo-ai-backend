@@ -6,6 +6,7 @@ import {
   getUserService,
   updateUserService,
   getAllUsersService,
+  deleteUserService,
 } from "./user.service.js";
 
 /**
@@ -143,6 +144,26 @@ export const getUserRolePermission = async (
   try {
     const data = await getUserService(req.params.userid);
     res.status(201).json({ message: "User Role Permission", data });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Delete a user
+ */
+export const deleteUser = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const deletedCount = await deleteUserService(req.params.userid);
+    if (deletedCount === 0) {
+      res.status(404).json({ message: "User not found" });
+      return;
+    }
+    res.status(200).json({ message: "User deleted successfully" });
   } catch (error) {
     next(error);
   }

@@ -1,3 +1,4 @@
+import { Op } from 'sequelize';
 import repo from './requisition.repo.js';
 import userRepo from '../user/user.repo.js';
 import { CustomError } from '../../utils/custom-error.js';
@@ -270,7 +271,17 @@ export const getRequisitionsService = async (
     };
 
     if (search) {
-      queryOptions.where = util.filterUtil(search as any);
+      // Multi-field OR search: Project ID (via Project), RFQ ID, Name (subject), Category
+      // Note: Vendor search is handled via Contract -> Vendor include in repo
+      queryOptions.where = {
+        [Op.or]: [
+          { rfqId: { [Op.iLike]: `%${search}%` } },
+          { subject: { [Op.iLike]: `%${search}%` } },
+          { category: { [Op.iLike]: `%${search}%` } },
+        ],
+      };
+      // Store search term for vendor name search in repo
+      (queryOptions as any).searchTerm = search;
     }
 
     if (projectId) {

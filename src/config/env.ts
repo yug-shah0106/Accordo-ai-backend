@@ -47,7 +47,15 @@ export interface LLMConfig {
   timeout: number;
 }
 
+export interface OpenAIConfig {
+  apiKey?: string;
+  model: string;
+  maxTokens: number;
+  temperature: number;
+}
+
 export interface VectorConfig {
+  embeddingProvider: 'openai' | 'bedrock' | 'local';
   embeddingServiceUrl: string;
   embeddingModel: string;
   embeddingDimension: number;
@@ -56,6 +64,9 @@ export interface VectorConfig {
   similarityThreshold: number;
   enableRealTimeVectorization: boolean;
   migrationBatchSize: number;
+  awsRegion: string;
+  awsAccessKeyId?: string;
+  awsSecretAccessKey?: string;
 }
 
 export interface CORSConfig {
@@ -65,7 +76,6 @@ export interface CORSConfig {
 
 export interface EnvironmentConfig {
   nodeEnv: string;
-  openaiApiKey?: string;
   port: number;
   logLevel: string;
   database: DatabaseConfig;
@@ -74,6 +84,7 @@ export interface EnvironmentConfig {
   smtp: SMTPConfig;
   redisUrl?: string;
   llm: LLMConfig;
+  openai: OpenAIConfig;
   vector: VectorConfig;
   cors: CORSConfig;
   vendorPortalUrl: string;
@@ -84,7 +95,6 @@ export interface EnvironmentConfig {
 
 export const env: EnvironmentConfig = {
   nodeEnv: process.env.NODE_ENV || 'development',
-  openaiApiKey: process.env.OPENAI_API_KEY,
   port: Number(process.env.PORT || 5002),
   logLevel: process.env.LOG_LEVEL || 'info',
   database: {
@@ -120,19 +130,29 @@ export const env: EnvironmentConfig = {
   redisUrl: process.env.REDIS_URL,
   llm: {
     baseURL: process.env.LLM_BASE_URL || 'http://localhost:11434',
-    model: process.env.LLM_MODEL || 'llama3.1',
+    model: process.env.LLM_MODEL || 'qwen3',
     negotiationModel: process.env.LLM_NEGOTIATION_MODEL,
     timeout: Number(process.env.LLM_TIMEOUT || 60000),
   },
+  openai: {
+    apiKey: process.env.OPENAI_API_KEY,
+    model: process.env.OPENAI_MODEL || 'gpt-3.5-turbo',
+    maxTokens: Number(process.env.OPENAI_MAX_TOKENS || 1000),
+    temperature: Number(process.env.OPENAI_TEMPERATURE || 0.7),
+  },
   vector: {
+    embeddingProvider: (process.env.EMBEDDING_PROVIDER || 'local') as 'openai' | 'bedrock' | 'local',
     embeddingServiceUrl: process.env.EMBEDDING_SERVICE_URL || 'http://localhost:5003',
-    embeddingModel: process.env.EMBEDDING_MODEL || 'BAAI/bge-large-en-v1.5',
+    embeddingModel: process.env.EMBEDDING_MODEL || '',
     embeddingDimension: Number(process.env.EMBEDDING_DIMENSION || 1024),
     embeddingTimeout: Number(process.env.EMBEDDING_TIMEOUT || 30000),
     defaultTopK: Number(process.env.VECTOR_DEFAULT_TOP_K || 5),
     similarityThreshold: Number(process.env.VECTOR_SIMILARITY_THRESHOLD || 0.7),
     enableRealTimeVectorization: process.env.ENABLE_REALTIME_VECTORIZATION !== 'false',
     migrationBatchSize: Number(process.env.VECTOR_MIGRATION_BATCH_SIZE || 100),
+    awsRegion: process.env.AWS_REGION || 'us-east-1',
+    awsAccessKeyId: process.env.AWS_ACCESS_KEY_ID,
+    awsSecretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
   },
   cors: {
     origin: process.env.CORS_ORIGIN

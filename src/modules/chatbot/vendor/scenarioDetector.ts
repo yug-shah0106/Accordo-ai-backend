@@ -47,19 +47,19 @@ export function detectVendorScenario(messages: ChatbotMessage[]): ScenarioDetect
 
     for (let i = 1; i < vendorMessages.length; i++) {
       const prevOffer = vendorMessages[i - 1].extractedOffer as {
-        unit_price: number | null;
+        total_price: number | null;
         payment_terms: string | null;
       } | null;
       const currentOffer = vendorMessages[i].extractedOffer as {
-        unit_price: number | null;
+        total_price: number | null;
         payment_terms: string | null;
       } | null;
 
       if (!prevOffer || !currentOffer) continue;
-      if (prevOffer.unit_price === null || currentOffer.unit_price === null) continue;
+      if (prevOffer.total_price === null || currentOffer.total_price === null) continue;
 
       // Calculate concession (price reduction)
-      const concession = prevOffer.unit_price - currentOffer.unit_price;
+      const concession = prevOffer.total_price - currentOffer.total_price;
 
       if (concession > 0) {
         // Only count positive concessions (price reductions)

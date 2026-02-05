@@ -161,7 +161,7 @@ export const checkPermissionService = async (
   moduleId: number,
   permission: PermissionLevel
 ): Promise<boolean> => {
-  if (moduleId >= 6 || permission >= 4) {
+  if (moduleId > 6 || permission >= 4) {
     throw new CustomError(`Incorrect module name or permission`, 401);
   }
 

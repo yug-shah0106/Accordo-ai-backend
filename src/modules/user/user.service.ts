@@ -135,12 +135,17 @@ export const getAllUsersService = async (
     };
 
     if (search) {
+      // Multi-field OR search: Name, Email, Phone, Role (via include)
       queryOptions.where = {
         ...queryOptions.where,
-        name: {
-          [Op.like]: `%${search}%`,
-        },
+        [Op.or]: [
+          { name: { [Op.iLike]: `%${search}%` } },
+          { email: { [Op.iLike]: `%${search}%` } },
+          { phone: { [Op.iLike]: `%${search}%` } },
+        ],
       };
+      // Store search term for role name search in repo
+      (queryOptions as any).searchTerm = search;
     }
 
     if (filters) {
@@ -242,8 +247,35 @@ export const updateUserService = async (
   userData: UpdateUserData
 ): Promise<[affectedCount: number]> => {
   try {
+    // Check if user is protected and trying to change role
+    if (userData.roleId !== undefined) {
+      const user = await repo.getUser(userId);
+      if (user?.isProtected) {
+        throw new CustomError("Cannot modify role of a protected user", 403);
+      }
+    }
     return repo.updateUser(userId, userData);
   } catch (error) {
+    if (error instanceof CustomError) throw error;
+    throw new CustomError(`Service ${error}`, 400);
+  }
+};
+
+/**
+ * Delete a user by ID
+ */
+export const deleteUserService = async (userId: number | string): Promise<number> => {
+  try {
+    const user = await repo.getUser(userId);
+    if (!user) {
+      throw new CustomError("User not found", 404);
+    }
+    if (user.isProtected) {
+      throw new CustomError("Cannot delete a protected super admin user", 403);
+    }
+    return repo.deleteUser(userId);
+  } catch (error) {
+    if (error instanceof CustomError) throw error;
     throw new CustomError(`Service ${error}`, 400);
   }
 };

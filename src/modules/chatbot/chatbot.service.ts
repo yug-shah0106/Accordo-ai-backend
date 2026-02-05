@@ -173,7 +173,7 @@ export const buildConfigFromRequisition = async (
 
   return {
     parameters: {
-      unit_price: {
+      total_price: {
         weight: 0.6,
         direction: 'minimize',
         anchor,
@@ -365,7 +365,7 @@ export const createDealWithConfigService = async (
 
     const negotiationConfig: NegotiationConfig = {
       parameters: {
-        unit_price: {
+        total_price: {
           weight: priceWeight,
           direction: 'minimize',
           anchor: priceQuantity.targetUnitPrice * 0.85,
@@ -835,12 +835,12 @@ const generateAccordoResponseText = (decision: Decision, config: NegotiationConf
   switch (action) {
     case 'ACCEPT':
       const acceptDelivery = deliveryText ? ` and delivery by ${deliveryText}` : '';
-      return `I'm pleased to accept your offer. We have a deal at $${counterOffer?.unit_price || 'agreed'} with ${counterOffer?.payment_terms || 'agreed'} payment terms${acceptDelivery}. Thank you for the negotiation.`;
+      return `I'm pleased to accept your offer. We have a deal at $${counterOffer?.total_price || 'agreed'} with ${counterOffer?.payment_terms || 'agreed'} payment terms${acceptDelivery}. Thank you for the negotiation.`;
 
     case 'COUNTER':
-      const targetPrice = config.parameters.unit_price.target;
-      const priceText = counterOffer?.unit_price
-        ? `$${counterOffer.unit_price}`
+      const targetPrice = config.parameters.total_price.target;
+      const priceText = counterOffer?.total_price
+        ? `$${counterOffer.total_price}`
         : `$${targetPrice}`;
       const termsText = counterOffer?.payment_terms || 'Net 60';
       const counterDelivery = deliveryText ? `, delivery by ${deliveryText}` : '';
@@ -851,7 +851,7 @@ const generateAccordoResponseText = (decision: Decision, config: NegotiationConf
 
     case 'ESCALATE':
       const escalateDelivery = deliveryText ? `, delivery by ${deliveryText}` : '';
-      return `This negotiation has reached a point where I need to escalate it to a human decision-maker for review. Our counter-proposal is ${counterOffer?.unit_price ? `$${counterOffer.unit_price}` : 'pending'} with ${counterOffer?.payment_terms || 'negotiable'} terms${escalateDelivery}. Thank you for your patience.`;
+      return `This negotiation has reached a point where I need to escalate it to a human decision-maker for review. Our counter-proposal is ${counterOffer?.total_price ? `$${counterOffer.total_price}` : 'pending'} with ${counterOffer?.payment_terms || 'negotiable'} terms${escalateDelivery}. Thank you for your patience.`;
 
     case 'ASK_CLARIFY':
       return `I need some clarification on your offer. Could you please provide more details about the pricing, payment terms, and delivery timeline?`;
@@ -1881,7 +1881,7 @@ export const getDealUtilityService = async (
       // Cast negotiationConfigJson for type safety
       const configJson = deal.negotiationConfigJson as Record<string, any> | null;
       latestOffer = {
-        unitPrice: offer.unit_price,
+        unitPrice: offer.total_price,
         paymentTerms: offer.payment_terms,
         // Additional fields from deal config if available
         deliveryDate: configJson?.delivery?.targetDate ?? null,
@@ -1893,7 +1893,7 @@ export const getDealUtilityService = async (
 
     // Convert legacy config to weighted format if needed
     const weightedConfig = convertLegacyConfig({
-      unit_price: config.parameters.unit_price,
+      total_price: config.parameters.total_price,
       payment_terms: config.parameters.payment_terms,
       accept_threshold: config.accept_threshold,
       walkaway_threshold: config.walkaway_threshold,
@@ -2418,7 +2418,7 @@ export const generateScenarioSuggestionsService = async (
       .join('\n');
 
     // Extract config values with fallbacks
-    const priceConfig = config.parameters?.unit_price || { anchor: 100, target: 90, max_acceptable: 120, concession_step: 2 };
+    const priceConfig = config.parameters?.total_price || { anchor: 100, target: 90, max_acceptable: 120, concession_step: 2 };
     const termsConfig = config.parameters?.payment_terms || { options: ['Net 30', 'Net 60', 'Net 90'] as const };
     const idealTerms = termsConfig.options?.[0] || 'Net 30';
     const acceptableTerms = termsConfig.options?.[1] || 'Net 60';
@@ -2880,7 +2880,7 @@ Return JSON only (no markdown, no explanation):
           suggestionsJson: suggestions,
           conversationContext,
           configSnapshot: config,
-          llmModel: process.env.LLM_MODEL || 'llama3.1',
+          llmModel: process.env.LLM_MODEL || 'qwen3',
           generationSource,
         });
 
@@ -3303,13 +3303,13 @@ export const getRequisitionDealsService = async (
       if (lastVendorMessage?.extractedOffer) {
         const offer = lastVendorMessage.extractedOffer as any;
         latestOffer = {
-          unitPrice: offer?.price || offer?.unit_price || offer?.unitPrice || null,
+          unitPrice: offer?.price || offer?.total_price || offer?.unitPrice || null,
           paymentTerms: offer?.paymentTerms || offer?.payment_terms || null,
         };
       } else if (deal.latestOfferJson || deal.latestVendorOffer) {
         const offer = (deal.latestOfferJson || deal.latestVendorOffer) as any;
         latestOffer = {
-          unitPrice: offer?.price || offer?.unit_price || offer?.unitPrice || null,
+          unitPrice: offer?.price || offer?.total_price || offer?.unitPrice || null,
           paymentTerms: offer?.payment_terms || offer?.paymentTerms || null,
         };
       }
@@ -3605,7 +3605,7 @@ export const getDealSummaryService = async (dealId: string): Promise<DealSummary
     // For other statuses, show the last known offer
     if (lastVendorMessage?.extractedOffer) {
       const offer = lastVendorMessage.extractedOffer as any;
-      finalOffer.unitPrice = offer?.price || offer?.unit_price || offer?.unitPrice || null;
+      finalOffer.unitPrice = offer?.price || offer?.total_price || offer?.unitPrice || null;
       finalOffer.paymentTerms = offer?.paymentTerms || offer?.payment_terms || null;
       // Convert deliveryDays to a date if we have it
       if (offer?.deliveryDays) {
@@ -3618,7 +3618,7 @@ export const getDealSummaryService = async (dealId: string): Promise<DealSummary
     // Fallback to deal-level data if messages don't have the offer
     if (!finalOffer.unitPrice && (deal.latestOfferJson || deal.latestVendorOffer)) {
       const offer = (deal.latestOfferJson || deal.latestVendorOffer) as any;
-      finalOffer.unitPrice = offer?.price || offer?.unit_price || offer?.unitPrice || null;
+      finalOffer.unitPrice = offer?.price || offer?.total_price || offer?.unitPrice || null;
       finalOffer.paymentTerms = offer?.payment_terms || offer?.paymentTerms || null;
     }
 
@@ -4533,7 +4533,7 @@ import {
  *
  * UPDATED January 2026: Now handles multiple config structures:
  * 1. wizardConfig.priceQuantity.targetUnitPrice (new wizard deals)
- * 2. parameters.unit_price.target (engine config format)
+ * 2. parameters.total_price.target (engine config format)
  * 3. Root level targetPrice/maxAcceptablePrice (legacy seeded deals)
  */
 const extractPmStance = (deal: ChatbotDeal): PmStance => {
@@ -4546,16 +4546,16 @@ const extractPmStance = (deal: ChatbotDeal): PmStance => {
   const delivery = (wizardConfig?.delivery || {}) as Record<string, string>;
   const negotiationControl = (wizardConfig?.negotiationControl || {}) as Record<string, number>;
 
-  // Also check for engine config format (parameters.unit_price)
+  // Also check for engine config format (parameters.total_price)
   const parameters = configJson?.parameters as Record<string, Record<string, number>> | undefined;
-  const unitPriceConfig = parameters?.unit_price || {};
+  const unitPriceConfig = parameters?.total_price || {};
 
   // Also check for legacy root-level config (seeded deals)
   const rootConfig = configJson as Record<string, number> | null;
 
   // Extract target price with fallback chain:
   // 1. wizardConfig.priceQuantity.targetUnitPrice (new wizard deals)
-  // 2. parameters.unit_price.target (engine config format)
+  // 2. parameters.total_price.target (engine config format)
   // 3. root level targetPrice (legacy seeded deals)
   // 4. default 100
   const targetUnitPrice =
@@ -4566,7 +4566,7 @@ const extractPmStance = (deal: ChatbotDeal): PmStance => {
 
   // Extract max price with fallback chain:
   // 1. wizardConfig.priceQuantity.maxAcceptablePrice (new wizard deals)
-  // 2. parameters.unit_price.max_acceptable (engine config format)
+  // 2. parameters.total_price.max_acceptable (engine config format)
   // 3. root level maxAcceptablePrice (legacy seeded deals)
   // 4. default to target * 1.2
   const maxAcceptablePrice =
@@ -4647,7 +4647,7 @@ export const startNegotiationService = async (dealId: string): Promise<{
       role: 'ACCORDO',
       content: pmOpeningText,
       extractedOffer: {
-        unit_price: pmStance.targetUnitPrice,
+        total_price: pmStance.targetUnitPrice,
         payment_terms: pmStance.idealPaymentDays <= 30 ? 'Net 30' :
                        pmStance.idealPaymentDays <= 60 ? 'Net 60' : 'Net 90',
       } as any,
@@ -4655,7 +4655,7 @@ export const startNegotiationService = async (dealId: string): Promise<{
       decisionAction: 'COUNTER', // PM's first offer is a counter
       utilityScore: 1.0, // PM's target = 100% utility for PM
       counterOffer: {
-        unit_price: pmStance.targetUnitPrice,
+        total_price: pmStance.targetUnitPrice,
         payment_terms: pmStance.idealPaymentDays <= 30 ? 'Net 30' :
                        pmStance.idealPaymentDays <= 60 ? 'Net 60' : 'Net 90',
       } as any,
@@ -4725,7 +4725,7 @@ export const getVendorScenariosService = async (dealId: string): Promise<{
     if (lastPmMessage && lastPmMessage.counterOffer) {
       const counterOffer = lastPmMessage.counterOffer as any;
       pmLastOffer = {
-        price: counterOffer.unit_price || counterOffer.price || 0,
+        price: counterOffer.total_price || counterOffer.price || 0,
         paymentTerms: counterOffer.payment_terms || counterOffer.paymentTerms || 'Net 30',
         deliveryDate: counterOffer.delivery_date || counterOffer.deliveryDate || new Date().toISOString().split('T')[0],
       };
@@ -4828,7 +4828,7 @@ export const vendorSendMessageService = async (
     // Generate AI-PM response
     const pmDecision = generateAiPmResponse(
       {
-        price: vendorOffer.unit_price,
+        price: vendorOffer.total_price,
         paymentTerms: vendorOffer.payment_terms,
         deliveryDate: null, // TODO: Parse delivery date from message
       },
@@ -4853,7 +4853,7 @@ export const vendorSendMessageService = async (
       decisionAction: pmDecision.action,
       utilityScore: pmDecision.utility,
       counterOffer: pmDecision.counterOffer ? {
-        unit_price: pmDecision.counterOffer.price,
+        total_price: pmDecision.counterOffer.price,
         payment_terms: pmDecision.counterOffer.paymentTerms,
       } as any : null,
       explainabilityJson: {
@@ -4874,7 +4874,7 @@ export const vendorSendMessageService = async (
       round: deal.round + 1,
       latestVendorOffer: vendorOffer as any,
       latestOfferJson: pmDecision.counterOffer ? {
-        unit_price: pmDecision.counterOffer.price,
+        total_price: pmDecision.counterOffer.price,
         payment_terms: pmDecision.counterOffer.paymentTerms,
       } as any : null,
       latestDecisionAction: pmDecision.action,
@@ -4940,7 +4940,7 @@ export const vendorSendMessageService = async (
               newStatus: finalStatus,
               utility: pmDecision.utility,
               vendorOffer: {
-                price: vendorOffer.unit_price,
+                price: vendorOffer.total_price,
                 paymentTerms: vendorOffer.payment_terms,
               },
               reasoning: pmDecision.reasoning ? [pmDecision.reasoning] : undefined,

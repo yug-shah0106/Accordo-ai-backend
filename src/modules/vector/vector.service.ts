@@ -13,6 +13,7 @@ import {
   sequelize,
 } from '../../models/index.js';
 import { embeddingClient } from './embedding.client.js';
+import env from '../../config/env.js';
 import logger from '../../config/logger.js';
 import type {
   VectorSearchFilters,
@@ -31,7 +32,7 @@ import type {
   DealSummaryContent,
 } from './vector.types.js';
 
-const VECTOR_DIMENSION = 1024;
+const VECTOR_DIMENSION = env.vector.embeddingDimension;
 const DEFAULT_TOP_K = 5;
 const DEFAULT_SIMILARITY_THRESHOLD = 0.7;
 

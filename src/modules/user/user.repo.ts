@@ -1,3 +1,4 @@
+import { Op } from "sequelize";
 import models, { sequelize } from "../../models/index.js";
 
 /**
@@ -43,14 +44,26 @@ const repo = {
    * Get all users with filtering and pagination
    */
   getAllUsers: async (queryOptions: QueryOptions = {}): Promise<FindAndCountResult> => {
+    const { searchTerm, ...restOptions } = queryOptions as QueryOptions & { searchTerm?: string };
+
+    // Build Role include with optional name search
+    const roleInclude: any = {
+      model: models.Role,
+      as: "Role",
+    };
+
+    // If searching by term, also search role name
+    if (searchTerm) {
+      roleInclude.where = {
+        name: { [Op.iLike]: `%${searchTerm}%` },
+      };
+      roleInclude.required = false; // Make it optional so users without matching roles still appear if they match other fields
+    }
+
     const options: any = {
-      ...queryOptions,
-      include: [
-        {
-          model: models.Role,
-          as: "Role",
-        },
-      ],
+      ...restOptions,
+      include: [roleInclude],
+      order: [['id', 'ASC']], // Sort by ID to maintain consistent ordering
     };
     if (queryOptions.role) {
       options.having = sequelize.literal(
@@ -88,6 +101,13 @@ const repo = {
     userData: Record<string, unknown>
   ): Promise<[affectedCount: number]> => {
     return models.User.update(userData, { where: { id: userId } });
+  },
+
+  /**
+   * Delete a user by ID
+   */
+  deleteUser: async (userId: number | string): Promise<number> => {
+    return models.User.destroy({ where: { id: userId } });
   },
 };
 

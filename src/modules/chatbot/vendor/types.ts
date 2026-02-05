@@ -68,7 +68,7 @@ export interface GenerateVendorReplyInput {
    * Last offer from Accordo
    */
   lastAccordoOffer: {
-    unit_price: number | null;
+    total_price: number | null;
     payment_terms: string | null;
   } | null;
 
@@ -114,7 +114,7 @@ export interface VendorReplyResult {
      * Extracted offer from vendor message
      */
     offer: {
-      unit_price: number | null;
+      total_price: number | null;
       payment_terms: string | null;
     };
 

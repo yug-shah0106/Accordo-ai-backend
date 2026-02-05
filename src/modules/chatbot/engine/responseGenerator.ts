@@ -112,7 +112,7 @@ function buildPrompt(
 You are Accordo, a Procurement Manager. Generate a ${toneDescription} acceptance response.
 
 VENDOR'S OFFER:
-- Price: $${vendorOffer.unit_price?.toFixed(2) || 'not specified'}/unit
+- Price: $${vendorOffer.total_price?.toFixed(2) || 'not specified'}/unit
 - Payment: ${vendorOffer.payment_terms || 'not specified'}
 - Delivery: ${vendorDelivery}
 
@@ -134,12 +134,12 @@ Generate response:`,
 You are Accordo, a Procurement Manager. Generate a ${toneDescription} counter-offer response.
 
 VENDOR'S OFFER:
-- Price: $${vendorOffer.unit_price?.toFixed(2) || 'not specified'}/unit
+- Price: $${vendorOffer.total_price?.toFixed(2) || 'not specified'}/unit
 - Payment: ${vendorOffer.payment_terms || 'not specified'}
 - Delivery: ${vendorDelivery}
 
 OUR COUNTER:
-- Price: $${counterOffer?.unit_price?.toFixed(2) || 'flexible'}/unit
+- Price: $${counterOffer?.total_price?.toFixed(2) || 'flexible'}/unit
 - Payment: ${counterOffer?.payment_terms || 'flexible'}
 - Delivery: ${counterDelivery}
 
@@ -169,7 +169,7 @@ Generate response:`,
 You are Accordo, a Procurement Manager. Generate a professional, regretful response declining to continue.
 
 FINAL SITUATION:
-- Vendor's offer: $${vendorOffer.unit_price?.toFixed(2) || 'N/A'}, ${vendorOffer.payment_terms || 'N/A'}, ${vendorDelivery}
+- Vendor's offer: $${vendorOffer.total_price?.toFixed(2) || 'N/A'}, ${vendorOffer.payment_terms || 'N/A'}, ${vendorDelivery}
 - Round: ${round || 'final'} of ${maxRounds || 6}
 - Gap: Too far from our requirements
 
@@ -299,16 +299,16 @@ const FALLBACK_TEMPLATES = {
     const concernAck = concerns.length > 0 ? getAcknowledgmentSentence(concerns) : '';
 
     const templates = [
-      `Great news! We accept your offer of $${vendorOffer.unit_price?.toFixed(2)}/unit with ${vendorOffer.payment_terms} and delivery ${delivery}. ${concernAck || 'Thank you for working with us!'}`,
-      `Excellent! We have a deal - $${vendorOffer.unit_price?.toFixed(2)} per unit, ${vendorOffer.payment_terms}, delivered ${delivery}. ${concernAck || 'Looking forward to a great partnership.'}`,
-      `I'm pleased to confirm we accept: $${vendorOffer.unit_price?.toFixed(2)}/unit, ${vendorOffer.payment_terms}, delivery ${delivery}. ${concernAck || 'Appreciate your flexibility!'}`,
-      `We're happy to accept your terms: $${vendorOffer.unit_price?.toFixed(2)}/unit with ${vendorOffer.payment_terms} payment and ${delivery} delivery. ${concernAck || "Let's finalize the paperwork."}`,
-      `Deal! $${vendorOffer.unit_price?.toFixed(2)} per unit, ${vendorOffer.payment_terms}, ${delivery}. ${concernAck || 'Thank you for the productive negotiation.'}`,
+      `Great news! We accept your offer of $${vendorOffer.total_price?.toFixed(2)}/unit with ${vendorOffer.payment_terms} and delivery ${delivery}. ${concernAck || 'Thank you for working with us!'}`,
+      `Excellent! We have a deal - $${vendorOffer.total_price?.toFixed(2)} per unit, ${vendorOffer.payment_terms}, delivered ${delivery}. ${concernAck || 'Looking forward to a great partnership.'}`,
+      `I'm pleased to confirm we accept: $${vendorOffer.total_price?.toFixed(2)}/unit, ${vendorOffer.payment_terms}, delivery ${delivery}. ${concernAck || 'Appreciate your flexibility!'}`,
+      `We're happy to accept your terms: $${vendorOffer.total_price?.toFixed(2)}/unit with ${vendorOffer.payment_terms} payment and ${delivery} delivery. ${concernAck || "Let's finalize the paperwork."}`,
+      `Deal! $${vendorOffer.total_price?.toFixed(2)} per unit, ${vendorOffer.payment_terms}, ${delivery}. ${concernAck || 'Thank you for the productive negotiation.'}`,
     ];
 
     // Adjust formality based on tone
     const formalTemplates = [
-      `We are pleased to formally accept your offer of $${vendorOffer.unit_price?.toFixed(2)} per unit with ${vendorOffer.payment_terms} payment terms and delivery ${delivery}. ${concernAck || 'We appreciate your professionalism throughout this negotiation.'}`,
+      `We are pleased to formally accept your offer of $${vendorOffer.total_price?.toFixed(2)} per unit with ${vendorOffer.payment_terms} payment terms and delivery ${delivery}. ${concernAck || 'We appreciate your professionalism throughout this negotiation.'}`,
     ];
 
     if (tone === 'formal') {
@@ -324,15 +324,15 @@ const FALLBACK_TEMPLATES = {
     const concernAck = concerns.length > 0 ? getAcknowledgmentSentence(concerns) + ' ' : '';
 
     const templates = [
-      `${concernAck}Thank you for your offer. We'd like to propose $${counterOffer?.unit_price?.toFixed(2)}/unit with ${counterOffer?.payment_terms} and delivery ${counterDelivery}. This better aligns with our project requirements.`,
-      `${concernAck}I appreciate the offer of $${vendorOffer.unit_price?.toFixed(2)}. Our counter: $${counterOffer?.unit_price?.toFixed(2)}, ${counterOffer?.payment_terms}, delivery ${counterDelivery}. Can we meet in the middle?`,
-      `${concernAck}Your proposal is noted. Given our constraints, we can offer $${counterOffer?.unit_price?.toFixed(2)}/unit, ${counterOffer?.payment_terms}, with delivery ${counterDelivery}. Let me know your thoughts.`,
-      `${concernAck}Thanks for the offer. We're looking at $${counterOffer?.unit_price?.toFixed(2)} per unit with ${counterOffer?.payment_terms} payment and ${counterDelivery} delivery. Does this work for you?`,
-      `${concernAck}I've reviewed your offer. We can do $${counterOffer?.unit_price?.toFixed(2)}/unit, ${counterOffer?.payment_terms}, delivered ${counterDelivery}. This helps us stay within budget.`,
+      `${concernAck}Thank you for your offer. We'd like to propose $${counterOffer?.total_price?.toFixed(2)}/unit with ${counterOffer?.payment_terms} and delivery ${counterDelivery}. This better aligns with our project requirements.`,
+      `${concernAck}I appreciate the offer of $${vendorOffer.total_price?.toFixed(2)}. Our counter: $${counterOffer?.total_price?.toFixed(2)}, ${counterOffer?.payment_terms}, delivery ${counterDelivery}. Can we meet in the middle?`,
+      `${concernAck}Your proposal is noted. Given our constraints, we can offer $${counterOffer?.total_price?.toFixed(2)}/unit, ${counterOffer?.payment_terms}, with delivery ${counterDelivery}. Let me know your thoughts.`,
+      `${concernAck}Thanks for the offer. We're looking at $${counterOffer?.total_price?.toFixed(2)} per unit with ${counterOffer?.payment_terms} payment and ${counterDelivery} delivery. Does this work for you?`,
+      `${concernAck}I've reviewed your offer. We can do $${counterOffer?.total_price?.toFixed(2)}/unit, ${counterOffer?.payment_terms}, delivered ${counterDelivery}. This helps us stay within budget.`,
     ];
 
     const formalTemplates = [
-      `${concernAck}Thank you for your proposal. We would like to respectfully counter with $${counterOffer?.unit_price?.toFixed(2)} per unit, ${counterOffer?.payment_terms} payment terms, and delivery ${counterDelivery}. We believe this arrangement would be mutually beneficial.`,
+      `${concernAck}Thank you for your proposal. We would like to respectfully counter with $${counterOffer?.total_price?.toFixed(2)} per unit, ${counterOffer?.payment_terms} payment terms, and delivery ${counterDelivery}. We believe this arrangement would be mutually beneficial.`,
     ];
 
     if (tone === 'formal') {
@@ -369,7 +369,7 @@ const FALLBACK_TEMPLATES = {
   ASK_CLARIFY: (input: ResponseGeneratorInput): string => {
     const { vendorOffer } = input;
     const missing = [];
-    if (!vendorOffer.unit_price) missing.push('unit price');
+    if (!vendorOffer.total_price) missing.push('unit price');
     if (!vendorOffer.payment_terms) missing.push('payment terms');
 
     const templates = [
@@ -413,8 +413,8 @@ function generateFallback(
  *   decision: { action: 'COUNTER', utilityScore: 0.65, ... },
  *   config: negotiationConfig,
  *   conversationHistory: messages,
- *   vendorOffer: { unit_price: 98, payment_terms: 'Net 30' },
- *   counterOffer: { unit_price: 94, payment_terms: 'Net 60' },
+ *   vendorOffer: { total_price: 98, payment_terms: 'Net 30' },
+ *   counterOffer: { total_price: 94, payment_terms: 'Net 60' },
  *   deliveryConfig: { requiredDate: '2026-03-15' }
  * });
  * // result.response = "I understand the supply chain challenges..."

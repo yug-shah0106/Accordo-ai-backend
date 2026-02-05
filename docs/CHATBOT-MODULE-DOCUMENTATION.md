@@ -705,7 +705,7 @@ function detectVendorScenario(messages: Message[]): ScenarioDetectionResult {
 **Configuration**:
 ```typescript
 const CHATBOT_LLM_BASE_URL = process.env.CHATBOT_LLM_BASE_URL || 'http://localhost:11434';
-const CHATBOT_LLM_MODEL = process.env.CHATBOT_LLM_MODEL || 'llama3.1';
+const CHATBOT_LLM_MODEL = process.env.CHATBOT_LLM_MODEL || 'qwen3';
 ```
 
 **Function**:
@@ -836,7 +836,7 @@ Add to `.env`:
 ```bash
 # Chatbot LLM Configuration (optional, defaults to main LLM)
 CHATBOT_LLM_BASE_URL=http://localhost:11434
-CHATBOT_LLM_MODEL=llama3.1
+CHATBOT_LLM_MODEL=qwen3
 
 # Chatbot Frontend URL (for email links)
 CHATBOT_FRONTEND_URL=http://localhost:3000/chatbot
@@ -1030,7 +1030,7 @@ Using environment "development".
 ollama serve
 
 # Pull model
-ollama pull llama3.1
+ollama pull qwen3
 ```
 
 **5. Start Server:**
@@ -1144,7 +1144,7 @@ Error: Invalid conversation state
    ```bash
    curl http://localhost:11434/api/chat \
      -d '{
-       "model": "llama3.1",
+       "model": "qwen3",
        "messages": [{"role": "user", "content": "Hello"}],
        "stream": false
      }'
@@ -1163,7 +1163,7 @@ Error: Invalid conversation state
 
 ## Performance Benchmarks
 
-**Tested on**: MacBook Pro M1, PostgreSQL 14, Ollama llama3.1
+**Tested on**: MacBook Pro M1, PostgreSQL 14, Ollama qwen3
 
 | Operation | Average Time | Notes |
 |-----------|-------------|-------|

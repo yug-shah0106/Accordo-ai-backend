@@ -11,7 +11,7 @@ export type StandardPaymentTerm = typeof StandardPaymentTerms[number];
  * We store as string format "Net X" for consistency
  */
 export const OfferSchema = z.object({
-  unit_price: z.number().nullable(),
+  total_price: z.number().nullable(),
   // Accept any "Net X" format (X = 1-120 days) or standard terms
   payment_terms: z.string().nullable(),
   // Payment terms in days for calculations (e.g., 45 for "Net 45")
@@ -61,7 +61,7 @@ export const DecisionSchema = z.object({
 export type Decision = z.infer<typeof DecisionSchema>;
 
 export type Explainability = {
-  vendorOffer: { unit_price: number | null; payment_terms: string | null };
+  vendorOffer: { total_price: number | null; payment_terms: string | null };
   utilities: {
     priceUtility: number | null;
     termsUtility: number | null;
@@ -72,12 +72,12 @@ export type Explainability = {
   decision: {
     action: string;
     reasons: string[];
-    counterOffer?: { unit_price: number | null; payment_terms: string | null } | null;
+    counterOffer?: { total_price: number | null; payment_terms: string | null } | null;
   };
   configSnapshot: {
     weights: { price: number; terms: number };
     thresholds: { accept: number; escalate: number; walkaway: number };
-    unitPrice: { anchor: number; target: number; max: number; step: number };
+    totalPrice: { anchor: number; target: number; max: number; step: number };
     termOptions: string[];
   };
 };
@@ -174,7 +174,7 @@ export interface WeightedNegotiationConfig {
   maxRounds: number;
   // Legacy support
   legacyConfig?: {
-    unit_price: {
+    total_price: {
       weight: number;
       anchor: number;
       target: number;

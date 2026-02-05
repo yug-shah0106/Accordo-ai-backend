@@ -65,7 +65,7 @@ healthRouter.get('/', async (_req: Request, res: Response) => {
  *                 - name: llm
  *                   status: healthy
  *                   latency: 120
- *                   message: Ollama running with llama3.1
+ *                   message: Ollama running with qwen3
  *                 - name: embedding
  *                   status: healthy
  *                   latency: 45
