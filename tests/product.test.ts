@@ -25,7 +25,7 @@ describe('Product Validator', () => {
         gstPercentage: 18,
         tds: 12345,
         type: 'Goods',
-        UOM: 'pieces',
+        UOM: 'units',
       };
 
       const { error, value } = createProductSchema.validate(data);
@@ -41,7 +41,7 @@ describe('Product Validator', () => {
         gstType: 'Non-GST',
         tds: 54321,
         type: 'Services',
-        UOM: 'pieces',
+        UOM: 'units',
       };
 
       const { error, value } = createProductSchema.validate(data);
@@ -57,7 +57,7 @@ describe('Product Validator', () => {
         gstType: 'Non-Gst', // Wrong case - should be "Non-GST"
         tds: 12345,
         type: 'Goods',
-        UOM: 'pieces',
+        UOM: 'units',
       };
 
       const { error } = createProductSchema.validate(data);
@@ -74,7 +74,7 @@ describe('Product Validator', () => {
         // Missing gstPercentage
         tds: 12345,
         type: 'Goods',
-        UOM: 'pieces',
+        UOM: 'units',
       };
 
       const { error } = createProductSchema.validate(data);
@@ -91,7 +91,7 @@ describe('Product Validator', () => {
         gstPercentage: 15, // Invalid - must be 0, 5, 12, 18, or 28
         tds: 12345,
         type: 'Goods',
-        UOM: 'pieces',
+        UOM: 'units',
       };
 
       const { error } = createProductSchema.validate(data);
@@ -119,7 +119,7 @@ describe('Product Validator', () => {
         gstPercentage: 18,
         tds: 12345,
         type: 'InvalidType', // Invalid - must be "Goods" or "Services"
-        UOM: 'pieces',
+        UOM: 'units',
       };
 
       const { error } = createProductSchema.validate(data);
@@ -136,7 +136,7 @@ describe('Product Validator', () => {
         gstPercentage: 18,
         tds: 12345,
         type: 'Goods',
-        UOM: 'meters', // Invalid - must be "kg", "liters", or "pieces"
+        UOM: 'pieces', // Invalid - not in valid UOM list
       };
 
       const { error } = createProductSchema.validate(data);
@@ -153,7 +153,7 @@ describe('Product Validator', () => {
         gstPercentage: 18,
         tds: -100, // Invalid - must be positive
         type: 'Goods',
-        UOM: 'pieces',
+        UOM: 'units',
       };
 
       const { error } = createProductSchema.validate(data);
@@ -170,7 +170,7 @@ describe('Product Validator', () => {
         gstPercentage: 18,
         tds: 12345,
         type: 'Goods',
-        UOM: 'pieces',
+        UOM: 'units',
         unknownField: 'should be stripped',
         companyId: 123, // Should also be stripped
       };

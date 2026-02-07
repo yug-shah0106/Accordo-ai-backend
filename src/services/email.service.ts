@@ -1749,3 +1749,626 @@ export const sendDealSummaryPDFEmail = async (
     return { success: false, error: errorMessage };
   }
 };
+
+// ==========================================
+// VENDOR QUOTE NOTIFICATION TO PM
+// ==========================================
+
+/**
+ * Quote details for PM notification
+ */
+interface VendorQuoteDetails {
+  products: Array<{
+    productId: number;
+    productName: string;
+    quantity: number;
+    quotedPrice: number | string;
+    deliveryDate?: string;
+  }>;
+  additionalTerms?: {
+    paymentTerms?: string;
+    netPaymentDay?: number | string;
+    prePaymentPercentage?: number | string;
+    postPaymentPercentage?: number | string;
+    additionalNotes?: string;
+  };
+}
+
+/**
+ * Generate PM quote notification email HTML
+ */
+const generatePMQuoteNotificationEmailHTML = (
+  pmName: string,
+  vendorName: string,
+  requisitionData: {
+    title: string;
+    rfqNumber: string;
+    projectName: string;
+  },
+  quoteDetails: VendorQuoteDetails,
+  portalLink: string,
+  chatLink: string
+): string => {
+  const productsHTML = quoteDetails.products
+    .map((p) => {
+      const price = typeof p.quotedPrice === 'number' ? p.quotedPrice : parseFloat(p.quotedPrice as string) || 0;
+      return `
+      <tr>
+        <td style="padding: 8px; border: 1px solid #ddd;">${p.productName}</td>
+        <td style="padding: 8px; border: 1px solid #ddd; text-align: center;">${p.quantity}</td>
+        <td style="padding: 8px; border: 1px solid #ddd; text-align: right;">$${price.toFixed(2)}</td>
+        <td style="padding: 8px; border: 1px solid #ddd; text-align: center;">${p.deliveryDate || 'Not specified'}</td>
+      </tr>
+    `;
+    })
+    .join('');
+
+  const terms = quoteDetails.additionalTerms;
+  let paymentTermsText = 'Not specified';
+  if (terms?.paymentTerms === 'net_payment') {
+    paymentTermsText = `Net ${terms.netPaymentDay || 30} days`;
+  } else if (terms?.paymentTerms === 'pre_post_payment') {
+    paymentTermsText = `Pre: ${terms.prePaymentPercentage || 0}% / Post: ${terms.postPaymentPercentage || 0}%`;
+  }
+
+  return `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>Vendor Quote Received</title>
+    </head>
+    <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
+      <div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px;">
+        <h1 style="color: #28a745; margin-top: 0;">New Vendor Quote Received</h1>
+        <p>Dear ${pmName},</p>
+        <p><strong>${vendorName}</strong> has submitted a quotation for your requisition.</p>
+
+        <div style="background-color: white; padding: 15px; border-radius: 5px; margin: 20px 0;">
+          <h2 style="color: #333; margin-top: 0;">Requisition Details</h2>
+          <p><strong>RFQ Number:</strong> ${requisitionData.rfqNumber}</p>
+          <p><strong>Title:</strong> ${requisitionData.title}</p>
+          <p><strong>Project:</strong> ${requisitionData.projectName}</p>
+
+          <h3 style="color: #333; margin-top: 20px;">Quoted Products</h3>
+          <table style="width: 100%; border-collapse: collapse; margin-top: 10px;">
+            <thead>
+              <tr style="background-color: #f8f9fa;">
+                <th style="padding: 8px; border: 1px solid #ddd; text-align: left;">Product</th>
+                <th style="padding: 8px; border: 1px solid #ddd; text-align: center;">Quantity</th>
+                <th style="padding: 8px; border: 1px solid #ddd; text-align: right;">Quoted Price</th>
+                <th style="padding: 8px; border: 1px solid #ddd; text-align: center;">Delivery Date</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${productsHTML}
+            </tbody>
+          </table>
+
+          <h3 style="color: #333; margin-top: 20px;">Payment Terms</h3>
+          <p>${paymentTermsText}</p>
+          ${terms?.additionalNotes ? `<p><strong>Additional Notes:</strong> ${terms.additionalNotes}</p>` : ''}
+        </div>
+
+        <div style="margin: 30px 0; text-align: center;">
+          <a href="${chatLink}" style="display: inline-block; background-color: #28a745; color: white; padding: 14px 28px; text-decoration: none; border-radius: 5px; font-weight: bold; margin-right: 10px;">Start Negotiation</a>
+          <a href="${portalLink}" style="display: inline-block; background-color: #0066cc; color: white; padding: 14px 28px; text-decoration: none; border-radius: 5px; font-weight: bold;">View Details</a>
+        </div>
+
+        <p style="color: #666; font-size: 14px; margin-top: 30px;">
+          The vendor is now ready to begin negotiation. Click "Start Negotiation" to review their offer and respond.
+        </p>
+      </div>
+    </body>
+    </html>
+  `;
+};
+
+/**
+ * Generate PM quote notification email plain text
+ */
+const generatePMQuoteNotificationEmailText = (
+  pmName: string,
+  vendorName: string,
+  requisitionData: {
+    title: string;
+    rfqNumber: string;
+    projectName: string;
+  },
+  quoteDetails: VendorQuoteDetails,
+  portalLink: string,
+  chatLink: string
+): string => {
+  const productsText = quoteDetails.products
+    .map((p) => {
+      const price = typeof p.quotedPrice === 'number' ? p.quotedPrice : parseFloat(p.quotedPrice as string) || 0;
+      return `  - ${p.productName}: Qty ${p.quantity}, $${price.toFixed(2)}, Delivery: ${p.deliveryDate || 'Not specified'}`;
+    })
+    .join('\n');
+
+  const terms = quoteDetails.additionalTerms;
+  let paymentTermsText = 'Not specified';
+  if (terms?.paymentTerms === 'net_payment') {
+    paymentTermsText = `Net ${terms.netPaymentDay || 30} days`;
+  } else if (terms?.paymentTerms === 'pre_post_payment') {
+    paymentTermsText = `Pre: ${terms.prePaymentPercentage || 0}% / Post: ${terms.postPaymentPercentage || 0}%`;
+  }
+
+  return `
+New Vendor Quote Received
+
+Dear ${pmName},
+
+${vendorName} has submitted a quotation for your requisition.
+
+Requisition Details:
+- RFQ Number: ${requisitionData.rfqNumber}
+- Title: ${requisitionData.title}
+- Project: ${requisitionData.projectName}
+
+Quoted Products:
+${productsText}
+
+Payment Terms: ${paymentTermsText}
+${terms?.additionalNotes ? `Additional Notes: ${terms.additionalNotes}` : ''}
+
+Start Negotiation: ${chatLink}
+View Details: ${portalLink}
+
+The vendor is now ready to begin negotiation.
+  `;
+};
+
+/**
+ * Send PM notification when vendor submits a quote
+ */
+export const sendPMQuoteNotificationEmail = async (
+  contract: any,
+  quoteDetails: VendorQuoteDetails
+): Promise<{ success: boolean; messageId?: string; error?: string }> => {
+  try {
+    // Get requisition with project
+    const requisition = contract.Requisition;
+    if (!requisition) {
+      throw new Error('Contract has no requisition');
+    }
+
+    // Get PM (created by user) from requisition
+    const pmUser = requisition.userId
+      ? await models.User.findByPk(requisition.userId)
+      : null;
+
+    if (!pmUser || !pmUser.email) {
+      logger.warn('No PM user found for quote notification', {
+        contractId: contract.id,
+        requisitionId: requisition.id,
+      });
+      return { success: false, error: 'No PM user found' };
+    }
+
+    const vendorName = contract.Vendor?.name || 'Vendor';
+    const pmName = pmUser.name || 'Procurement Manager';
+
+    const requisitionData = {
+      title: requisition.title || 'Untitled Requisition',
+      rfqNumber: requisition.rfqNumber || `RFQ-${requisition.id}`,
+      projectName: requisition.Project?.name || 'Unknown Project',
+    };
+
+    const portalLink = `${env.vendorPortalUrl}/requisition-management`;
+    const chatLink = contract.chatbotDealId && requisition.id && contract.vendorId
+      ? `${env.chatbotFrontendUrl}/chatbot/requisitions/${requisition.id}/vendors/${contract.vendorId}/deals/${contract.chatbotDealId}`
+      : portalLink;
+
+    const mailOptions: EmailOptions = {
+      from: smtp.from || 'noreply@accordo.ai',
+      to: pmUser.email,
+      subject: `New Quote from ${vendorName} - ${requisitionData.title}`,
+      html: generatePMQuoteNotificationEmailHTML(
+        pmName,
+        vendorName,
+        requisitionData,
+        quoteDetails,
+        portalLink,
+        chatLink
+      ),
+      text: generatePMQuoteNotificationEmailText(
+        pmName,
+        vendorName,
+        requisitionData,
+        quoteDetails,
+        portalLink,
+        chatLink
+      ),
+    };
+
+    const info = await sendEmailWithRetry(mailOptions);
+
+    await logEmail(
+      pmUser.email,
+      pmUser.id,
+      mailOptions.subject,
+      'other',
+      'sent',
+      contract.id,
+      requisition.id,
+      {
+        emailSubType: 'pm_quote_notification',
+        vendorId: contract.vendorId,
+        vendorName,
+        quoteProducts: quoteDetails.products.length,
+      },
+      undefined,
+      info.messageId,
+      0
+    );
+
+    logger.info('PM quote notification email sent successfully', {
+      contractId: contract.id,
+      requisitionId: requisition.id,
+      vendorName,
+      pmEmail: pmUser.email,
+      messageId: info.messageId,
+    });
+
+    return { success: true, messageId: info.messageId };
+  } catch (error) {
+    const errorMessage = (error as Error).message;
+
+    logger.error('Failed to send PM quote notification email', {
+      contractId: contract?.id,
+      error: errorMessage,
+    });
+
+    return { success: false, error: errorMessage };
+  }
+};
+
+// ==========================================
+// REQUISITION UPDATED EMAIL (Vendor Notification)
+// ==========================================
+
+/**
+ * Diff types for requisition updates
+ */
+interface FieldChange {
+  field: string;
+  label: string;
+  oldValue: any;
+  newValue: any;
+}
+
+interface ProductChange {
+  productId: number;
+  productName: string;
+  changes: FieldChange[];
+  isNew?: boolean;
+  isRemoved?: boolean;
+}
+
+interface RequisitionDiff {
+  requisitionChanges: FieldChange[];
+  productChanges: ProductChange[];
+  hasChanges: boolean;
+}
+
+/**
+ * Generate HTML email for requisition updated notification
+ */
+const generateRequisitionUpdatedEmailHTML = (
+  vendorName: string,
+  requisitionData: {
+    title: string;
+    rfqNumber: string;
+    projectName: string;
+  },
+  changes: RequisitionDiff,
+  chatbotLink?: string
+): string => {
+  // Build requisition changes table
+  let requisitionChangesHTML = '';
+  if (changes.requisitionChanges.length > 0) {
+    requisitionChangesHTML = `
+      <h3 style="color: #374151; margin: 20px 0 10px 0; font-size: 16px; font-weight: 600;">Requisition Changes</h3>
+      <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
+        <thead>
+          <tr style="background-color: #f1f5f9;">
+            <th style="padding: 10px; border: 1px solid #e5e7eb; text-align: left; font-weight: 600; color: #475569;">Field</th>
+            <th style="padding: 10px; border: 1px solid #e5e7eb; text-align: left; font-weight: 600; color: #475569;">Previous Value</th>
+            <th style="padding: 10px; border: 1px solid #e5e7eb; text-align: left; font-weight: 600; color: #475569;">New Value</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${changes.requisitionChanges.map(change => `
+            <tr>
+              <td style="padding: 10px; border: 1px solid #e5e7eb; font-weight: 500;">${change.label}</td>
+              <td style="padding: 10px; border: 1px solid #e5e7eb; color: #dc2626;"><s>${change.oldValue}</s></td>
+              <td style="padding: 10px; border: 1px solid #e5e7eb; color: #059669; font-weight: 600;">${change.newValue}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    `;
+  }
+
+  // Build product changes section
+  let productChangesHTML = '';
+  if (changes.productChanges.length > 0) {
+    const productItems = changes.productChanges.map(pc => {
+      if (pc.isNew) {
+        return `
+          <div style="background-color: #dcfce7; border: 1px solid #86efac; border-radius: 6px; padding: 12px; margin-bottom: 10px;">
+            <span style="color: #166534; font-weight: 600;">+ Added:</span> ${pc.productName}
+          </div>
+        `;
+      } else if (pc.isRemoved) {
+        return `
+          <div style="background-color: #fee2e2; border: 1px solid #fca5a5; border-radius: 6px; padding: 12px; margin-bottom: 10px;">
+            <span style="color: #991b1b; font-weight: 600;">- Removed:</span> ${pc.productName}
+          </div>
+        `;
+      } else {
+        const changesTable = pc.changes.map(c => `
+          <tr>
+            <td style="padding: 6px 10px; border-bottom: 1px solid #e5e7eb;">${c.label}</td>
+            <td style="padding: 6px 10px; border-bottom: 1px solid #e5e7eb; color: #dc2626;"><s>${c.oldValue}</s></td>
+            <td style="padding: 6px 10px; border-bottom: 1px solid #e5e7eb; color: #059669; font-weight: 600;">${c.newValue}</td>
+          </tr>
+        `).join('');
+        return `
+          <div style="background-color: #fef3c7; border: 1px solid #fcd34d; border-radius: 6px; padding: 12px; margin-bottom: 10px;">
+            <div style="color: #92400e; font-weight: 600; margin-bottom: 8px;">${pc.productName}</div>
+            <table style="width: 100%; font-size: 14px;">
+              ${changesTable}
+            </table>
+          </div>
+        `;
+      }
+    }).join('');
+
+    productChangesHTML = `
+      <h3 style="color: #374151; margin: 20px 0 10px 0; font-size: 16px; font-weight: 600;">Product Changes</h3>
+      ${productItems}
+    `;
+  }
+
+  return `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>Requisition Updated</title>
+    </head>
+    <body style="font-family: 'Segoe UI', Arial, sans-serif; line-height: 1.6; color: #1f2937; max-width: 650px; margin: 0 auto; padding: 20px; background-color: #f3f4f6;">
+      <div style="background-color: white; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
+        <!-- Header -->
+        <div style="background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); padding: 30px; text-align: center;">
+          <h1 style="color: white; margin: 0; font-size: 24px; font-weight: 600;">Requisition Updated</h1>
+          <p style="color: rgba(255,255,255,0.9); margin: 10px 0 0 0; font-size: 14px;">The terms of your negotiation have been modified</p>
+        </div>
+
+        <!-- Content -->
+        <div style="padding: 30px;">
+          <p style="font-size: 16px; margin-bottom: 20px;">Dear <strong>${vendorName}</strong>,</p>
+
+          <p style="margin-bottom: 20px;">The procurement manager has updated the requisition you are currently negotiating. Please review the changes below and continue your negotiation with the updated terms.</p>
+
+          <!-- Requisition Summary Card -->
+          <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 20px; margin-bottom: 25px;">
+            <h2 style="color: #1e40af; margin: 0 0 15px 0; font-size: 18px; font-weight: 600;">Requisition Details</h2>
+            <table style="width: 100%;">
+              <tr>
+                <td style="padding: 8px 0; color: #64748b; width: 120px;">RFQ Number:</td>
+                <td style="padding: 8px 0; font-weight: 500;">${requisitionData.rfqNumber}</td>
+              </tr>
+              <tr>
+                <td style="padding: 8px 0; color: #64748b;">Title:</td>
+                <td style="padding: 8px 0; font-weight: 500;">${requisitionData.title}</td>
+              </tr>
+              <tr>
+                <td style="padding: 8px 0; color: #64748b;">Project:</td>
+                <td style="padding: 8px 0; font-weight: 500;">${requisitionData.projectName}</td>
+              </tr>
+            </table>
+          </div>
+
+          <!-- Changes Section -->
+          ${requisitionChangesHTML}
+          ${productChangesHTML}
+
+          <!-- CTA Button -->
+          ${chatbotLink ? `
+          <div style="text-align: center; margin: 30px 0;">
+            <a href="${chatbotLink}" style="display: inline-block; background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%); color: white; padding: 16px 40px; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 16px; box-shadow: 0 4px 14px rgba(37, 99, 235, 0.4);">Continue Negotiation</a>
+          </div>
+          ` : ''}
+
+          <div style="background-color: #fef3c7; border: 1px solid #fcd34d; border-radius: 8px; padding: 15px; margin-top: 20px;">
+            <p style="margin: 0; color: #92400e; font-size: 14px;">
+              <strong>Important:</strong> The negotiation terms have been automatically recalculated based on these changes. Your current negotiation will continue with the updated parameters.
+            </p>
+          </div>
+        </div>
+
+        <!-- Footer -->
+        <div style="background-color: #f8fafc; padding: 20px 30px; border-top: 1px solid #e2e8f0;">
+          <p style="color: #64748b; font-size: 12px; margin: 0; text-align: center;">
+            This email was sent by Accordo AI Procurement Platform.<br>
+            If you have questions, please contact your procurement representative.
+          </p>
+        </div>
+      </div>
+    </body>
+    </html>
+  `;
+};
+
+/**
+ * Generate plain text email for requisition updated notification
+ */
+const generateRequisitionUpdatedEmailText = (
+  vendorName: string,
+  requisitionData: {
+    title: string;
+    rfqNumber: string;
+    projectName: string;
+  },
+  changes: RequisitionDiff,
+  chatbotLink?: string
+): string => {
+  let changesText = '';
+
+  if (changes.requisitionChanges.length > 0) {
+    changesText += 'REQUISITION CHANGES:\n';
+    for (const change of changes.requisitionChanges) {
+      changesText += `- ${change.label}: ${change.oldValue} -> ${change.newValue}\n`;
+    }
+    changesText += '\n';
+  }
+
+  if (changes.productChanges.length > 0) {
+    changesText += 'PRODUCT CHANGES:\n';
+    for (const pc of changes.productChanges) {
+      if (pc.isNew) {
+        changesText += `+ Added: ${pc.productName}\n`;
+      } else if (pc.isRemoved) {
+        changesText += `- Removed: ${pc.productName}\n`;
+      } else {
+        changesText += `${pc.productName}:\n`;
+        for (const c of pc.changes) {
+          changesText += `  - ${c.label}: ${c.oldValue} -> ${c.newValue}\n`;
+        }
+      }
+    }
+  }
+
+  return `
+REQUISITION UPDATED
+${'='.repeat(50)}
+
+Dear ${vendorName},
+
+The procurement manager has updated the requisition you are currently negotiating.
+
+REQUISITION DETAILS
+-------------------
+RFQ Number: ${requisitionData.rfqNumber}
+Title: ${requisitionData.title}
+Project: ${requisitionData.projectName}
+
+${changesText}
+
+${chatbotLink ? `CONTINUE NEGOTIATION: ${chatbotLink}\n` : ''}
+
+IMPORTANT: The negotiation terms have been automatically recalculated based on these changes. Your current negotiation will continue with the updated parameters.
+
+---
+This email was sent by Accordo AI Procurement Platform.
+If you have questions, please contact your procurement representative.
+  `;
+};
+
+/**
+ * Send requisition updated email to vendor
+ * Called when a requisition is edited and has active vendor contracts
+ */
+export const sendRequisitionUpdatedEmail = async (
+  contract: Contract & { Vendor?: any },
+  requisition: Requisition & { Project?: any },
+  changes: RequisitionDiff
+): Promise<{ success: boolean; messageId?: string; error?: string }> => {
+  try {
+    const vendor = contract.Vendor;
+    if (!vendor || !vendor.email) {
+      logger.warn('No vendor email for requisition updated notification', {
+        contractId: contract.id,
+        requisitionId: (requisition as any).id,
+      });
+      return { success: false, error: 'Vendor email not available' };
+    }
+
+    const vendorName = vendor.name || 'Vendor';
+    const requisitionData = {
+      title: (requisition as any).subject || (requisition as any).title || 'Untitled Requisition',
+      rfqNumber: (requisition as any).rfqId || (requisition as any).rfqNumber || `RFQ-${(requisition as any).id}`,
+      projectName: requisition.Project?.name || requisition.Project?.projectId || 'Unknown Project',
+    };
+
+    // Build chatbot link if deal exists
+    const chatbotLink = contract.chatbotDealId && (requisition as any).id && contract.vendorId
+      ? `${env.chatbotFrontendUrl}/chatbot/requisitions/${(requisition as any).id}/vendors/${contract.vendorId}/deals/${contract.chatbotDealId}`
+      : undefined;
+
+    const mailOptions: EmailOptions = {
+      from: smtp.from || 'noreply@accordo.ai',
+      to: vendor.email,
+      subject: `Requisition Updated: ${requisitionData.title} (${requisitionData.rfqNumber})`,
+      html: generateRequisitionUpdatedEmailHTML(vendorName, requisitionData, changes, chatbotLink),
+      text: generateRequisitionUpdatedEmailText(vendorName, requisitionData, changes, chatbotLink),
+    };
+
+    const info = await sendEmailWithRetry(mailOptions);
+
+    // Count total changes for metadata
+    const changesCount = changes.requisitionChanges.length + changes.productChanges.length;
+
+    await logEmail(
+      vendor.email,
+      contract.vendorId || null,
+      mailOptions.subject,
+      'other',
+      'sent',
+      contract.id,
+      (requisition as any).id,
+      {
+        emailSubType: 'requisition_updated',
+        changesCount,
+        requisitionChanges: changes.requisitionChanges.length,
+        productChanges: changes.productChanges.length,
+        chatbotDealId: contract.chatbotDealId,
+      },
+      undefined,
+      info.messageId,
+      0
+    );
+
+    logger.info('Requisition updated email sent successfully', {
+      contractId: contract.id,
+      requisitionId: (requisition as any).id,
+      vendorEmail: vendor.email,
+      changesCount,
+      messageId: info.messageId,
+    });
+
+    return { success: true, messageId: info.messageId };
+  } catch (error) {
+    const errorMessage = (error as Error).message;
+
+    logger.error('Failed to send requisition updated email', {
+      contractId: contract.id,
+      requisitionId: (requisition as any).id,
+      vendorEmail: contract.Vendor?.email,
+      error: errorMessage,
+    });
+
+    await logEmail(
+      contract.Vendor?.email || 'unknown',
+      contract.vendorId || null,
+      `Requisition Updated: ${(requisition as any).subject || (requisition as any).title}`,
+      'other',
+      'failed',
+      contract.id,
+      (requisition as any).id,
+      {
+        emailSubType: 'requisition_updated',
+      },
+      errorMessage,
+      undefined,
+      2
+    );
+
+    return { success: false, error: errorMessage };
+  }
+};

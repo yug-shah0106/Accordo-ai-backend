@@ -77,7 +77,7 @@ export const createMockProduct = (overrides: any = {}) => ({
   gstPercentage: 18,
   tds: 12345,
   type: 'Goods' as const,
-  UOM: 'pieces' as const,
+  UOM: 'units' as const,
   companyId: 1,
   ...overrides,
 });
@@ -90,7 +90,7 @@ export const createMockProductNonGst = (overrides: any = {}) => ({
   gstPercentage: null,
   tds: 67890,
   type: 'Services' as const,
-  UOM: 'pieces' as const,
+  UOM: 'units' as const,
   companyId: 1,
   ...overrides,
 });

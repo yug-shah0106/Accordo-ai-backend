@@ -14,7 +14,7 @@ const productTypeEnum = ['Goods', 'Services'] as const;
 /**
  * Valid UOM values
  */
-const uomEnum = ['unit', 'kg', 'liters', 'pieces', 'box', 'pack', 'ton', 'sheet', 'roll', 'license'] as const;
+const uomEnum = ['units', 'kgs', 'liters', 'boxes', 'packs', 'tons', 'meters', 'lots', 'license'] as const;
 
 /**
  * Valid GST percentage values
@@ -76,7 +76,7 @@ export const createProductSchema = Joi.object({
     .valid(...uomEnum)
     .required()
     .messages({
-      'any.only': 'UOM must be one of: "unit", "kg", "liters", "pieces", "box", "pack", "ton", "sheet", "roll", "license"',
+      'any.only': 'UOM must be one of: "units", "kgs", "liters", "boxes", "packs", "tons", "meters", "lots", "license"',
       'any.required': 'UOM is required',
     }),
 });
@@ -127,7 +127,7 @@ export const updateProductSchema = Joi.object({
     .valid(...uomEnum)
     .optional()
     .messages({
-      'any.only': 'UOM must be one of: "unit", "kg", "liters", "pieces", "box", "pack", "ton", "sheet", "roll", "license"',
+      'any.only': 'UOM must be one of: "units", "kgs", "liters", "boxes", "packs", "tons", "meters", "lots", "license"',
     }),
 });
 

@@ -21,11 +21,15 @@ import bidComparisonRoutes from '../modules/bidComparison/bidComparison.routes.j
 import bidAnalysisRoutes from '../modules/bidAnalysis/bidAnalysis.routes.js';
 import healthRoutes from '../modules/health/health.routes.js';
 import documentRoutes from '../modules/document/document.routes.js';
+import vendorChatRoutes from '../modules/vendor-chat/vendor-chat.routes.js';
 
 const router = Router();
 
 // Health check routes (comprehensive)
 router.use('/health', healthRoutes);
+
+// Public vendor chat routes (no authMiddleware)
+router.use('/vendor-chat', vendorChatRoutes);
 
 router.use('/auth', authRoutes);
 router.use('/company', companyRoutes);

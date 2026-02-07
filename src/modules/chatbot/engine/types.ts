@@ -23,8 +23,16 @@ export const OfferSchema = z.object({
     raw_terms_days: z.number().optional(),
     non_standard_terms: z.boolean().optional(),
     // Delivery meta
-    delivery_source: z.enum(['explicit_date', 'relative_days', 'timeframe']).optional(),
+    delivery_source: z.enum(['explicit_date', 'relative_days', 'timeframe', 'asap']).optional(),
     raw_delivery_text: z.string().optional(),
+    // Price parsing meta (February 2026)
+    raw_price_text: z.string().optional(),
+    raw_terms_text: z.string().optional(),
+    // Currency meta (February 2026)
+    currency_detected: z.enum(['USD', 'INR', 'EUR', 'GBP', 'AUD']).optional(),
+    currency_converted: z.boolean().optional(),
+    original_currency: z.enum(['USD', 'INR', 'EUR', 'GBP', 'AUD']).optional(),
+    original_price: z.number().optional(),
   }).optional(),
 });
 export type Offer = z.infer<typeof OfferSchema>;

@@ -87,6 +87,28 @@ export const updateRequisition = async (
       res.status(400).json({ message: 'Invalid requisition ID' });
       return;
     }
+
+    // Fetch the existing requisition to check permissions
+    const existingRequisition = await getRequisitionService(requisitionId);
+    if (!existingRequisition) {
+      res.status(404).json({ message: 'Requisition not found' });
+      return;
+    }
+
+    // Block editing for cancelled requisitions
+    if (existingRequisition.status === 'Cancelled') {
+      res.status(400).json({ message: 'Cannot edit cancelled requisitions' });
+      return;
+    }
+
+    // Permission: Admin can edit any; PM can only edit own
+    const userType = req.context.userType;
+    const userId = req.context.userId;
+    if (userType !== 'admin' && existingRequisition.createdBy !== userId) {
+      res.status(403).json({ message: 'You can only edit requisitions you created' });
+      return;
+    }
+
     const attachmentFiles = req.files as Express.Multer.File[];
     console.log('updateRequisition controller - files:', attachmentFiles?.length || 0);
 

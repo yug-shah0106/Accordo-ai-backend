@@ -5,6 +5,11 @@ import { CustomError } from '../../utils/custom-error.js';
 import type { Requisition } from '../../models/requisition.js';
 import type { RequisitionData, RequisitionProductData, RequisitionAttachmentData } from './requisition.repo.js';
 import util from '../common/util.js';
+import models from '../../models/index.js';
+import { calculateRequisitionDiff, generateChangeSummary, type RequisitionDiff } from './requisitionDiff.js';
+import { sendRequisitionUpdatedEmail } from '../../services/email.service.js';
+import { buildConfigFromRequisition, createSystemMessageService } from '../chatbot/chatbot.service.js';
+import logger from '../../config/logger.js';
 
 export interface ProductData {
   productId: number | string;
@@ -348,6 +353,30 @@ export const updateRequisitionService = async (
       productDataValue: requisitionData.productData,
     });
 
+    // ============================================
+    // STEP 1: Capture old state BEFORE update
+    // ============================================
+    const oldRequisition = await repo.getRequisition({ id: requisitionId });
+    if (!oldRequisition) {
+      throw new CustomError('Requisition not found', 404);
+    }
+    const oldProducts = oldRequisition.RequisitionProduct || [];
+    const oldState = {
+      subject: oldRequisition.subject,
+      deliveryDate: oldRequisition.deliveryDate,
+      negotiationClosureDate: oldRequisition.negotiationClosureDate,
+      totalPrice: oldRequisition.totalPrice,
+      totalMaxPrice: oldRequisition.totalMaxPrice,
+      maxDeliveryDate: oldRequisition.maxDeliveryDate,
+      payment_terms: oldRequisition.payment_terms,
+      net_payment_day: oldRequisition.net_payment_day,
+      pre_payment_percentage: oldRequisition.pre_payment_percentage,
+      post_payment_percentage: oldRequisition.post_payment_percentage,
+      pricePriority: oldRequisition.pricePriority,
+      deliveryPriority: oldRequisition.deliveryPriority,
+      paymentTermsPriority: oldRequisition.paymentTermsPriority,
+    };
+
     // Handle field name mapping: frontend might send maximum_delivery_date but backend expects maxDeliveryDate
     if (requisitionData.maximum_delivery_date !== undefined && requisitionData.maxDeliveryDate === undefined) {
       requisitionData.maxDeliveryDate = requisitionData.maximum_delivery_date;
@@ -565,6 +594,89 @@ export const updateRequisitionService = async (
           })
         )
       );
+    }
+
+    // ============================================
+    // STEP 3: Calculate diff and notify vendors
+    // ============================================
+    try {
+      // Fetch updated requisition with products for diff calculation
+      const updatedRequisition = await repo.getRequisition({ id: requisitionId });
+      const newProducts = updatedRequisition?.RequisitionProduct || [];
+
+      // Build the new state from cleaned data (what was actually updated)
+      const newState = {
+        subject: cleanedData.subject ?? oldState.subject,
+        deliveryDate: cleanedData.deliveryDate ?? oldState.deliveryDate,
+        negotiationClosureDate: cleanedData.negotiationClosureDate ?? oldState.negotiationClosureDate,
+        totalPrice: cleanedData.totalPrice ?? oldState.totalPrice,
+        totalMaxPrice: cleanedData.totalMaxPrice ?? oldState.totalMaxPrice,
+        maxDeliveryDate: cleanedData.maxDeliveryDate ?? oldState.maxDeliveryDate,
+        payment_terms: cleanedData.payment_terms ?? oldState.payment_terms,
+        net_payment_day: cleanedData.net_payment_day ?? oldState.net_payment_day,
+        pre_payment_percentage: cleanedData.pre_payment_percentage ?? oldState.pre_payment_percentage,
+        post_payment_percentage: cleanedData.post_payment_percentage ?? oldState.post_payment_percentage,
+        pricePriority: cleanedData.pricePriority ?? oldState.pricePriority,
+        deliveryPriority: cleanedData.deliveryPriority ?? oldState.deliveryPriority,
+        paymentTermsPriority: cleanedData.paymentTermsPriority ?? oldState.paymentTermsPriority,
+      };
+
+      // Calculate diff between old and new state
+      const diff = calculateRequisitionDiff(oldState, newState, oldProducts, newProducts);
+
+      // If changes detected, process linked contracts
+      if (diff.hasChanges) {
+        logger.info(`Requisition ${requisitionId} updated with changes, notifying vendors`, {
+          requisitionChanges: diff.requisitionChanges.length,
+          productChanges: diff.productChanges.length,
+        });
+
+        // Find all contracts for this requisition
+        const contracts = await models.Contract.findAll({
+          where: { requisitionId },
+          include: [{ model: models.User, as: 'Vendor' }],
+        });
+
+        for (const contract of contracts) {
+          // Cast contract to include Vendor from the include
+          const contractWithVendor = contract as typeof contract & { Vendor?: { email?: string; name?: string } };
+          try {
+            // 4a. Update deal negotiation config if deal exists
+            if (contract.chatbotDealId) {
+              const newConfig = await buildConfigFromRequisition(requisitionId);
+              await models.ChatbotDeal.update(
+                { negotiationConfigJson: newConfig },
+                { where: { id: contract.chatbotDealId } }
+              );
+              logger.info(`Updated negotiationConfigJson for deal ${contract.chatbotDealId}`);
+
+              // 4b. Add system message to chat
+              const changeSummary = generateChangeSummary(diff);
+              await createSystemMessageService(
+                contract.chatbotDealId,
+                `REQUISITION UPDATED\n\n${changeSummary}\n\nNegotiation terms have been recalculated.`
+              );
+              logger.info(`Added system message to deal ${contract.chatbotDealId}`);
+            }
+
+            // 4c. Send email notification to vendor
+            if (contractWithVendor.Vendor?.email) {
+              await sendRequisitionUpdatedEmail(contractWithVendor as any, updatedRequisition as any, diff);
+            }
+          } catch (notifyError) {
+            // Log but don't fail the update if notification fails
+            logger.error(`Failed to notify vendor for contract ${contract.id}:`, {
+              error: (notifyError as Error).message,
+            });
+          }
+        }
+      }
+    } catch (notificationError) {
+      // Log but don't fail the update if notification processing fails
+      logger.error('Error processing requisition update notifications:', {
+        requisitionId,
+        error: (notificationError as Error).message,
+      });
     }
 
     return result;

@@ -153,23 +153,29 @@ export const buildConfigFromRequisition = async (
     throw new CustomError('Requisition not found', 404);
   }
 
-  // Calculate weighted average target price from products
+  // Calculate TOTAL target price across all products (not average unit price)
+  // This matches how vendor chat sends offers as grand totals
   let totalTarget = 0;
-  let totalQuantity = 0;
 
   if (requisition.RequisitionProduct && requisition.RequisitionProduct.length > 0) {
     for (const reqProduct of requisition.RequisitionProduct) {
       const quantity = (reqProduct as any).qty || 1;
       const targetPrice = (reqProduct as any).targetPrice || 0;
+      // targetPrice is per-unit, multiply by quantity to get total for this product
       totalTarget += targetPrice * quantity;
-      totalQuantity += quantity;
     }
   }
 
-  const averageTarget = totalQuantity > 0 ? totalTarget / totalQuantity : 100;
-  const anchor = averageTarget * 0.85; // 15% below target
-  const maxAcceptable = averageTarget * 1.2; // 20% above target
-  const concessionStep = (averageTarget - anchor) / 6; // ~2.5% steps
+  // Fallback if no products or all zero prices
+  if (totalTarget === 0) {
+    totalTarget = 1000; // Default fallback
+  }
+
+  const anchor = totalTarget * 0.85; // PM's ideal: 15% below target
+  const maxAcceptable = totalTarget * 1.25; // PM's max: 25% above target
+  const concessionStep = (maxAcceptable - totalTarget) / 6; // ~4% steps toward max
+
+  logger.info(`Built config from requisition ${requisitionId}: target=$${totalTarget}, max=$${maxAcceptable}`);
 
   return {
     parameters: {
@@ -177,7 +183,7 @@ export const buildConfigFromRequisition = async (
         weight: 0.6,
         direction: 'minimize',
         anchor,
-        target: averageTarget,
+        target: totalTarget,
         max_acceptable: maxAcceptable,
         concession_step: concessionStep,
       },
@@ -870,7 +876,9 @@ export const processVendorMessageService = async (
   explainability: Explainability;
 }> => {
   try {
-    const deal = await models.ChatbotDeal.findByPk(input.dealId);
+    const deal = await models.ChatbotDeal.findByPk(input.dealId, {
+      include: [{ model: models.Requisition, as: 'Requisition' }],
+    });
     if (!deal) {
       throw new CustomError('Deal not found', 404);
     }
@@ -878,6 +886,10 @@ export const processVendorMessageService = async (
     if (deal.status !== 'NEGOTIATING') {
       throw new CustomError('Deal is not in negotiating status', 400);
     }
+
+    // Get requisition currency for offer parsing (February 2026)
+    const requisition = (deal as any).Requisition;
+    const requisitionCurrency = requisition?.typeOfCurrency as 'USD' | 'INR' | 'EUR' | 'GBP' | 'AUD' | undefined;
 
     // Use stored negotiation config from deal (includes priority-adjusted thresholds and weights)
     // This ensures the priority settings from deal creation are respected during negotiation
@@ -906,8 +918,8 @@ export const processVendorMessageService = async (
       config = negotiationConfig;
     }
 
-    // Parse vendor offer from message
-    const extractedOffer = parseOfferRegex(input.content);
+    // Parse vendor offer from message (with currency conversion)
+    const extractedOffer = parseOfferRegex(input.content, requisitionCurrency);
 
     // Increment round
     const newRound = deal.round + 1;
@@ -1062,7 +1074,9 @@ export const saveVendorMessageOnlyService = async (
   input: SaveVendorMessageInput
 ): Promise<SaveVendorMessageResult> => {
   try {
-    const deal = await models.ChatbotDeal.findByPk(input.dealId);
+    const deal = await models.ChatbotDeal.findByPk(input.dealId, {
+      include: [{ model: models.Requisition, as: 'Requisition' }],
+    });
     if (!deal) {
       throw new CustomError('Deal not found', 404);
     }
@@ -1071,8 +1085,12 @@ export const saveVendorMessageOnlyService = async (
       throw new CustomError('Deal is not in negotiating status', 400);
     }
 
-    // Parse vendor offer from message (now includes delivery)
-    const extractedOffer = parseOfferWithDelivery(input.content);
+    // Get requisition currency for offer parsing (February 2026)
+    const requisition = (deal as any).Requisition;
+    const requisitionCurrency = requisition?.typeOfCurrency as 'USD' | 'INR' | 'EUR' | 'GBP' | 'AUD' | undefined;
+
+    // Parse vendor offer from message (now includes delivery and currency conversion)
+    const extractedOffer = parseOfferWithDelivery(input.content, requisitionCurrency);
 
     // Calculate the round for this message pair
     // Vendor message STARTS a new round, PM response CONCLUDES it

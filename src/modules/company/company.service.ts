@@ -9,7 +9,18 @@ import type { Company, CompanyNature, EmployeesRange, IndustryType, CurrencyType
  */
 const natureEnum: readonly CompanyNature[] = ['Domestic', 'Interational', 'International'] as const;
 const employeesEnum: readonly EmployeesRange[] = ['0-10', '10-100', '100-1000', '1000+'] as const;
-const industryEnum: readonly IndustryType[] = ['Industry1', 'Industry2'] as const;
+const industryEnum: readonly IndustryType[] = [
+  'Construction',
+  'Healthcare',
+  'Transportation',
+  'Information Technology',
+  'Oil and Gas',
+  'Defence',
+  'Renewable Energy',
+  'Telecommunication',
+  'Agriculture',
+  'Other',
+] as const;
 const currencyEnum: readonly CurrencyType[] = ['INR', 'USD', 'EUR'] as const;
 
 /**

@@ -231,8 +231,11 @@ export async function processConversationMessage(
     // 4. Check for refusal
     const refusalType = classifyRefusal(vendorMessage);
 
-    // 5. Parse vendor offer
-    const parsedOffer = parseOfferRegex(vendorMessage);
+    // 5. Parse vendor offer (with currency conversion if requisition has different currency)
+    // Get requisition currency for proper conversion (February 2026)
+    const requisition = (deal as any).Requisition;
+    const requisitionCurrency = requisition?.typeOfCurrency as 'USD' | 'INR' | 'EUR' | 'GBP' | 'AUD' | undefined;
+    const parsedOffer = parseOfferRegex(vendorMessage, requisitionCurrency);
 
     // 6. Merge with last known offer if incomplete
     const vendorOffer = mergeWithLastOffer(parsedOffer, conversationState.lastVendorOffer);
