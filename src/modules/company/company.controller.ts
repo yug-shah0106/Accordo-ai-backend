@@ -84,9 +84,21 @@ export const updateCompany = async (
   try {
     const { companyid } = req.params;
     const files = (req.files as Express.Multer.File[]) || [];
+
+    // Parse addresses JSON string from FormData if provided
+    const companyData = { ...req.body };
+    if (typeof companyData.addresses === 'string') {
+      try {
+        companyData.addresses = JSON.parse(companyData.addresses);
+      } catch {
+        // If parsing fails, leave as undefined
+        delete companyData.addresses;
+      }
+    }
+
     const data = await updadateCompanyService(
       Number(companyid),
-      req.body,
+      companyData,
       req.context?.userId as number,
       files
     );
