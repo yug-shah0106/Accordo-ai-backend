@@ -176,6 +176,13 @@ const repo = {
         {
           model: models.Contract,
           as: 'Contract',
+          include: [
+            {
+              model: models.User,
+              as: 'Vendor',
+              attributes: ['id', 'name', 'email'],
+            },
+          ],
         },
         {
           model: models.Project,
@@ -213,6 +220,13 @@ const repo = {
         {
           model: models.Contract,
           as: 'Contract',
+          include: [
+            {
+              model: models.User,
+              as: 'Vendor',
+              attributes: ['id', 'name', 'email'],
+            },
+          ],
         },
         {
           model: models.Project,
