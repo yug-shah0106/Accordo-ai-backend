@@ -17,7 +17,7 @@ import type { ChatbotDeal } from '../../models/chatbotDeal.js';
 import type { ChatbotMessage } from '../../models/chatbotMessage.js';
 import { chatCompletion } from '../../services/llm.service.js';
 import { captureVendorBid, checkAndTriggerComparison } from '../bidComparison/bidComparison.service.js';
-import { sendDealCreatedEmail, sendPmDealStatusNotificationEmail, sendDealSummaryPDFEmail } from '../../services/email.service.js';
+import { sendDealCreatedEmail, sendContinuedNegotiationEmail, sendPmDealStatusNotificationEmail, sendDealSummaryPDFEmail } from '../../services/email.service.js';
 import { getCachedSuggestions, cacheSuggestions, invalidateSuggestions, precomputeSuggestionsBackground, filterSuggestionsByEmphasis } from './suggestionCache.js';
 import { generateDealSummaryPDF, generatePDFFilename, type DealSummaryPDFInput } from './pdf/dealSummaryPdfGenerator.js';
 
@@ -44,6 +44,10 @@ export interface CreateDealWithConfigInput {
   vendorId: number;
   priority: 'HIGH' | 'MEDIUM' | 'LOW';
   userId: number;
+
+  // Optional: When provided, use this existing contract (from "Start Negotiation" button)
+  // When not provided, always create a new contract (1:1 with deal)
+  contractId?: number;
 
   // Price & Quantity
   priceQuantity: {
@@ -407,35 +411,53 @@ export const createDealWithConfigService = async (
       customParameters: customParameters || [],
     };
 
-    // Check if a Contract already exists for this vendor+requisition
-    // If not, create one to ensure data consistency between Contracts and ChatbotDeals tables
+    // Contract creation logic:
+    // 1. If contractId is provided (from "Start Negotiation" on existing contract), use it
+    // 2. Otherwise, ALWAYS create a new contract (1:1 relationship with deal)
     let contractId: number | null = null;
+    let contractUniqueToken: string | null = null;
+    let isExistingContract = false;
 
-    const existingContract = await models.Contract.findOne({
-      where: {
-        requisitionId: input.requisitionId,
-        vendorId: input.vendorId,
-      },
-    });
-
-    if (existingContract) {
+    if (input.contractId) {
+      // Use the provided existing contract (from "Start Negotiation" button)
+      const existingContract = await models.Contract.findByPk(input.contractId);
+      if (!existingContract) {
+        throw new CustomError('Provided contract not found', 404);
+      }
+      if (existingContract.requisitionId !== input.requisitionId || existingContract.vendorId !== input.vendorId) {
+        throw new CustomError('Contract does not match requisition/vendor', 400);
+      }
       contractId = existingContract.id;
-      logger.info(`Using existing contract ${contractId} for vendor ${input.vendorId} on requisition ${input.requisitionId}`);
+      contractUniqueToken = existingContract.uniqueToken;
+      isExistingContract = true;
+      logger.info(`Using provided existing contract ${contractId} for vendor ${input.vendorId} on requisition ${input.requisitionId}`);
     } else {
-      // Create a new Contract record to link vendor to requisition
-      // This ensures the vendor appears in the dropdown for future deals
+      // Always create a NEW contract for each deal (1:1 relationship)
+      // This ensures each deal has its own unique portal link
       const uniqueToken = crypto.randomBytes(16).toString('hex');
       const newContract = await models.Contract.create({
         requisitionId: input.requisitionId,
         vendorId: input.vendorId,
         status: 'Created',
         uniqueToken,
-        chatbotDealId: dealId,  // Link to the deal we're about to create
+        chatbotDealId: dealId,  // Link to the deal we're about to create (1:1)
         createdBy: input.userId,
       });
       contractId = newContract.id;
+      contractUniqueToken = uniqueToken;
+      isExistingContract = false;
       logger.info(`Created new contract ${contractId} for vendor ${input.vendorId} on requisition ${input.requisitionId}`);
     }
+
+    // Check if this vendor has existing deals on this requisition (for email type determination)
+    const existingDealsCount = await models.ChatbotDeal.count({
+      where: {
+        requisitionId: input.requisitionId,
+        vendorId: input.vendorId,
+        deletedAt: null,
+      },
+    });
+    const isFirstDealForVendor = existingDealsCount === 0;
 
     const deal = await models.ChatbotDeal.create({
       id: dealId,
@@ -496,40 +518,80 @@ export const createDealWithConfigService = async (
           unit: rp.Product?.UOM || undefined,
         }));
 
-        // Build email data
-        const emailData = {
-          dealId: dealId,
-          dealTitle: input.title,
-          requisitionId: input.requisitionId,
-          rfqNumber: (requisitionWithDetails as any).rfqNumber || `RFQ-${input.requisitionId}`,
-          requisitionTitle: (requisitionWithDetails as any).title || input.title,
-          projectName: (requisitionWithDetails as any).Project?.projectName || 'Unknown Project',
-          vendorId: input.vendorId,
-          vendorName: vendor.name || vendor.email,
-          vendorEmail: vendor.email,
-          negotiationDeadline: negotiationControl?.deadline ? new Date(negotiationControl.deadline) : (requisitionWithDetails as any).negotiationClosureDate || undefined,
-          products: products.length > 0 ? products : [{
-            name: 'Products as per RFQ',
-            quantity: 1,
-            targetPrice: priceQuantity.targetUnitPrice,
-          }],
-          priceConfig: {
-            targetUnitPrice: priceQuantity.targetUnitPrice,
-            maxAcceptablePrice: priceQuantity.maxAcceptablePrice,
-          },
-          paymentTerms: paymentTerms ? {
-            minDays: paymentTerms.minDays || 30,
-            maxDays: paymentTerms.maxDays || 90,
-          } : undefined,
-          deliveryDate: delivery?.requiredDate || undefined,
-        };
+        // Determine which email to send based on whether this is the first deal for vendor on this requisition
+        // First deal: send portal link (/vendor-contract/{token})
+        // Subsequent deals: send chatbot link (/vendor-chat/{token}) with "Continue Negotiation" tone
 
-        emailStatus = await sendDealCreatedEmail(emailData);
+        if (isFirstDealForVendor) {
+          // First deal for this vendor - send standard deal created email with portal link
+          const emailData = {
+            dealId: dealId,
+            dealTitle: input.title,
+            requisitionId: input.requisitionId,
+            rfqNumber: (requisitionWithDetails as any).rfqNumber || `RFQ-${input.requisitionId}`,
+            requisitionTitle: (requisitionWithDetails as any).title || input.title,
+            projectName: (requisitionWithDetails as any).Project?.projectName || 'Unknown Project',
+            vendorId: input.vendorId,
+            vendorName: vendor.name || vendor.email,
+            vendorEmail: vendor.email,
+            negotiationDeadline: negotiationControl?.deadline ? new Date(negotiationControl.deadline) : (requisitionWithDetails as any).negotiationClosureDate || undefined,
+            products: products.length > 0 ? products : [{
+              name: 'Products as per RFQ',
+              quantity: 1,
+              targetPrice: priceQuantity.targetUnitPrice,
+            }],
+            priceConfig: {
+              targetUnitPrice: priceQuantity.targetUnitPrice,
+              maxAcceptablePrice: priceQuantity.maxAcceptablePrice,
+            },
+            paymentTerms: paymentTerms ? {
+              minDays: paymentTerms.minDays || 30,
+              maxDays: paymentTerms.maxDays || 90,
+            } : undefined,
+            deliveryDate: delivery?.requiredDate || undefined,
+          };
 
-        if (emailStatus.success) {
-          logger.info(`Deal created email sent to vendor ${vendor.email} for deal ${dealId}`);
+          emailStatus = await sendDealCreatedEmail(emailData);
+
+          if (emailStatus.success) {
+            logger.info(`Deal created email (first deal) sent to vendor ${vendor.email} for deal ${dealId}`);
+          } else {
+            logger.warn(`Failed to send deal created email: ${emailStatus.error}`, { dealId, vendorEmail: vendor.email });
+          }
         } else {
-          logger.warn(`Failed to send deal created email: ${emailStatus.error}`, { dealId, vendorEmail: vendor.email });
+          // Subsequent deal for this vendor - send continued negotiation email with chatbot link
+          const continuedEmailData = {
+            dealId: dealId,
+            dealTitle: input.title,
+            requisitionId: input.requisitionId,
+            rfqNumber: (requisitionWithDetails as any).rfqNumber || `RFQ-${input.requisitionId}`,
+            requisitionTitle: (requisitionWithDetails as any).title || input.title,
+            projectName: (requisitionWithDetails as any).Project?.projectName || 'Unknown Project',
+            vendorId: input.vendorId,
+            vendorName: vendor.name || vendor.email,
+            vendorEmail: vendor.email,
+            contractUniqueToken: contractUniqueToken!, // Token from the newly created contract
+            negotiationDeadline: negotiationControl?.deadline ? new Date(negotiationControl.deadline) : (requisitionWithDetails as any).negotiationClosureDate || undefined,
+            previousDealsCount: existingDealsCount, // Number of previous deals
+            products: products.length > 0 ? products : [{
+              name: 'Products as per RFQ',
+              quantity: 1,
+              targetPrice: priceQuantity.targetUnitPrice,
+            }],
+            paymentTerms: paymentTerms ? {
+              minDays: paymentTerms.minDays || 30,
+              maxDays: paymentTerms.maxDays || 90,
+            } : undefined,
+            deliveryDate: delivery?.requiredDate || undefined,
+          };
+
+          emailStatus = await sendContinuedNegotiationEmail(continuedEmailData);
+
+          if (emailStatus.success) {
+            logger.info(`Continued negotiation email sent to vendor ${vendor.email} for deal ${dealId} (previous deals: ${existingDealsCount})`);
+          } else {
+            logger.warn(`Failed to send continued negotiation email: ${emailStatus.error}`, { dealId, vendorEmail: vendor.email });
+          }
         }
       } else {
         logger.warn(`Cannot send deal created email: missing requisition details or vendor email`, {
