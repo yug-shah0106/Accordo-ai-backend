@@ -16,7 +16,25 @@ export const createExpressApp = (): Application => {
 
   app.set('trust proxy', 1);
 
-  // Helmet with CSP adjustments for Swagger UI
+  // Swagger UI documentation - MUST be before Helmet to avoid CSP issues
+  app.use(
+    '/api-docs',
+    swaggerUi.serve,
+    swaggerUi.setup(swaggerSpec, {
+      explorer: true,
+      customCss: '.swagger-ui .topbar { display: none }',
+      customSiteTitle: 'Accordo AI API Documentation',
+      swaggerOptions: {
+        persistAuthorization: true,
+        displayRequestDuration: true,
+        filter: true,
+        showExtensions: true,
+        showCommonExtensions: true,
+      },
+    })
+  );
+
+  // Helmet security headers (applied after Swagger to avoid CSP conflicts)
   app.use(
     helmet({
       contentSecurityPolicy: {
@@ -57,24 +75,6 @@ export const createExpressApp = (): Application => {
   app.get('/', (_req: Request, res: Response) => {
     res.json({ status: 'ok', message: 'Accordo API is running' });
   });
-
-  // Swagger UI documentation
-  app.use(
-    '/api-docs',
-    swaggerUi.serve,
-    swaggerUi.setup(swaggerSpec, {
-      explorer: true,
-      customCss: '.swagger-ui .topbar { display: none }',
-      customSiteTitle: 'Accordo AI API Documentation',
-      swaggerOptions: {
-        persistAuthorization: true,
-        displayRequestDuration: true,
-        filter: true,
-        showExtensions: true,
-        showCommonExtensions: true,
-      },
-    })
-  );
 
   // Swagger JSON endpoint
   app.get('/api-docs.json', (_req: Request, res: Response) => {

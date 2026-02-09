@@ -8,6 +8,7 @@ import {
   getAllUsersService,
   deleteUserService,
 } from "./user.service.js";
+import { getParam } from '../../types/index.js';
 
 /**
  * Update user profile
@@ -126,7 +127,7 @@ export const getUser = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const data = await getUserService(req.params.userid);
+    const data = await getUserService(getParam(req.params.userid));
     res.status(201).json({ message: "User", data });
   } catch (error) {
     next(error);
@@ -142,7 +143,7 @@ export const getUserRolePermission = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const data = await getUserService(req.params.userid);
+    const data = await getUserService(getParam(req.params.userid));
     res.status(201).json({ message: "User Role Permission", data });
   } catch (error) {
     next(error);
@@ -158,7 +159,7 @@ export const deleteUser = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const deletedCount = await deleteUserService(req.params.userid);
+    const deletedCount = await deleteUserService(getParam(req.params.userid));
     if (deletedCount === 0) {
       res.status(404).json({ message: "User not found" });
       return;

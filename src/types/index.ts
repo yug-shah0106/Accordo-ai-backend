@@ -138,3 +138,26 @@ export interface UploadedFile {
   path: string;
   size: number;
 }
+
+/**
+ * Safely extract a route parameter as a string.
+ * Handles Express 5.x typing where params can be string | string[].
+ * @param param - The parameter value from req.params
+ * @returns The parameter as a string, or the first element if it's an array
+ */
+export const getParam = (param: string | string[] | undefined): string => {
+  if (Array.isArray(param)) {
+    return param[0] || '';
+  }
+  return param || '';
+};
+
+/**
+ * Safely extract a route parameter and parse it as a number.
+ * @param param - The parameter value from req.params
+ * @returns The parameter parsed as a number
+ */
+export const getNumericParam = (param: string | string[] | undefined): number => {
+  const str = getParam(param);
+  return Number.parseInt(str, 10);
+};

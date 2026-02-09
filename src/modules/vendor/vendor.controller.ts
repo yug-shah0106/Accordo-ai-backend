@@ -14,6 +14,7 @@ import {
 } from './vendor.service.js';
 import type { VendorWithCompanyData, Step1Data, Step2Data, Step3Data, Step4Data } from './vendor.service.js';
 import { CustomError } from '../../utils/custom-error.js';
+import { getParam, getNumericParam } from '../../types/index.js';
 
 /**
  * Create a new vendor
@@ -40,7 +41,7 @@ export const getVendor = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const vendorId = Number.parseInt(req.params.vendorid, 10);
+    const vendorId = getNumericParam(req.params.vendorid);
     const data = await getVendorService({ id: vendorId });
     res.status(200).json({ message: 'Vendor', data });
   } catch (error) {
@@ -80,7 +81,7 @@ export const updateVendor = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const data = await updateVendorService(req.params.vendorid, req.body);
+    const data = await updateVendorService(getParam(req.params.vendorid), req.body);
     res.status(200).json({ message: 'Vendor updated successfully', data });
   } catch (error) {
     next(error);
@@ -96,7 +97,7 @@ export const deleteVendor = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const data = await deleteVendorService(req.params.vendorid);
+    const data = await deleteVendorService(getParam(req.params.vendorid));
     res.status(200).json({ message: 'Vendor deleted successfully', data });
   } catch (error) {
     next(error);
@@ -202,7 +203,7 @@ export const updateVendorStep = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const companyId = Number.parseInt(req.params.companyId, 10);
+    const companyId = getNumericParam(req.params.companyId);
     const step = req.query.step as string;
 
     if (Number.isNaN(companyId)) {
@@ -253,7 +254,7 @@ export const getVendorForReview = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const companyId = Number.parseInt(req.params.companyId, 10);
+    const companyId = getNumericParam(req.params.companyId);
     const step = req.query.step as string;
 
     if (Number.isNaN(companyId)) {

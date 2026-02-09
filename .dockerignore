@@ -1,6 +1,9 @@
 # Dependencies
 node_modules
 
+# Build output (will be rebuilt in container)
+dist
+
 # Git
 .git
 .gitignore
@@ -13,6 +16,7 @@ npm-debug.log*
 # Environment files (will be mounted or passed at runtime)
 .env
 .env.*
+!.env.example
 
 # IDE and editor files
 .idea
@@ -23,15 +27,31 @@ npm-debug.log*
 
 # Tests
 tests
-*.test.js
-*.spec.js
+*.test.ts
+*.spec.ts
+coverage
+.nyc_output
 
 # Documentation
 README.md
+CLAUDE.md
 docs
+*.md
 
 # Docker files (no need to copy into the container)
 Dockerfile
 docker-compose*.yml
 .dockerignore
+
+# Scripts and utilities not needed in production
+scripts
+*.sh
+
+# TypeScript build info
+*.tsbuildinfo
+
+# Temporary files
+tmp
+temp
+.tmp
 

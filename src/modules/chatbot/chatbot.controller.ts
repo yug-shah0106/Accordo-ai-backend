@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import * as chatbotService from './chatbot.service.js';
 import { CustomError } from '../../utils/custom-error.js';
 import logger from '../../config/logger.js';
+import { getParam, getNumericParam } from '../../types/index.js';
 
 /**
  * Chatbot Controller
@@ -86,16 +87,16 @@ export const getSmartDefaults = async (
 ): Promise<void> => {
   try {
     // Support both path params (new) and query params (legacy)
-    const rfqId = req.params.rfqId || req.query.rfqId;
-    const vendorId = req.params.vendorId || req.query.vendorId;
+    const rfqIdParam = req.params.rfqId || req.query.rfqId;
+    const vendorIdParam = req.params.vendorId || req.query.vendorId;
 
-    if (!rfqId || !vendorId) {
+    if (!rfqIdParam || !vendorIdParam) {
       throw new CustomError('rfqId and vendorId are required', 400);
     }
 
     const defaults = await chatbotService.getSmartDefaultsService(
-      parseInt(rfqId as string, 10),
-      parseInt(vendorId as string, 10)
+      getNumericParam(rfqIdParam as string),
+      getNumericParam(vendorIdParam as string)
     );
 
     res.status(200).json({ message: 'Smart defaults retrieved successfully', data: defaults });
@@ -121,7 +122,7 @@ export const lookupDeal = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const { dealId } = req.params;
+    const dealId = getParam(req.params.dealId);
     const result = await chatbotService.getDealService(dealId);
 
     // Validate that the deal has the required context values for nested URLs
@@ -161,7 +162,7 @@ export const getDeal = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const { dealId } = req.params;
+    const dealId = getParam(req.params.dealId);
     const result = await chatbotService.getDealService(dealId);
 
     res.status(200).json({ message: 'Deal retrieved successfully', data: result });
@@ -221,7 +222,7 @@ export const processVendorMessage = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const { dealId } = req.params;
+    const dealId = getParam(req.params.dealId);
     const { content, role = 'VENDOR' } = req.body;
 
     if (!content) {
@@ -267,7 +268,7 @@ export const resetDeal = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const { dealId } = req.params;
+    const dealId = getParam(req.params.dealId);
     const deal = await chatbotService.resetDealService(dealId);
 
     logger.info(`Deal reset: ${dealId} by user ${req.context.userId}`);
@@ -293,7 +294,7 @@ export const getDealConfig = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const { dealId } = req.params;
+    const dealId = getParam(req.params.dealId);
     const config = await chatbotService.getDealConfigService(dealId);
 
     res.status(200).json({ message: 'Config retrieved successfully', data: { config } });
@@ -312,7 +313,7 @@ export const getLastExplainability = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const { dealId } = req.params;
+    const dealId = getParam(req.params.dealId);
     const explainability = await chatbotService.getLastExplainabilityService(dealId);
 
     if (!explainability) {
@@ -338,7 +339,7 @@ export const archiveDeal = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const { dealId } = req.params;
+    const dealId = getParam(req.params.dealId);
     const deal = await chatbotService.archiveDealService(dealId);
 
     logger.info(`Deal archived: ${dealId} by user ${req.context.userId}`);
@@ -358,7 +359,7 @@ export const unarchiveDeal = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const { dealId } = req.params;
+    const dealId = getParam(req.params.dealId);
     const deal = await chatbotService.unarchiveDealService(dealId);
 
     logger.info(`Deal unarchived: ${dealId} by user ${req.context.userId}`);
@@ -378,7 +379,7 @@ export const retryDealEmail = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const { dealId } = req.params;
+    const dealId = getParam(req.params.dealId);
     const result = await chatbotService.retryDealEmailService(dealId);
 
     if (result.success) {
@@ -409,7 +410,7 @@ export const createSystemMessage = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const { dealId } = req.params;
+    const dealId = getParam(req.params.dealId);
     const { content } = req.body;
 
     if (!content) {
@@ -438,7 +439,7 @@ export const startConversation = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const { dealId } = req.params;
+    const dealId = getParam(req.params.dealId);
     const userId = req.context.userId;
 
     const { startConversation } = await import('./convo/conversationService.js');
@@ -460,7 +461,7 @@ export const sendConversationMessage = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const { dealId } = req.params;
+    const dealId = getParam(req.params.dealId);
     const { content } = req.body;
     const userId = req.context.userId;
 
@@ -491,7 +492,7 @@ export const getConversationExplainability = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const { dealId } = req.params;
+    const dealId = getParam(req.params.dealId);
     const userId = req.context.userId;
 
     const { getLastExplainability } = await import('./convo/conversationService.js');
@@ -541,7 +542,7 @@ export const runDemo = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const { dealId } = req.params;
+    const dealId = getParam(req.params.dealId);
     const { scenario, maxRounds = 10 } = req.body;
 
     if (!scenario) {
@@ -590,7 +591,7 @@ export const resumeDeal = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const { dealId } = req.params;
+    const dealId = getParam(req.params.dealId);
     const deal = await chatbotService.resumeDealService(dealId);
 
     logger.info(`[ResumeController] Deal resumed: ${dealId}`, {
@@ -650,7 +651,7 @@ export const suggestCounters = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const { dealId } = req.params;
+    const dealId = getParam(req.params.dealId);
     const userId = req.context.userId;
 
     // Parse emphasis query parameter (comma-separated: "price,delivery")
@@ -743,11 +744,11 @@ export const getRequisitionDeals = async (
 ): Promise<void> => {
   try {
     // Support both rfqId (new) and requisitionId (legacy) param names
-    const rfqId = req.params.rfqId || req.params.requisitionId;
+    const rfqIdParam = req.params.rfqId || req.params.requisitionId;
     const { status, sortBy, sortOrder, archived } = req.query;
 
     const result = await chatbotService.getRequisitionDealsService(
-      parseInt(rfqId, 10),
+      getNumericParam(rfqIdParam),
       {
         status: status as string,
         sortBy: sortBy as string,
@@ -775,7 +776,7 @@ export const getDealSummary = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const { dealId } = req.params;
+    const dealId = getParam(req.params.dealId);
     const result = await chatbotService.getDealSummaryService(dealId);
 
     res.status(200).json({
@@ -799,8 +800,9 @@ export const exportDealPDF = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const { dealId, rfqId } = req.params;
-    const result = await chatbotService.exportDealPDFService(dealId, parseInt(rfqId, 10));
+    const dealId = getParam(req.params.dealId);
+    const rfqId = getNumericParam(req.params.rfqId);
+    const result = await chatbotService.exportDealPDFService(dealId, rfqId);
 
     // Set headers for PDF download
     res.setHeader('Content-Type', 'application/pdf');
@@ -825,7 +827,8 @@ export const emailDealPDF = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const { dealId, rfqId } = req.params;
+    const dealId = getParam(req.params.dealId);
+    const rfqId = getNumericParam(req.params.rfqId);
     const { email } = req.body;
 
     if (!email || typeof email !== 'string') {
@@ -835,7 +838,7 @@ export const emailDealPDF = async (
       return;
     }
 
-    await chatbotService.emailDealPDFService(dealId, parseInt(rfqId, 10), email);
+    await chatbotService.emailDealPDFService(dealId, rfqId, email);
 
     res.status(200).json({
       message: `Deal summary PDF sent to ${email}`,
@@ -862,7 +865,7 @@ export const getDealUtility = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const { dealId } = req.params;
+    const dealId = getParam(req.params.dealId);
     const result = await chatbotService.getDealUtilityService(dealId);
 
     res.status(200).json({
@@ -887,8 +890,8 @@ export const getVendorAddresses = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const { vendorId } = req.params;
-    const addresses = await chatbotService.getVendorAddressesService(parseInt(vendorId, 10));
+    const vendorId = getNumericParam(req.params.vendorId);
+    const addresses = await chatbotService.getVendorAddressesService(vendorId);
 
     res.status(200).json({
       message: 'Vendor addresses retrieved successfully',
@@ -934,8 +937,8 @@ export const getRequisitionVendors = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const { rfqId } = req.params;
-    const result = await chatbotService.getRequisitionVendorsService(parseInt(rfqId, 10));
+    const rfqId = getNumericParam(req.params.rfqId);
+    const result = await chatbotService.getRequisitionVendorsService(rfqId);
 
     res.status(200).json({
       message: 'Requisition vendors retrieved successfully',
@@ -957,7 +960,7 @@ export const sendMessage = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const { dealId } = req.params;
+    const dealId = getParam(req.params.dealId);
     const { content, role = 'VENDOR' } = req.body;
     const { mode = 'INSIGHTS' } = req.query;
 
@@ -1030,12 +1033,13 @@ export const saveDraft = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const { rfqId, vendorId } = req.params;
+    const rfqId = getNumericParam(req.params.rfqId);
+    const vendorId = getNumericParam(req.params.vendorId);
     const draftData = req.body;
 
     const draft = await chatbotService.saveDraftService({
-      rfqId: parseInt(rfqId, 10),
-      vendorId: parseInt(vendorId, 10),
+      rfqId,
+      vendorId,
       userId: req.context.userId,
       data: draftData,
     });
@@ -1059,11 +1063,12 @@ export const listDrafts = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const { rfqId, vendorId } = req.params;
+    const rfqId = getNumericParam(req.params.rfqId);
+    const vendorId = getNumericParam(req.params.vendorId);
 
     const drafts = await chatbotService.listDraftsService(
-      parseInt(rfqId, 10),
-      parseInt(vendorId, 10),
+      rfqId,
+      vendorId,
       req.context.userId
     );
 
@@ -1086,7 +1091,7 @@ export const getDraft = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const { draftId } = req.params;
+    const draftId = getParam(req.params.draftId);
 
     const draft = await chatbotService.getDraftService(draftId);
 
@@ -1109,7 +1114,7 @@ export const deleteDraft = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const { draftId } = req.params;
+    const draftId = getParam(req.params.draftId);
 
     await chatbotService.deleteDraftService(draftId);
 
@@ -1135,7 +1140,7 @@ export const startNegotiation = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const { dealId } = req.params;
+    const dealId = getParam(req.params.dealId);
 
     const result = await chatbotService.startNegotiationService(dealId);
 
@@ -1159,7 +1164,7 @@ export const getVendorScenarios = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const { dealId } = req.params;
+    const dealId = getParam(req.params.dealId);
 
     const scenarios = await chatbotService.getVendorScenariosService(dealId);
 
@@ -1182,7 +1187,7 @@ export const vendorSendMessage = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const { dealId } = req.params;
+    const dealId = getParam(req.params.dealId);
     const { content } = req.body;
 
     if (!content || !content.trim()) {
@@ -1236,7 +1241,7 @@ export const saveVendorMessageInstant = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const { dealId } = req.params;
+    const dealId = getParam(req.params.dealId);
     const { content } = req.body;
     const userId = req.context.userId;
 
@@ -1293,7 +1298,7 @@ export const generatePMResponseAsync = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const { dealId } = req.params;
+    const dealId = getParam(req.params.dealId);
     const { vendorMessageId } = req.body;
     const userId = req.context.userId;
 
@@ -1350,7 +1355,7 @@ export const generatePMResponseFallback = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const { dealId } = req.params;
+    const dealId = getParam(req.params.dealId);
     const { vendorMessageId } = req.body;
     const userId = req.context.userId;
 
@@ -1390,7 +1395,7 @@ export const archiveRequisition = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const rfqId = parseInt(req.params.rfqId, 10);
+    const rfqId = getNumericParam(req.params.rfqId);
     const result = await chatbotService.archiveRequisitionService(rfqId);
     res.status(200).json({
       message: `Requisition archived successfully. ${result.archivedDealsCount} deals also archived.`,
@@ -1411,7 +1416,7 @@ export const unarchiveRequisition = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const rfqId = parseInt(req.params.rfqId, 10);
+    const rfqId = getNumericParam(req.params.rfqId);
     const unarchiveDeals = req.body.unarchiveDeals !== false; // Default true
     const result = await chatbotService.unarchiveRequisitionService(rfqId, unarchiveDeals);
     res.status(200).json({

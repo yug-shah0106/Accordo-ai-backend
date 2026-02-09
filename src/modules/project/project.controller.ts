@@ -6,6 +6,7 @@ import {
   getProjectService,
   updateProjectService,
 } from './project.service.js';
+import { getParam } from '../../types/index.js';
 
 /**
  * Create a new project
@@ -33,7 +34,7 @@ export const getProject = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const data = await getProjectService(req.params.projectid);
+    const data = await getProjectService(getParam(req.params.projectid));
     res.status(201).json({ message: 'Project', data });
   } catch (error) {
     next(error);
@@ -74,7 +75,7 @@ export const updateProject = async (
   try {
     const { pointOfContact = [] } = req.body;
     const data = await updateProjectService(
-      req.params.projectid,
+      getParam(req.params.projectid),
       req.context.userId,
       req.body,
       pointOfContact
@@ -94,7 +95,7 @@ export const deleteProject = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const data = await deleteProjectService(req.params.projectid);
+    const data = await deleteProjectService(getParam(req.params.projectid));
     res.status(201).json({ message: 'Project deleted successfully', data });
   } catch (error) {
     next(error);
