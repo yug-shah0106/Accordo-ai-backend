@@ -362,49 +362,6 @@ export function getStatusColor(status: ParameterStatus): string {
   }
 }
 
-// ============================================
-// STRUCTURED SUGGESTION TYPES
-// ============================================
-
-/**
- * Emphasis type for suggestion message variety
- * Each suggestion within a scenario emphasizes a different aspect
- */
-export type SuggestionEmphasis = 'price' | 'terms' | 'delivery' | 'value';
-
-/**
- * Scenario types for suggestions
- */
-export type ScenarioType = 'HARD' | 'MEDIUM' | 'SOFT' | 'WALK_AWAY';
-
-/**
- * Structured suggestion with price, terms, and delivery
- * Replaces the old string-only suggestion format
- */
-export interface StructuredSuggestion {
-  message: string;              // Human-like message text including all terms
-  price: number;                // Unit price value
-  paymentTerms: string;         // e.g., "Net 30", "Net 60", "Net 90"
-  deliveryDate: string;         // ISO date string (YYYY-MM-DD)
-  deliveryDays: number;         // Days from today
-  emphasis: SuggestionEmphasis; // What this message emphasizes
-}
-
-/**
- * Complete scenario suggestions map
- */
-export type ScenarioSuggestions = Record<ScenarioType, StructuredSuggestion[]>;
-
-/**
- * Delivery configuration extracted from deal for suggestion generation
- * Note: For response generation, use DeliveryConfig from deliveryUtility.ts
- */
-export interface SuggestionDeliveryConfig {
-  date: string;                 // ISO date string
-  daysFromToday: number;        // Calculated days
-  isDefault: boolean;           // Whether using 30-day fallback
-}
-
 /**
  * Helper function to get recommendation from utility score
  */
