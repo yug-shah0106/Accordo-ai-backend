@@ -7,8 +7,6 @@ import {
   vendorEnterChat,
   vendorSendMessageInstant,
   generatePMResponse,
-  generateVendorSuggestions,
-  type VendorSuggestionEmphasis,
 } from './vendor-chat.service.js';
 import {
   submitQuoteSchema,
@@ -242,61 +240,6 @@ export const getPMResponse = async (
   }
 };
 
-/**
- * Get vendor suggestions based on PM's counter-offer
- * POST /api/vendor-chat/suggestions
- *
- * Generates suggestions from VENDOR's perspective:
- * - STRONG: 15% above PM's counter-offer
- * - BALANCED: 5% above PM's counter-offer
- * - FLEXIBLE: Match PM's counter-offer
- *
- * Only returns suggestions after PM has made at least one counter-offer.
- */
-export const getSuggestions = async (
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> => {
-  try {
-    const uniqueToken = req.body.uniqueToken || req.query.uniqueToken;
-    if (!uniqueToken || typeof uniqueToken !== 'string') {
-      res.status(400).json({ message: 'uniqueToken is required' });
-      return;
-    }
-
-    // Parse emphases from request body (optional)
-    const emphases = req.body.emphases as VendorSuggestionEmphasis[] | undefined;
-
-    // Validate emphases if provided
-    if (emphases && Array.isArray(emphases)) {
-      const validEmphases: VendorSuggestionEmphasis[] = ['price', 'terms', 'delivery'];
-      for (const e of emphases) {
-        if (!validEmphases.includes(e)) {
-          res.status(400).json({ message: `Invalid emphasis: ${e}. Valid values: ${validEmphases.join(', ')}` });
-          return;
-        }
-      }
-    }
-
-    const result = await generateVendorSuggestions(uniqueToken, emphases);
-
-    res.status(200).json({
-      message: result.hasPMCounterOffer
-        ? 'Vendor suggestions generated'
-        : 'No PM counter-offer yet - suggestions unavailable',
-      data: {
-        suggestions: result.suggestions,
-        hasPMCounterOffer: result.hasPMCounterOffer,
-        vendorQuotePrice: result.vendorQuotePrice,
-        pmCounterPrice: result.pmCounterPrice,
-      },
-    });
-  } catch (error) {
-    next(error);
-  }
-};
-
 export default {
   submitQuote,
   checkCanEditQuote,
@@ -305,5 +248,4 @@ export default {
   enterChat,
   sendMessage,
   getPMResponse,
-  getSuggestions,
 };

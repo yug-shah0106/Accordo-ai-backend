@@ -328,17 +328,6 @@ chatbotRouter.post(
   controller.startConversation
 );
 
-/**
- * Get AI counter suggestions
- * POST /api/chatbot/requisitions/:rfqId/vendors/:vendorId/deals/:dealId/suggestions
- */
-chatbotRouter.post(
-  '/requisitions/:rfqId/vendors/:vendorId/deals/:dealId/suggestions',
-  authMiddleware,
-  validateParams(nestedDealSchema),
-  controller.suggestCounters
-);
-
 // ==================== Two-Phase Messaging (Instant Vendor + Async PM) ====================
 
 /**

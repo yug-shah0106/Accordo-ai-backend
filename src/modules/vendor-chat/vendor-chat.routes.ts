@@ -7,7 +7,6 @@ import {
   enterChat,
   sendMessage,
   getPMResponse,
-  getSuggestions,
 } from './vendor-chat.controller.js';
 
 /**
@@ -29,8 +28,5 @@ vendorChatRouter.post('/enter', enterChat);
 // Messaging (two-phase pattern)
 vendorChatRouter.post('/message', sendMessage);
 vendorChatRouter.post('/pm-response', getPMResponse);
-
-// Vendor suggestions (after PM counter-offer)
-vendorChatRouter.post('/suggestions', getSuggestions);
 
 export default vendorChatRouter;
