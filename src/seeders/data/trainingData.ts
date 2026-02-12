@@ -173,7 +173,7 @@ Payment: ${lastVendorOffer?.paymentTerms || 'N/A'}`;
         maxAcceptablePrice: config.maxAcceptablePrice,
         weights: config.scoringWeights,
       },
-      llmModel: 'llama3.1',
+      llmModel: 'qwen3',
       generationSource: index % 5 === 0 ? 'fallback' : 'llm', // 20% fallback
       selectedScenario,
       selectedSuggestion,

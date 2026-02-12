@@ -1,3 +1,4 @@
+import { Op } from 'sequelize';
 import models, { sequelize } from '../../models/index.js';
 import userRepo from '../user/user.repo.js';
 import CustomError from '../../utils/custom-error.js';
@@ -68,7 +69,8 @@ const repo = {
    */
   getProjects: async (
     queryOptions: QueryOptions = {},
-    userId: number
+    userId: number,
+    searchTerm?: string
   ): Promise<FindAndCountResult> => {
     const user = await userRepo.getUserProfile(userId);
 
@@ -76,22 +78,38 @@ const repo = {
     const isAdmin = user?.userType === 'admin';
     const companyFilter = (!isAdmin && user?.companyId) ? { companyId: user.companyId } : {};
 
+    // Build include with optional POC name search
+    const pocInclude: any = {
+      model: models.ProjectPoc,
+      as: 'ProjectPoc',
+      include: {
+        model: models.User,
+        as: 'User',
+      },
+    };
+
+    // If searching, add POC name search to include
+    if (searchTerm) {
+      pocInclude.include = {
+        model: models.User,
+        as: 'User',
+        where: {
+          name: { [Op.iLike]: `%${searchTerm}%` },
+        },
+        required: false,
+      };
+      pocInclude.required = false;
+    }
+
     const options = {
       ...queryOptions,
       where: {
         ...(queryOptions.where || {}),
         ...companyFilter,
       },
-      include: [
-        {
-          model: models.ProjectPoc,
-          as: 'ProjectPoc',
-          include: {
-            model: models.User,
-            as: 'User',
-          },
-        },
-      ],
+      include: [pocInclude],
+      distinct: true, // Ensures correct count when using includes
+      subQuery: false, // Needed for proper OR search with includes
     };
 
     return models.Project.findAndCountAll(options as any);

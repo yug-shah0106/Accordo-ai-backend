@@ -1,14 +1,28 @@
-import { Op } from 'sequelize';
+import { Op, Transaction } from 'sequelize';
 import companyRepo from './company.repo.js';
 import CustomError from '../../utils/custom-error.js';
 import type { Company, CompanyNature, EmployeesRange, IndustryType, CurrencyType } from '../../models/company.js';
+import models, { sequelize } from '../../models/index.js';
+import type { Address } from '../../models/address.js';
 
 /**
  * Enum definitions for company fields
+ * Note: 'Interational' is a legacy typo, 'International' is the correct spelling
  */
-const natureEnum: readonly CompanyNature[] = ['Domestic', 'Interational'] as const;
+const natureEnum: readonly CompanyNature[] = ['Domestic', 'Interational', 'International'] as const;
 const employeesEnum: readonly EmployeesRange[] = ['0-10', '10-100', '100-1000', '1000+'] as const;
-const industryEnum: readonly IndustryType[] = ['Industry1', 'Industry2'] as const;
+const industryEnum: readonly IndustryType[] = [
+  'Construction',
+  'Healthcare',
+  'Transportation',
+  'Information Technology',
+  'Oil and Gas',
+  'Defence',
+  'Renewable Energy',
+  'Telecommunication',
+  'Agriculture',
+  'Other',
+] as const;
 const currencyEnum: readonly CurrencyType[] = ['INR', 'USD', 'EUR'] as const;
 
 /**
@@ -21,6 +35,21 @@ interface UploadedFile {
   encoding: string;
   mimetype: string;
   size: number;
+}
+
+/**
+ * Address data interface for address operations
+ */
+interface AddressData {
+  id?: number;
+  label: string;
+  address: string;
+  city?: string | null;
+  state?: string | null;
+  country?: string | null;
+  postalCode?: string | null;
+  isDefault: boolean;
+  _delete?: boolean;
 }
 
 /**
@@ -39,6 +68,7 @@ interface CompanyData extends Partial<Company> {
   cancelledChequeURL?: string;
   createdBy?: number;
   updatedBy?: number;
+  addresses?: AddressData[];
 }
 
 /**
@@ -68,6 +98,81 @@ const validateEnumField = <T>(
       `Invalid value '${value}' for field '${fieldName}'. Valid values are: ${validValues.join(', ')}`,
       400
     );
+  }
+};
+
+/**
+ * Handles address create/update/delete operations within a transaction
+ * @param companyId - Company ID
+ * @param addresses - Array of address data
+ * @param transaction - Database transaction
+ */
+const handleAddressUpdates = async (
+  companyId: number,
+  addresses: AddressData[],
+  transaction: Transaction
+): Promise<void> => {
+  // Filter out addresses marked for deletion
+  const addressesToKeep = addresses.filter(addr => !addr._delete);
+  const addressesToDelete = addresses.filter(addr => addr._delete && addr.id);
+
+  // Validate: at least one address required
+  if (addressesToKeep.length === 0) {
+    throw new CustomError('At least one address is required', 400);
+  }
+
+  // Validate: exactly one primary address
+  const primaryAddresses = addressesToKeep.filter(addr => addr.isDefault);
+  if (primaryAddresses.length === 0) {
+    // Auto-set first address as primary if none specified
+    addressesToKeep[0].isDefault = true;
+  } else if (primaryAddresses.length > 1) {
+    throw new CustomError('Only one address can be set as primary', 400);
+  }
+
+  // Delete addresses marked for deletion
+  for (const addr of addressesToDelete) {
+    await models.Address.destroy({
+      where: { id: addr.id, companyId },
+      transaction,
+    });
+  }
+
+  // Process remaining addresses
+  for (const addr of addressesToKeep) {
+    if (addr.id) {
+      // Update existing address
+      await models.Address.update(
+        {
+          label: addr.label,
+          address: addr.address,
+          city: addr.city || null,
+          state: addr.state || null,
+          country: addr.country || null,
+          postalCode: addr.postalCode || null,
+          isDefault: addr.isDefault,
+        },
+        {
+          where: { id: addr.id, companyId },
+          transaction,
+        }
+      );
+    } else {
+      // Create new address
+      await models.Address.create(
+        {
+          companyId,
+          label: addr.label,
+          address: addr.address,
+          city: addr.city || null,
+          state: addr.state || null,
+          country: addr.country || null,
+          postalCode: addr.postalCode || null,
+          isDefault: addr.isDefault,
+        },
+        { transaction }
+      );
+    }
   }
 };
 
@@ -164,6 +269,8 @@ export const updadateCompanyService = async (
   userId: number | undefined,
   attachmentFiles: UploadedFile[] = []
 ): Promise<[affectedCount: number]> => {
+  const transaction = await sequelize.transaction();
+
   try {
     // Validate enum fields if they are being updated
     validateEnumField(companyData.nature, natureEnum, 'nature');
@@ -195,9 +302,25 @@ export const updadateCompanyService = async (
           break;
       }
     }
-    companyData.updatedBy = userId;
-    return companyRepo.updateCompany(companyId, companyData);
+
+    // Extract addresses before updating company
+    const { addresses, ...companyUpdateData } = companyData;
+
+    // Handle address updates if provided
+    if (addresses && Array.isArray(addresses) && addresses.length > 0) {
+      await handleAddressUpdates(companyId, addresses, transaction);
+    }
+
+    companyUpdateData.updatedBy = userId;
+    const result = await companyRepo.updateCompany(companyId, companyUpdateData, transaction);
+
+    await transaction.commit();
+    return result;
   } catch (error) {
+    await transaction.rollback();
+    if (error instanceof CustomError) {
+      throw error;
+    }
     throw new CustomError(`Service ${error}`, 400);
   }
 };

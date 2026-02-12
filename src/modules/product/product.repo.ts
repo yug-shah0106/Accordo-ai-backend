@@ -34,6 +34,10 @@ const repo = {
   ): Promise<FindAndCountResult> => {
     const options = { ...queryOptions };
     options.where = { ...(options.where || {}) };
+    // Default sort by id ascending to maintain consistent order
+    if (!options.order) {
+      options.order = [['id', 'ASC']];
+    }
     if (userId) {
       const user = await models.User.findByPk(userId);
       if (user?.companyId) {

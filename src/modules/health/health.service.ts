@@ -1,6 +1,7 @@
 import { sequelize } from '../../config/database.js';
 import env from '../../config/env.js';
 import logger from '../../config/logger.js';
+import { checkHealth as checkOpenAIHealth } from '../../services/openai.service.js';
 
 export interface ServiceStatus {
   name: string;
@@ -109,49 +110,30 @@ async function checkLLM(): Promise<ServiceStatus> {
 }
 
 /**
- * Check Python embedding service
+ * Check embedding service via the provider-based embedding client
  */
 async function checkEmbeddingService(): Promise<ServiceStatus> {
   const start = Date.now();
   try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 5000);
-
-    const response = await fetch(`${env.vector.embeddingServiceUrl}/health`, {
-      signal: controller.signal,
-    });
-    clearTimeout(timeout);
-
+    const { embeddingClient } = await import('../vector/embedding.client.js');
+    const health = await embeddingClient.checkHealth();
     const latency = Date.now() - start;
 
-    if (response.ok) {
-      const data = await response.json() as {
-        status: string;
-        device?: string;
-        model?: string;
-        embedding_dim?: number;
-      };
-
-      return {
-        name: 'embedding',
-        status: 'healthy',
-        latency,
-        message: `Embedding service running on ${data.device || 'unknown device'}`,
-        details: {
-          url: env.vector.embeddingServiceUrl,
-          model: data.model || env.vector.embeddingModel,
-          dimension: data.embedding_dim || env.vector.embeddingDimension,
-          device: data.device,
-        },
-      };
-    } else {
-      return {
-        name: 'embedding',
-        status: 'unhealthy',
-        latency,
-        message: `Embedding service responded with status ${response.status}`,
-      };
-    }
+    const isHealthy = health.status === 'healthy';
+    return {
+      name: 'embedding',
+      status: isHealthy ? 'healthy' : health.status === 'initializing' ? 'degraded' : 'unhealthy',
+      latency,
+      message: isHealthy
+        ? `Embedding provider '${env.vector.embeddingProvider}' running on ${health.device}`
+        : `Embedding provider '${env.vector.embeddingProvider}' status: ${health.status}`,
+      details: {
+        provider: env.vector.embeddingProvider,
+        model: health.model,
+        dimension: health.dimension,
+        device: health.device,
+      },
+    };
   } catch (error) {
     const latency = Date.now() - start;
     return {
@@ -160,7 +142,7 @@ async function checkEmbeddingService(): Promise<ServiceStatus> {
       latency,
       message: error instanceof Error ? error.message : 'Embedding service unavailable',
       details: {
-        url: env.vector.embeddingServiceUrl,
+        provider: env.vector.embeddingProvider,
       },
     };
   }
@@ -236,87 +218,61 @@ async function checkRedis(): Promise<ServiceStatus | null> {
 }
 
 /**
- * Check MailHog/email service (in development)
+ * Check OpenAI GPT-3.5 service
+ */
+async function checkOpenAI(): Promise<ServiceStatus> {
+  const start = Date.now();
+  try {
+    const health = await checkOpenAIHealth();
+    const latency = Date.now() - start;
+
+    return {
+      name: 'openai',
+      status: health.available ? 'healthy' : 'degraded',
+      latency,
+      message: health.available
+        ? `OpenAI GPT-3.5 available (${health.model})`
+        : health.error || 'OpenAI not available (will use Qwen3 fallback)',
+      details: {
+        model: health.model,
+        available: health.available,
+        fallbackAvailable: true,
+      },
+    };
+  } catch (error) {
+    const latency = Date.now() - start;
+    return {
+      name: 'openai',
+      status: 'degraded',
+      latency,
+      message: 'OpenAI check failed (will use Qwen3 fallback)',
+      details: {
+        error: error instanceof Error ? error.message : String(error),
+        fallbackAvailable: true,
+      },
+    };
+  }
+}
+
+/**
+ * Check AWS SES email service
  */
 async function checkEmailService(): Promise<ServiceStatus> {
   const start = Date.now();
 
-  if (env.emailProvider === 'sendmail' && env.nodeEnv === 'development') {
-    try {
-      const { default: net } = await import('net');
-      const port = env.smtp.devPort || 1025;
-
-      return new Promise((resolve) => {
-        const socket = net.createConnection({
-          host: '127.0.0.1',
-          port,
-          timeout: 5000,
-        });
-
-        socket.on('connect', () => {
-          const latency = Date.now() - start;
-          socket.destroy();
-          const webPort = env.smtp.mailhogWebPort || 5004;
-          resolve({
-            name: 'email',
-            status: 'healthy',
-            latency,
-            message: `MailHog/Mailpit running on port ${port}`,
-            details: {
-              provider: 'sendmail',
-              devPort: port,
-              webUI: `http://localhost:${webPort}`,
-            },
-          });
-        });
-
-        socket.on('error', () => {
-          const latency = Date.now() - start;
-          socket.destroy();
-          resolve({
-            name: 'email',
-            status: 'degraded',
-            latency,
-            message: `MailHog not running on port ${port} - emails will fail`,
-            details: {
-              provider: 'sendmail',
-              devPort: port,
-            },
-          });
-        });
-
-        socket.on('timeout', () => {
-          const latency = Date.now() - start;
-          socket.destroy();
-          resolve({
-            name: 'email',
-            status: 'degraded',
-            latency,
-            message: 'MailHog connection timeout',
-          });
-        });
-      });
-    } catch (error) {
-      const latency = Date.now() - start;
-      return {
-        name: 'email',
-        status: 'degraded',
-        latency,
-        message: error instanceof Error ? error.message : 'Email service check failed',
-      };
-    }
-  } else if (env.emailProvider === 'nodemailer' && env.smtp.host) {
-    // For nodemailer, just report configured status
+  if (env.smtp.host && env.smtp.user) {
+    // AWS SES is configured
     const latency = Date.now() - start;
     return {
       name: 'email',
       status: 'healthy',
       latency,
-      message: `SMTP configured: ${env.smtp.host}:${env.smtp.port}`,
+      message: `AWS SES configured: ${env.smtp.host}:${env.smtp.port}`,
       details: {
-        provider: 'nodemailer',
+        provider: 'AWS SES',
         host: env.smtp.host,
         port: env.smtp.port,
+        from: env.smtp.from,
       },
     };
   }
@@ -326,7 +282,7 @@ async function checkEmailService(): Promise<ServiceStatus> {
     name: 'email',
     status: 'degraded',
     latency,
-    message: 'Email service not configured',
+    message: 'AWS SES not configured',
   };
 }
 
@@ -337,6 +293,7 @@ export async function getHealthReport(): Promise<HealthReport> {
   const checks = await Promise.all([
     checkDatabase(),
     checkLLM(),
+    checkOpenAI(),
     checkEmbeddingService(),
     checkRedis(),
     checkEmailService(),

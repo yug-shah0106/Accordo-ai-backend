@@ -9,7 +9,12 @@ import { parseOfferRegex, parseOfferWithDelivery } from './engine/parseOffer.js'
 import { generateHumanLikeResponse, generateQuickFallback } from './engine/responseGenerator.js';
 import { decideNextMove } from './engine/decide.js';
 import { computeExplainability, totalUtility, type NegotiationConfig } from './engine/utility.js';
-import type { Offer, Decision, Explainability, WeightedUtilityResult, ParsedVendorOffer, ScenarioSuggestions, StructuredSuggestion, SuggestionDeliveryConfig, SuggestionEmphasis } from './engine/types.js';
+import type { Offer, Decision, Explainability, WeightedUtilityResult, ParsedVendorOffer, ScenarioSuggestions, StructuredSuggestion, SuggestionDeliveryConfig, SuggestionEmphasis, AccumulatedOffer, NegotiationState, BehavioralSignals, AdaptiveStrategyResult, AdaptiveFeaturesConfig } from './engine/types.js';
+import { createEmptyNegotiationState } from './engine/types.js';
+import { analyzeBehavior, computeAdaptiveStrategy } from './engine/behavioralAnalyzer.js';
+import { getHistoricalInsights, adjustAnchorFromHistory } from './engine/historicalAnalyzer.js';
+import { mergeOffers, shouldResetAccumulation, createAccumulatedOffer, isOfferComplete, getMissingComponents, getProvidedComponents } from './engine/offerAccumulator.js';
+import { updateNegotiationState, getLastPmCounter } from './engine/preferenceDetector.js';
 import type { DeliveryConfig } from './engine/deliveryUtility.js';
 import { calculateWeightedUtility, convertLegacyConfig, getUtilitySummary, extractValueFromOffer } from './engine/weightedUtility.js';
 import { DEFAULT_THRESHOLDS } from './engine/types.js';
@@ -17,9 +22,56 @@ import type { ChatbotDeal } from '../../models/chatbotDeal.js';
 import type { ChatbotMessage } from '../../models/chatbotMessage.js';
 import { chatCompletion } from '../../services/llm.service.js';
 import { captureVendorBid, checkAndTriggerComparison } from '../bidComparison/bidComparison.service.js';
-import { sendDealCreatedEmail, sendPmDealStatusNotificationEmail, sendDealSummaryPDFEmail } from '../../services/email.service.js';
+import { sendDealCreatedEmail, sendContinuedNegotiationEmail, sendPmDealStatusNotificationEmail, sendDealSummaryPDFEmail } from '../../services/email.service.js';
 import { getCachedSuggestions, cacheSuggestions, invalidateSuggestions, precomputeSuggestionsBackground, filterSuggestionsByEmphasis } from './suggestionCache.js';
 import { generateDealSummaryPDF, generatePDFFilename, type DealSummaryPDFInput } from './pdf/dealSummaryPdfGenerator.js';
+
+// ============================================================================
+// Contract-Deal Status Sync
+// ============================================================================
+
+import type { ContractStatus } from '../../models/contract.js';
+
+type DealStatusForSync = 'NEGOTIATING' | 'ACCEPTED' | 'WALKED_AWAY' | 'ESCALATED';
+
+const dealToContractStatusMap: Record<DealStatusForSync, ContractStatus> = {
+  'NEGOTIATING': 'Active',
+  'ACCEPTED': 'Accepted',
+  'WALKED_AWAY': 'Rejected',
+  'ESCALATED': 'Escalated',
+};
+
+/**
+ * Sync contract status based on deal status change
+ * Called when deal reaches a terminal state or starts negotiating
+ *
+ * Status Mapping:
+ * - NEGOTIATING → Active
+ * - ACCEPTED → Accepted
+ * - WALKED_AWAY → Rejected
+ * - ESCALATED → Escalated
+ */
+async function syncContractStatus(
+  dealId: string,
+  dealStatus: DealStatusForSync,
+  contractId: number | null
+): Promise<void> {
+  if (!contractId) return;
+
+  const newContractStatus = dealToContractStatusMap[dealStatus];
+  if (!newContractStatus) return;
+
+  await models.Contract.update(
+    { status: newContractStatus },
+    { where: { id: contractId } }
+  );
+
+  logger.info(`[ContractSync] Contract ${contractId} status updated to ${newContractStatus} (deal: ${dealId}, dealStatus: ${dealStatus})`);
+}
+
+// ============================================================================
+// Types and Interfaces
+// ============================================================================
 
 export interface CreateDealInput {
   title: string;
@@ -44,6 +96,10 @@ export interface CreateDealWithConfigInput {
   vendorId: number;
   priority: 'HIGH' | 'MEDIUM' | 'LOW';
   userId: number;
+
+  // Optional: When provided, use this existing contract (from "Start Negotiation" button)
+  // When not provided, always create a new contract (1:1 with deal)
+  contractId?: number;
 
   // Price & Quantity
   priceQuantity: {
@@ -153,31 +209,37 @@ export const buildConfigFromRequisition = async (
     throw new CustomError('Requisition not found', 404);
   }
 
-  // Calculate weighted average target price from products
+  // Calculate TOTAL target price across all products (not average unit price)
+  // This matches how vendor chat sends offers as grand totals
   let totalTarget = 0;
-  let totalQuantity = 0;
 
   if (requisition.RequisitionProduct && requisition.RequisitionProduct.length > 0) {
     for (const reqProduct of requisition.RequisitionProduct) {
       const quantity = (reqProduct as any).qty || 1;
       const targetPrice = (reqProduct as any).targetPrice || 0;
+      // targetPrice is per-unit, multiply by quantity to get total for this product
       totalTarget += targetPrice * quantity;
-      totalQuantity += quantity;
     }
   }
 
-  const averageTarget = totalQuantity > 0 ? totalTarget / totalQuantity : 100;
-  const anchor = averageTarget * 0.85; // 15% below target
-  const maxAcceptable = averageTarget * 1.2; // 20% above target
-  const concessionStep = (averageTarget - anchor) / 6; // ~2.5% steps
+  // Fallback if no products or all zero prices
+  if (totalTarget === 0) {
+    totalTarget = 1000; // Default fallback
+  }
+
+  const anchor = totalTarget * 0.85; // PM's ideal: 15% below target
+  const maxAcceptable = totalTarget * 1.25; // PM's max: 25% above target
+  const concessionStep = (maxAcceptable - totalTarget) / 6; // ~4% steps toward max
+
+  logger.info(`Built config from requisition ${requisitionId}: target=$${totalTarget}, max=$${maxAcceptable}`);
 
   return {
     parameters: {
-      unit_price: {
+      total_price: {
         weight: 0.6,
         direction: 'minimize',
         anchor,
-        target: averageTarget,
+        target: totalTarget,
         max_acceptable: maxAcceptable,
         concession_step: concessionStep,
       },
@@ -191,8 +253,9 @@ export const buildConfigFromRequisition = async (
         },
       },
     },
-    accept_threshold: 0.7,
-    walkaway_threshold: 0.45,
+    accept_threshold: 0.70,
+    escalate_threshold: 0.50,
+    walkaway_threshold: 0.30, // Lowered from 0.45 to prevent premature walk-away
     max_rounds: 6,
   };
 };
@@ -326,27 +389,46 @@ export const createDealWithConfigService = async (
       'Net 90': 1.0,
     } as const;
 
-    // Adjust accept/walkaway thresholds based on priority
-    let acceptThreshold = 0.7;
-    let walkawayThreshold = 0.45;
+    // Adjust thresholds, weights, and max rounds based on priority (negotiation strategy)
+    // HIGH = Maximize Savings (aggressive, PM-focused)
+    // MEDIUM = Fair Deal (balanced)
+    // LOW = Quick Close (flexible, faster resolution)
+    let acceptThreshold = 0.70;
+    let walkawayThreshold = 0.30;
+    let priceWeight = 0.60;
+    let termsWeight = 0.25;
+    let deliveryWeight = 0.15;
+    let maxRounds = negotiationControl?.maxRounds || 6;
 
     if (input.priority === 'HIGH') {
-      acceptThreshold = 0.8;
-      walkawayThreshold = 0.55;
-    } else if (input.priority === 'LOW') {
-      acceptThreshold = 0.6;
+      // Maximize Savings: Stricter thresholds, focus on price, more rounds
+      acceptThreshold = 0.75;
       walkawayThreshold = 0.35;
+      priceWeight = 0.70;
+      termsWeight = 0.20;
+      deliveryWeight = 0.10;
+      maxRounds = negotiationControl?.maxRounds || 10;
+    } else if (input.priority === 'LOW') {
+      // Quick Close: Relaxed thresholds, balanced weights, fewer rounds
+      acceptThreshold = 0.65;
+      walkawayThreshold = 0.25;
+      priceWeight = 0.50;
+      termsWeight = 0.30;
+      deliveryWeight = 0.20;
+      maxRounds = negotiationControl?.maxRounds || 4;
     }
 
     // Apply custom walkaway threshold if provided
-    if (negotiationControl?.walkawayThreshold) {
-      walkawayThreshold = (100 - negotiationControl.walkawayThreshold) / 100;
+    // NOTE: walkawayThreshold from frontend is the minimum acceptable utility percentage (e.g., 20 means walk away if utility < 20%)
+    // This should be a LOW value - we walk away when utility drops BELOW this threshold
+    if (negotiationControl?.walkawayThreshold !== undefined && negotiationControl?.walkawayThreshold !== null) {
+      walkawayThreshold = negotiationControl.walkawayThreshold / 100; // Convert percentage to decimal (20% -> 0.20)
     }
 
     const negotiationConfig: NegotiationConfig = {
       parameters: {
-        unit_price: {
-          weight: 0.6,
+        total_price: {
+          weight: priceWeight,
           direction: 'minimize',
           anchor: priceQuantity.targetUnitPrice * 0.85,
           target: priceQuantity.targetUnitPrice,
@@ -354,15 +436,57 @@ export const createDealWithConfigService = async (
           concession_step: concessionStep,
         },
         payment_terms: {
-          weight: 0.4,
+          weight: termsWeight + deliveryWeight, // Combined terms weight (delivery included)
           options: paymentTermsOptions,
           utility: paymentTermsUtility,
         },
       },
       accept_threshold: acceptThreshold,
       walkaway_threshold: walkawayThreshold,
-      max_rounds: negotiationControl?.maxRounds || 10,
+      max_rounds: maxRounds,
+      // Store priority for counter-offer logic
+      priority: input.priority,
     };
+
+    // Adaptive Features: Historical Anchor Adjustment & Dynamic Rounds
+    // All adaptive features enabled by default for new deals (backward-compatible via flag)
+    const adaptiveFeaturesConfig: AdaptiveFeaturesConfig = {
+      enabled: true,
+      historicalAnchor: false,
+      originalAnchor: negotiationConfig.parameters.total_price.anchor,
+      dynamicRounds: {
+        softMaxRounds: maxRounds,
+        hardMaxRounds: Math.ceil(maxRounds * 1.5),
+        autoExtendEnabled: true,
+      },
+    };
+
+    // Apply historical anchor adjustment
+    try {
+      const insights = await getHistoricalInsights(input.vendorId);
+      if (insights.sampleSize > 0) {
+        const originalAnchor = negotiationConfig.parameters.total_price.anchor;
+        const adjustedAnchor = adjustAnchorFromHistory(
+          originalAnchor,
+          negotiationConfig.parameters.total_price.target,
+          insights
+        );
+
+        if (adjustedAnchor !== originalAnchor) {
+          negotiationConfig.parameters.total_price.anchor = adjustedAnchor;
+          adaptiveFeaturesConfig.historicalAnchor = true;
+          adaptiveFeaturesConfig.originalAnchor = originalAnchor;
+          logger.info(`[CreateDeal] Historical anchor adjusted for vendor ${input.vendorId}: $${originalAnchor} -> $${adjustedAnchor} (profile: ${insights.vendorBehaviorProfile}, ${insights.sampleSize} deals)`);
+        }
+      }
+    } catch (histError) {
+      // Non-critical: continue with original anchor
+      logger.warn(`[CreateDeal] Historical anchor adjustment failed:`, histError);
+    }
+
+    // Store dynamic rounds config on the negotiation config
+    (negotiationConfig as any).dynamicRounds = adaptiveFeaturesConfig.dynamicRounds;
+    (negotiationConfig as any).adaptiveFeatures = adaptiveFeaturesConfig;
 
     // Store the full wizard configuration in a separate JSON field
     const wizardConfig = {
@@ -379,35 +503,66 @@ export const createDealWithConfigService = async (
       customParameters: customParameters || [],
     };
 
-    // Check if a Contract already exists for this vendor+requisition
-    // If not, create one to ensure data consistency between Contracts and ChatbotDeals tables
+    // Contract creation logic:
+    // 1. If contractId is provided (from "Start Negotiation" on existing contract), use it
+    // 2. Otherwise, ALWAYS create a new contract (1:1 relationship with deal)
     let contractId: number | null = null;
+    let contractUniqueToken: string | null = null;
+    let isExistingContract = false;
 
-    const existingContract = await models.Contract.findOne({
-      where: {
-        requisitionId: input.requisitionId,
-        vendorId: input.vendorId,
-      },
-    });
+    if (input.contractId) {
+      // Use the provided existing contract (from "Start Negotiation" button)
+      const existingContract = await models.Contract.findByPk(input.contractId);
+      if (!existingContract) {
+        throw new CustomError('Provided contract not found', 404);
+      }
+      if (existingContract.requisitionId !== input.requisitionId || existingContract.vendorId !== input.vendorId) {
+        throw new CustomError('Contract does not match requisition/vendor', 400);
+      }
 
-    if (existingContract) {
+      // Re-negotiation validation based on contract status
+      // - Rejected: Cannot start new negotiation (final state)
+      // - Active: Negotiation already in progress
+      // - Escalated: Can start new negotiation (will become Active)
+      // - Created: Normal flow
+      if (existingContract.status === 'Rejected') {
+        throw new CustomError('Cannot start new negotiation on a rejected contract', 400);
+      }
+      if (existingContract.status === 'Active') {
+        throw new CustomError('A negotiation is already in progress for this contract', 400);
+      }
+
       contractId = existingContract.id;
-      logger.info(`Using existing contract ${contractId} for vendor ${input.vendorId} on requisition ${input.requisitionId}`);
+      contractUniqueToken = existingContract.uniqueToken;
+      isExistingContract = true;
+      logger.info(`Using provided existing contract ${contractId} (status: ${existingContract.status}) for vendor ${input.vendorId} on requisition ${input.requisitionId}`);
     } else {
-      // Create a new Contract record to link vendor to requisition
-      // This ensures the vendor appears in the dropdown for future deals
+      // Always create a NEW contract for each deal (1:1 relationship)
+      // This ensures each deal has its own unique portal link
       const uniqueToken = crypto.randomBytes(16).toString('hex');
       const newContract = await models.Contract.create({
         requisitionId: input.requisitionId,
         vendorId: input.vendorId,
         status: 'Created',
         uniqueToken,
-        chatbotDealId: dealId,  // Link to the deal we're about to create
+        chatbotDealId: dealId,  // Link to the deal we're about to create (1:1)
         createdBy: input.userId,
       });
       contractId = newContract.id;
+      contractUniqueToken = uniqueToken;
+      isExistingContract = false;
       logger.info(`Created new contract ${contractId} for vendor ${input.vendorId} on requisition ${input.requisitionId}`);
     }
+
+    // Check if this vendor has existing deals on this requisition (for email type determination)
+    const existingDealsCount = await models.ChatbotDeal.count({
+      where: {
+        requisitionId: input.requisitionId,
+        vendorId: input.vendorId,
+        deletedAt: null,
+      },
+    });
+    const isFirstDealForVendor = existingDealsCount === 0;
 
     const deal = await models.ChatbotDeal.create({
       id: dealId,
@@ -432,6 +587,11 @@ export const createDealWithConfigService = async (
     });
 
     logger.info(`Created deal with config ${dealId}: ${input.title} (priority: ${input.priority})`);
+
+    // Update contract status to Active (negotiation started)
+    if (contractId) {
+      await syncContractStatus(dealId, 'NEGOTIATING', contractId);
+    }
 
     // Send email notification to vendor
     let emailStatus: { success: boolean; messageId?: string; error?: string } = { success: false, error: 'Email not sent' };
@@ -468,40 +628,80 @@ export const createDealWithConfigService = async (
           unit: rp.Product?.UOM || undefined,
         }));
 
-        // Build email data
-        const emailData = {
-          dealId: dealId,
-          dealTitle: input.title,
-          requisitionId: input.requisitionId,
-          rfqNumber: (requisitionWithDetails as any).rfqNumber || `RFQ-${input.requisitionId}`,
-          requisitionTitle: (requisitionWithDetails as any).title || input.title,
-          projectName: (requisitionWithDetails as any).Project?.projectName || 'Unknown Project',
-          vendorId: input.vendorId,
-          vendorName: vendor.name || vendor.email,
-          vendorEmail: vendor.email,
-          negotiationDeadline: negotiationControl?.deadline ? new Date(negotiationControl.deadline) : (requisitionWithDetails as any).negotiationClosureDate || undefined,
-          products: products.length > 0 ? products : [{
-            name: 'Products as per RFQ',
-            quantity: 1,
-            targetPrice: priceQuantity.targetUnitPrice,
-          }],
-          priceConfig: {
-            targetUnitPrice: priceQuantity.targetUnitPrice,
-            maxAcceptablePrice: priceQuantity.maxAcceptablePrice,
-          },
-          paymentTerms: paymentTerms ? {
-            minDays: paymentTerms.minDays || 30,
-            maxDays: paymentTerms.maxDays || 90,
-          } : undefined,
-          deliveryDate: delivery?.requiredDate || undefined,
-        };
+        // Determine which email to send based on whether this is the first deal for vendor on this requisition
+        // First deal: send portal link (/vendor-contract/{token})
+        // Subsequent deals: send chatbot link (/vendor-chat/{token}) with "Continue Negotiation" tone
 
-        emailStatus = await sendDealCreatedEmail(emailData);
+        if (isFirstDealForVendor) {
+          // First deal for this vendor - send standard deal created email with portal link
+          const emailData = {
+            dealId: dealId,
+            dealTitle: input.title,
+            requisitionId: input.requisitionId,
+            rfqNumber: (requisitionWithDetails as any).rfqNumber || `RFQ-${input.requisitionId}`,
+            requisitionTitle: (requisitionWithDetails as any).title || input.title,
+            projectName: (requisitionWithDetails as any).Project?.projectName || 'Unknown Project',
+            vendorId: input.vendorId,
+            vendorName: vendor.name || vendor.email,
+            vendorEmail: vendor.email,
+            negotiationDeadline: negotiationControl?.deadline ? new Date(negotiationControl.deadline) : (requisitionWithDetails as any).negotiationClosureDate || undefined,
+            products: products.length > 0 ? products : [{
+              name: 'Products as per RFQ',
+              quantity: 1,
+              targetPrice: priceQuantity.targetUnitPrice,
+            }],
+            priceConfig: {
+              targetUnitPrice: priceQuantity.targetUnitPrice,
+              maxAcceptablePrice: priceQuantity.maxAcceptablePrice,
+            },
+            paymentTerms: paymentTerms ? {
+              minDays: paymentTerms.minDays || 30,
+              maxDays: paymentTerms.maxDays || 90,
+            } : undefined,
+            deliveryDate: delivery?.requiredDate || undefined,
+          };
 
-        if (emailStatus.success) {
-          logger.info(`Deal created email sent to vendor ${vendor.email} for deal ${dealId}`);
+          emailStatus = await sendDealCreatedEmail(emailData);
+
+          if (emailStatus.success) {
+            logger.info(`Deal created email (first deal) sent to vendor ${vendor.email} for deal ${dealId}`);
+          } else {
+            logger.warn(`Failed to send deal created email: ${emailStatus.error}`, { dealId, vendorEmail: vendor.email });
+          }
         } else {
-          logger.warn(`Failed to send deal created email: ${emailStatus.error}`, { dealId, vendorEmail: vendor.email });
+          // Subsequent deal for this vendor - send continued negotiation email with chatbot link
+          const continuedEmailData = {
+            dealId: dealId,
+            dealTitle: input.title,
+            requisitionId: input.requisitionId,
+            rfqNumber: (requisitionWithDetails as any).rfqNumber || `RFQ-${input.requisitionId}`,
+            requisitionTitle: (requisitionWithDetails as any).title || input.title,
+            projectName: (requisitionWithDetails as any).Project?.projectName || 'Unknown Project',
+            vendorId: input.vendorId,
+            vendorName: vendor.name || vendor.email,
+            vendorEmail: vendor.email,
+            contractUniqueToken: contractUniqueToken!, // Token from the newly created contract
+            negotiationDeadline: negotiationControl?.deadline ? new Date(negotiationControl.deadline) : (requisitionWithDetails as any).negotiationClosureDate || undefined,
+            previousDealsCount: existingDealsCount, // Number of previous deals
+            products: products.length > 0 ? products : [{
+              name: 'Products as per RFQ',
+              quantity: 1,
+              targetPrice: priceQuantity.targetUnitPrice,
+            }],
+            paymentTerms: paymentTerms ? {
+              minDays: paymentTerms.minDays || 30,
+              maxDays: paymentTerms.maxDays || 90,
+            } : undefined,
+            deliveryDate: delivery?.requiredDate || undefined,
+          };
+
+          emailStatus = await sendContinuedNegotiationEmail(continuedEmailData);
+
+          if (emailStatus.success) {
+            logger.info(`Continued negotiation email sent to vendor ${vendor.email} for deal ${dealId} (previous deals: ${existingDealsCount})`);
+          } else {
+            logger.warn(`Failed to send continued negotiation email: ${emailStatus.error}`, { dealId, vendorEmail: vendor.email });
+          }
         }
       } else {
         logger.warn(`Cannot send deal created email: missing requisition details or vendor email`, {
@@ -538,14 +738,39 @@ interface SmartDefaultsResponse {
     targetUnitPrice: number | null;
     maxAcceptablePrice: number | null;
     volumeDiscountExpectation: number | null;
+    // New fields for auto-populating from requisition totals
+    totalQuantity: number | null;
+    totalTargetPrice: number | null;
+    totalMaxPrice: number | null;
   };
   paymentTerms: {
     minDays: number;
     maxDays: number;
     advancePaymentLimit: number | null;
+    // Additional payment fields from requisition
+    paymentTermsText: string | null;      // e.g., "Net 30", "Net 60"
+    netPaymentDay: number | null;         // Parsed net payment day
+    prePaymentPercentage: number | null;  // Pre-payment percentage
+    postPaymentPercentage: number | null; // Post-payment percentage
   };
   delivery: {
     typicalDeliveryDays: number | null;
+    // Date fields from requisition for auto-populating wizard
+    deliveryDate?: string | null;         // Maps to preferredDate in wizard
+    maxDeliveryDate?: string | null;      // Maps to requiredDate in wizard
+    negotiationClosureDate?: string | null; // Maps to deadline in wizard Step 3
+  };
+  // Requisition priorities for auto-populating Step 4 weights
+  priorities: {
+    pricePriority: number | null;         // 0-100, weight for price parameters
+    deliveryPriority: number | null;      // 0-100, weight for delivery parameters
+    paymentTermsPriority: number | null;  // 0-100, weight for payment terms
+  };
+  // BATNA and discount limits from requisition
+  negotiationLimits: {
+    batna: number | null;                 // Best Alternative to Negotiated Agreement
+    maxDiscount: number | null;           // Maximum discount allowed
+    discountedValue: number | null;       // Discounted value calculation
   };
   source: 'vendor_history' | 'similar_deals' | 'industry_default' | 'combined';
   confidence: number;
@@ -570,20 +795,62 @@ export const getSmartDefaultsService = async (
       throw new CustomError('Requisition not found', 404);
     }
 
-    // Calculate base target from requisition products
-    let totalTarget = 0;
+    // Calculate totals from requisition products
+    let totalTargetValue = 0;
+    let totalMaxValue = 0;
     let totalQuantity = 0;
+    let hasValidProducts = false;
 
     if (requisition.RequisitionProduct && requisition.RequisitionProduct.length > 0) {
       for (const reqProduct of requisition.RequisitionProduct) {
-        const quantity = (reqProduct as any).qty || 1;
-        const targetPrice = (reqProduct as any).targetPrice || 100;
-        totalTarget += targetPrice * quantity;
-        totalQuantity += quantity;
+        const quantity = (reqProduct as any).qty || 0;
+        const targetPrice = (reqProduct as any).targetPrice;
+        const maxPrice = (reqProduct as any).maximum_price;
+
+        if (quantity > 0) {
+          totalQuantity += quantity;
+
+          // Only add to totals if price values exist
+          if (targetPrice !== null && targetPrice !== undefined) {
+            totalTargetValue += targetPrice * quantity;
+            hasValidProducts = true;
+          }
+          if (maxPrice !== null && maxPrice !== undefined) {
+            totalMaxValue += maxPrice * quantity;
+          }
+        }
       }
     }
 
-    const averageTarget = totalQuantity > 0 ? totalTarget / totalQuantity : 100;
+    // Calculate average for backward compatibility (unit prices)
+    const averageTarget = totalQuantity > 0 && hasValidProducts
+      ? totalTargetValue / totalQuantity
+      : 100;
+
+    // Prepare total values - return null if no valid data (user requirement: leave fields empty)
+    const finalTotalQuantity = totalQuantity > 0 ? totalQuantity : null;
+    const finalTotalTargetPrice = hasValidProducts && totalTargetValue > 0
+      ? Math.round(totalTargetValue * 100) / 100
+      : null;
+    const finalTotalMaxPrice = totalMaxValue > 0
+      ? Math.round(totalMaxValue * 100) / 100
+      : null;
+
+    // Extract requisition-level dates for auto-populating wizard
+    // deliveryDate → preferredDate (ideal delivery date)
+    const deliveryDate = requisition.deliveryDate
+      ? new Date(requisition.deliveryDate).toISOString().split('T')[0]
+      : null;
+
+    // maxDeliveryDate → requiredDate (hard deadline)
+    const maxDeliveryDate = requisition.maxDeliveryDate
+      ? new Date(requisition.maxDeliveryDate).toISOString().split('T')[0]
+      : null;
+
+    // negotiationClosureDate → deadline in Step 3
+    const negotiationClosureDate = requisition.negotiationClosureDate
+      ? new Date(requisition.negotiationClosureDate).toISOString().split('T')[0]
+      : null;
 
     // Look for historical deals with this vendor
     const historicalDeals = await models.ChatbotDeal.findAll({
@@ -614,19 +881,84 @@ export const getSmartDefaultsService = async (
     const targetUnitPrice = Math.round(averageTarget * 100) / 100;
     const maxAcceptablePrice = Math.round(averageTarget * 1.2 * 100) / 100;
 
+    // Helper to convert priority string ('high', 'medium', 'low') to numeric value (0-100)
+    // If already numeric, parse it directly
+    const convertPriorityToNumber = (priority: string | null | undefined): number | null => {
+      if (!priority) return null;
+
+      // Check if it's already a number
+      const numericValue = parseFloat(priority);
+      if (!isNaN(numericValue)) return numericValue;
+
+      // Convert string priority to numeric scale
+      const priorityLower = priority.toLowerCase().trim();
+      switch (priorityLower) {
+        case 'high':
+          return 50;  // High priority = 50 weight
+        case 'medium':
+          return 30;  // Medium priority = 30 weight
+        case 'low':
+          return 20;  // Low priority = 20 weight
+        default:
+          return null;
+      }
+    };
+
+    // Extract priority values from requisition (stored as strings like 'high', 'medium', 'low' or as numbers)
+    const pricePriority = convertPriorityToNumber(requisition.pricePriority);
+    const deliveryPriority = convertPriorityToNumber(requisition.deliveryPriority);
+    const paymentTermsPriority = convertPriorityToNumber(requisition.paymentTermsPriority);
+
+    // Extract payment terms details from requisition
+    const paymentTermsText = requisition.payment_terms || null;
+    const netPaymentDay = requisition.net_payment_day
+      ? parseInt(requisition.net_payment_day, 10)
+      : null;
+    const prePaymentPercentage = requisition.pre_payment_percentage || null;
+    const postPaymentPercentage = requisition.post_payment_percentage || null;
+
+    // Extract BATNA and discount limits
+    const batna = requisition.batna || null;
+    const maxDiscount = requisition.maxDiscount || null;
+    const discountedValue = requisition.discountedValue || null;
+
     return {
       priceQuantity: {
         targetUnitPrice,
         maxAcceptablePrice,
         volumeDiscountExpectation: avgVolumeDiscount,
+        // New total fields from requisition
+        totalQuantity: finalTotalQuantity,
+        totalTargetPrice: finalTotalTargetPrice,
+        totalMaxPrice: finalTotalMaxPrice,
       },
       paymentTerms: {
-        minDays: 30,
-        maxDays: avgPaymentDays + 15,
-        advancePaymentLimit: 20, // Default 20% advance payment limit
+        minDays: netPaymentDay || 30,  // Use requisition's net payment day if available
+        maxDays: (netPaymentDay || 30) + 30,  // Allow 30 days flexibility
+        advancePaymentLimit: prePaymentPercentage || 20, // Use requisition's pre-payment or default 20%
+        // Additional payment fields from requisition
+        paymentTermsText,
+        netPaymentDay,
+        prePaymentPercentage,
+        postPaymentPercentage,
       },
       delivery: {
         typicalDeliveryDays: avgDeliveryDays,
+        deliveryDate,           // Maps to preferredDate in wizard
+        maxDeliveryDate,        // Maps to requiredDate in wizard
+        negotiationClosureDate, // Maps to deadline in wizard Step 3
+      },
+      // Requisition priorities for auto-populating Step 4 weights
+      priorities: {
+        pricePriority,
+        deliveryPriority,
+        paymentTermsPriority,
+      },
+      // BATNA and discount limits from requisition
+      negotiationLimits: {
+        batna,
+        maxDiscount,
+        discountedValue,
       },
       source,
       confidence,
@@ -681,12 +1013,12 @@ const generateAccordoResponseText = (decision: Decision, config: NegotiationConf
   switch (action) {
     case 'ACCEPT':
       const acceptDelivery = deliveryText ? ` and delivery by ${deliveryText}` : '';
-      return `I'm pleased to accept your offer. We have a deal at $${counterOffer?.unit_price || 'agreed'} with ${counterOffer?.payment_terms || 'agreed'} payment terms${acceptDelivery}. Thank you for the negotiation.`;
+      return `I'm pleased to accept your offer. We have a deal at $${counterOffer?.total_price || 'agreed'} with ${counterOffer?.payment_terms || 'agreed'} payment terms${acceptDelivery}. Thank you for the negotiation.`;
 
     case 'COUNTER':
-      const targetPrice = config.parameters.unit_price.target;
-      const priceText = counterOffer?.unit_price
-        ? `$${counterOffer.unit_price}`
+      const targetPrice = config.parameters.total_price.target;
+      const priceText = counterOffer?.total_price
+        ? `$${counterOffer.total_price}`
         : `$${targetPrice}`;
       const termsText = counterOffer?.payment_terms || 'Net 60';
       const counterDelivery = deliveryText ? `, delivery by ${deliveryText}` : '';
@@ -697,7 +1029,7 @@ const generateAccordoResponseText = (decision: Decision, config: NegotiationConf
 
     case 'ESCALATE':
       const escalateDelivery = deliveryText ? `, delivery by ${deliveryText}` : '';
-      return `This negotiation has reached a point where I need to escalate it to a human decision-maker for review. Our counter-proposal is ${counterOffer?.unit_price ? `$${counterOffer.unit_price}` : 'pending'} with ${counterOffer?.payment_terms || 'negotiable'} terms${escalateDelivery}. Thank you for your patience.`;
+      return `This negotiation has reached a point where I need to escalate it to a human decision-maker for review. Our counter-proposal is ${counterOffer?.total_price ? `$${counterOffer.total_price}` : 'pending'} with ${counterOffer?.payment_terms || 'negotiable'} terms${escalateDelivery}. Thank you for your patience.`;
 
     case 'ASK_CLARIFY':
       return `I need some clarification on your offer. Could you please provide more details about the pricing, payment terms, and delivery timeline?`;
@@ -716,7 +1048,9 @@ export const processVendorMessageService = async (
   explainability: Explainability;
 }> => {
   try {
-    const deal = await models.ChatbotDeal.findByPk(input.dealId);
+    const deal = await models.ChatbotDeal.findByPk(input.dealId, {
+      include: [{ model: models.Requisition, as: 'Requisition' }],
+    });
     if (!deal) {
       throw new CustomError('Deal not found', 404);
     }
@@ -725,10 +1059,29 @@ export const processVendorMessageService = async (
       throw new CustomError('Deal is not in negotiating status', 400);
     }
 
-    // Build negotiation config from requisition or contract
+    // Get requisition currency for offer parsing (February 2026)
+    const requisition = (deal as any).Requisition;
+    const requisitionCurrency = requisition?.typeOfCurrency as 'USD' | 'INR' | 'EUR' | 'GBP' | 'AUD' | undefined;
+
+    // Use stored negotiation config from deal (includes priority-adjusted thresholds and weights)
+    // This ensures the priority settings from deal creation are respected during negotiation
     let config: NegotiationConfig;
-    if (deal.requisitionId) {
+    if (deal.negotiationConfigJson) {
+      // Use the stored config which includes priority-based thresholds, weights, and strategy
+      const storedConfig = deal.negotiationConfigJson as NegotiationConfig & { wizardConfig?: unknown };
+      config = {
+        parameters: storedConfig.parameters,
+        accept_threshold: storedConfig.accept_threshold,
+        escalate_threshold: storedConfig.escalate_threshold,
+        walkaway_threshold: storedConfig.walkaway_threshold,
+        max_rounds: storedConfig.max_rounds,
+        priority: storedConfig.priority,
+      };
+      logger.debug(`Using stored negotiation config for deal ${input.dealId} (priority: ${config.priority})`);
+    } else if (deal.requisitionId) {
+      // Fallback: rebuild from requisition (legacy deals without stored config)
       config = await buildConfigFromRequisition(deal.requisitionId);
+      logger.warn(`Deal ${input.dealId} has no stored config, rebuilding from requisition`);
     } else if (deal.contractId) {
       config = await buildConfigFromContract(deal.contractId);
     } else {
@@ -737,17 +1090,58 @@ export const processVendorMessageService = async (
       config = negotiationConfig;
     }
 
-    // Parse vendor offer from message
-    const extractedOffer = parseOfferRegex(input.content);
+    // Parse vendor offer from message (with currency conversion)
+    const extractedOffer = parseOfferRegex(input.content, requisitionCurrency);
 
     // Increment round
     const newRound = deal.round + 1;
 
+    // Adaptive behavioral analysis (opt-in)
+    const adaptiveFeats = (deal.negotiationConfigJson as any)?.adaptiveFeatures as AdaptiveFeaturesConfig | undefined;
+    let behavioralSigs: BehavioralSignals | null = null;
+    let adaptiveStrat: AdaptiveStrategyResult | null = null;
+
+    if (adaptiveFeats?.enabled) {
+      try {
+        const allMsgs = await models.ChatbotMessage.findAll({
+          where: { dealId: input.dealId },
+          order: [['createdAt', 'ASC']],
+        });
+        const analyzableMsgs = allMsgs.map(m => ({
+          role: m.role as 'VENDOR' | 'ACCORDO' | 'SYSTEM' | 'PM',
+          content: m.content,
+          extractedOffer: m.extractedOffer as any,
+          counterOffer: m.counterOffer as any,
+          createdAt: m.createdAt,
+        }));
+        behavioralSigs = analyzeBehavior(analyzableMsgs, newRound);
+        adaptiveStrat = computeAdaptiveStrategy(behavioralSigs, config, newRound);
+      } catch (adaptErr) {
+        logger.warn(`[ProcessVendorMessage] Adaptive analysis failed:`, adaptErr);
+      }
+    }
+
     // Make decision
-    const decision = decideNextMove(config, extractedOffer, newRound);
+    const decision = decideNextMove(config, extractedOffer, newRound, undefined, undefined, behavioralSigs, adaptiveStrat);
 
     // Compute explainability
     const explainability = computeExplainability(config, extractedOffer, decision);
+
+    // Attach behavioral data to explainability
+    if (behavioralSigs && adaptiveStrat) {
+      (explainability as any).behavioral = {
+        momentum: behavioralSigs.momentum,
+        strategy: adaptiveStrat.strategyLabel,
+        convergenceRate: behavioralSigs.convergenceRate,
+        concessionVelocity: behavioralSigs.concessionVelocity,
+        isStalling: behavioralSigs.isStalling,
+        isConverging: behavioralSigs.isConverging,
+        isDiverging: behavioralSigs.isDiverging,
+        reasoning: adaptiveStrat.reasoning,
+        shouldExtendRounds: adaptiveStrat.shouldExtendRounds,
+        latestSentiment: behavioralSigs.latestSentiment,
+      };
+    }
 
     // Save VENDOR message
     const vendorMessageId = uuidv4();
@@ -799,9 +1193,13 @@ export const processVendorMessageService = async (
       `Processed vendor message for deal ${input.dealId}: ${decision.action} (utility: ${decision.utilityScore})`
     );
 
-    // Hook: Capture vendor bid when deal reaches terminal state (fire-and-forget)
+    // Hook: Sync contract status and capture vendor bid when deal reaches terminal state (fire-and-forget)
     // CRITICAL FIX (Jan 2026): Run these in background to avoid blocking the response
     if (['ACCEPTED', 'WALKED_AWAY', 'ESCALATED'].includes(finalStatus)) {
+      // Sync contract status (fire-and-forget)
+      syncContractStatus(deal.id, finalStatus, deal.contractId)
+        .catch((err) => logger.error(`Failed to sync contract status: ${(err as Error).message}`));
+
       // Fire-and-forget: don't await, just log errors
       captureVendorBid(deal.id)
         .then(() => {
@@ -893,7 +1291,9 @@ export const saveVendorMessageOnlyService = async (
   input: SaveVendorMessageInput
 ): Promise<SaveVendorMessageResult> => {
   try {
-    const deal = await models.ChatbotDeal.findByPk(input.dealId);
+    const deal = await models.ChatbotDeal.findByPk(input.dealId, {
+      include: [{ model: models.Requisition, as: 'Requisition' }],
+    });
     if (!deal) {
       throw new CustomError('Deal not found', 404);
     }
@@ -902,8 +1302,12 @@ export const saveVendorMessageOnlyService = async (
       throw new CustomError('Deal is not in negotiating status', 400);
     }
 
-    // Parse vendor offer from message (now includes delivery)
-    const extractedOffer = parseOfferWithDelivery(input.content);
+    // Get requisition currency for offer parsing (February 2026)
+    const requisition = (deal as any).Requisition;
+    const requisitionCurrency = requisition?.typeOfCurrency as 'USD' | 'INR' | 'EUR' | 'GBP' | 'AUD' | undefined;
+
+    // Parse vendor offer from message (now includes delivery and currency conversion)
+    const currentExtraction = parseOfferWithDelivery(input.content, requisitionCurrency);
 
     // Calculate the round for this message pair
     // Vendor message STARTS a new round, PM response CONCLUDES it
@@ -912,6 +1316,30 @@ export const saveVendorMessageOnlyService = async (
 
     // Save VENDOR message with round number
     const vendorMessageId = uuidv4();
+
+    // OFFER ACCUMULATION: Merge partial offers across messages
+    // If vendor provides complete offer (price AND terms), reset accumulation
+    // Otherwise, merge with previously accumulated state
+    const previousAccumulated = deal.latestVendorOffer as AccumulatedOffer | null;
+    let accumulatedOffer: AccumulatedOffer;
+
+    if (shouldResetAccumulation(currentExtraction)) {
+      // Vendor provided complete offer - start fresh
+      accumulatedOffer = createAccumulatedOffer(currentExtraction, vendorMessageId);
+      logger.info(`[Phase1] Complete offer detected, resetting accumulation for deal ${input.dealId}`);
+    } else {
+      // Merge partial offer with accumulated state
+      accumulatedOffer = mergeOffers(previousAccumulated, currentExtraction, vendorMessageId);
+      logger.info(`[Phase1] Partial offer merged for deal ${input.dealId}`, {
+        provided: getProvidedComponents(currentExtraction),
+        missing: getMissingComponents(accumulatedOffer),
+        isComplete: accumulatedOffer.accumulation.isComplete,
+      });
+    }
+
+    // Use accumulated offer as the extracted offer
+    const extractedOffer = accumulatedOffer;
+
     const message = await models.ChatbotMessage.create({
       id: vendorMessageId,
       dealId: input.dealId,
@@ -984,9 +1412,19 @@ export const generatePMResponseAsyncService = async (
       order: [['createdAt', 'ASC']],
     });
 
-    // Build negotiation config
+    // Use stored negotiation config from deal (includes priority-adjusted thresholds and weights)
     let config: NegotiationConfig;
-    if (deal.requisitionId) {
+    if (deal.negotiationConfigJson) {
+      const storedConfig = deal.negotiationConfigJson as NegotiationConfig & { wizardConfig?: unknown };
+      config = {
+        parameters: storedConfig.parameters,
+        accept_threshold: storedConfig.accept_threshold,
+        escalate_threshold: storedConfig.escalate_threshold,
+        walkaway_threshold: storedConfig.walkaway_threshold,
+        max_rounds: storedConfig.max_rounds,
+        priority: storedConfig.priority,
+      };
+    } else if (deal.requisitionId) {
       config = await buildConfigFromRequisition(deal.requisitionId);
     } else if (deal.contractId) {
       config = await buildConfigFromContract(deal.contractId);
@@ -995,14 +1433,118 @@ export const generatePMResponseAsyncService = async (
       config = negotiationConfig;
     }
 
-    // Get vendor offer from the message
-    const extractedOffer = vendorMessage.extractedOffer as Offer || parseOfferWithDelivery(vendorMessage.content);
+    // Get vendor offer from the message (may be an AccumulatedOffer)
+    const extractedOffer = vendorMessage.extractedOffer as Offer | AccumulatedOffer || parseOfferWithDelivery(vendorMessage.content);
 
-    // Make decision using the engine
-    const decision = decideNextMove(config, extractedOffer, deal.round);
+    // Get current negotiation state from deal (stored in convoStateJson)
+    let negotiationState: NegotiationState | null = deal.convoStateJson as NegotiationState | null;
+
+    // Find previous vendor offer for concession tracking
+    const previousVendorMessages = allMessages.filter(m =>
+      m.role === 'VENDOR' && m.id !== input.vendorMessageId
+    );
+    const previousVendorMessage = previousVendorMessages.length > 0
+      ? previousVendorMessages[previousVendorMessages.length - 1]
+      : null;
+    const previousVendorOffer = previousVendorMessage?.extractedOffer as Offer | AccumulatedOffer | null;
+
+    // Get previous PM counter-offer
+    const previousPmOffer = negotiationState ? getLastPmCounter(negotiationState) : null;
+
+    // Update negotiation state with new data
+    negotiationState = updateNegotiationState(
+      negotiationState,
+      previousVendorOffer,
+      extractedOffer,
+      vendorMessage.content,
+      null, // PM counter will be added after decision
+      deal.round + 1,
+      {
+        pmTargetPrice: config.parameters.total_price.target,
+        pmMaxPrice: config.parameters.total_price.max_acceptable,
+        pmMinTermsDays: 30,  // Default minimum
+        pmMaxTermsDays: 90,  // Default maximum
+      }
+    );
+
+    logger.info(`[Phase2] Negotiation state updated for deal ${input.dealId}`, {
+      vendorEmphasis: negotiationState.vendorEmphasis,
+      emphasisConfidence: negotiationState.emphasisConfidence,
+      priceConcessions: negotiationState.priceConcessions.length,
+      termsConcessions: negotiationState.termsConcessions.length,
+    });
+
+    // Adaptive behavioral analysis (opt-in via adaptiveFeatures.enabled)
+    const adaptiveFeatures = (deal.negotiationConfigJson as any)?.adaptiveFeatures as AdaptiveFeaturesConfig | undefined;
+    let behavioralSignals: BehavioralSignals | null = null;
+    let adaptiveStrategy: AdaptiveStrategyResult | null = null;
+
+    if (adaptiveFeatures?.enabled) {
+      try {
+        // Compute behavioral signals from all messages
+        const analyzableMessages = allMessages.map(m => ({
+          role: m.role as 'VENDOR' | 'ACCORDO' | 'SYSTEM' | 'PM',
+          content: m.content,
+          extractedOffer: m.extractedOffer as any,
+          counterOffer: m.counterOffer as any,
+          createdAt: m.createdAt,
+        }));
+
+        behavioralSignals = analyzeBehavior(analyzableMessages, deal.round + 1);
+        adaptiveStrategy = computeAdaptiveStrategy(behavioralSignals, config, deal.round + 1);
+
+        logger.info(`[Phase2] Adaptive analysis for deal ${input.dealId}`, {
+          strategy: adaptiveStrategy.strategyLabel,
+          momentum: behavioralSignals.momentum,
+          convergenceRate: behavioralSignals.convergenceRate,
+          isStalling: behavioralSignals.isStalling,
+          adjustedAggressiveness: adaptiveStrategy.adjustedAggressiveness,
+        });
+      } catch (adaptiveError) {
+        // Non-critical: fall back to standard decision engine
+        logger.warn(`[Phase2] Adaptive analysis failed for deal ${input.dealId}, using standard engine:`, adaptiveError);
+      }
+    }
+
+    // Make decision using the engine with negotiation state for dynamic counters
+    const decision = decideNextMove(config, extractedOffer, deal.round, negotiationState, previousPmOffer, behavioralSignals, adaptiveStrategy);
 
     // Compute explainability
     const explainability = computeExplainability(config, extractedOffer, decision);
+
+    // Attach behavioral data to explainability for frontend display
+    if (behavioralSignals && adaptiveStrategy) {
+      (explainability as any).behavioral = {
+        momentum: behavioralSignals.momentum,
+        strategy: adaptiveStrategy.strategyLabel,
+        convergenceRate: behavioralSignals.convergenceRate,
+        concessionVelocity: behavioralSignals.concessionVelocity,
+        isStalling: behavioralSignals.isStalling,
+        isConverging: behavioralSignals.isConverging,
+        isDiverging: behavioralSignals.isDiverging,
+        reasoning: adaptiveStrategy.reasoning,
+        shouldExtendRounds: adaptiveStrategy.shouldExtendRounds,
+        latestSentiment: behavioralSignals.latestSentiment,
+      };
+    }
+
+    // Update negotiation state with PM's counter-offer (if any)
+    if (decision.counterOffer) {
+      negotiationState = updateNegotiationState(
+        negotiationState,
+        previousVendorOffer,
+        extractedOffer,
+        vendorMessage.content,
+        decision.counterOffer,
+        deal.round + 1,
+        {
+          pmTargetPrice: config.parameters.total_price.target,
+          pmMaxPrice: config.parameters.total_price.max_acceptable,
+          pmMinTermsDays: 30,
+          pmMaxTermsDays: 90,
+        }
+      );
+    }
 
     // Build delivery config from deal's wizard configuration
     const dealConfig = deal.get('configJson') as { delivery?: { requiredDate?: string; preferredDate?: string } } | undefined;
@@ -1020,6 +1562,10 @@ export const generatePMResponseAsyncService = async (
       content: m.content,
     }));
 
+    // For ASK_CLARIFY, get the current partial extraction to show what was just provided
+    const currentExtraction = parseOfferWithDelivery(vendorMessage.content);
+    const accumulatedOffer = 'accumulation' in extractedOffer ? extractedOffer as AccumulatedOffer : undefined;
+
     const responseResult = await generateHumanLikeResponse({
       decision,
       config,
@@ -1030,6 +1576,8 @@ export const generatePMResponseAsyncService = async (
       dealTitle: deal.title,
       round: deal.round,
       maxRounds: config.max_rounds,
+      currentExtraction: decision.action === 'ASK_CLARIFY' ? currentExtraction : undefined,
+      accumulatedOffer: decision.action === 'ASK_CLARIFY' ? accumulatedOffer : undefined,
     });
 
     // Get the round from the vendor message (both messages in a pair share the same round)
@@ -1064,15 +1612,20 @@ export const generatePMResponseAsyncService = async (
       latestOfferJson: decision.counterOffer as any,
       latestDecisionAction: decision.action,
       latestUtility: decision.utilityScore,
+      convoStateJson: negotiationState as any, // Save negotiation state for dynamic counters
     });
 
     logger.info(
-      `[Phase2] PM response generated for deal ${input.dealId}: ${decision.action} (utility: ${decision.utilityScore}, source: ${responseResult.source})`
+      `[Phase2] PM response generated for deal ${input.dealId}: ${decision.action} (utility: ${decision.utilityScore}, source: ${responseResult.source}, emphasis: ${negotiationState.vendorEmphasis})`
     );
 
-    // Hook: Capture vendor bid when deal reaches terminal state (fire-and-forget)
+    // Hook: Sync contract status and capture vendor bid when deal reaches terminal state (fire-and-forget)
     // CRITICAL FIX (Jan 2026): Run these in background to avoid blocking the response
     if (['ACCEPTED', 'WALKED_AWAY', 'ESCALATED'].includes(finalStatus)) {
+      // Sync contract status (fire-and-forget)
+      syncContractStatus(deal.id, finalStatus, deal.contractId)
+        .catch((err) => logger.error(`[Phase2] Failed to sync contract status: ${(err as Error).message}`));
+
       // Fire-and-forget: don't await, just log errors
       captureVendorBid(deal.id)
         .then(() => {
@@ -1130,9 +1683,19 @@ export const generatePMFallbackResponseService = async (
       throw new CustomError('Vendor message not found', 404);
     }
 
-    // Build negotiation config
+    // Use stored negotiation config from deal (includes priority-adjusted thresholds and weights)
     let config: NegotiationConfig;
-    if (deal.requisitionId) {
+    if (deal.negotiationConfigJson) {
+      const storedConfig = deal.negotiationConfigJson as NegotiationConfig & { wizardConfig?: unknown };
+      config = {
+        parameters: storedConfig.parameters,
+        accept_threshold: storedConfig.accept_threshold,
+        escalate_threshold: storedConfig.escalate_threshold,
+        walkaway_threshold: storedConfig.walkaway_threshold,
+        max_rounds: storedConfig.max_rounds,
+        priority: storedConfig.priority,
+      };
+    } else if (deal.requisitionId) {
       config = await buildConfigFromRequisition(deal.requisitionId);
     } else if (deal.contractId) {
       config = await buildConfigFromContract(deal.contractId);
@@ -1141,11 +1704,15 @@ export const generatePMFallbackResponseService = async (
       config = negotiationConfig;
     }
 
-    // Get vendor offer
-    const extractedOffer = vendorMessage.extractedOffer as Offer || parseOfferWithDelivery(vendorMessage.content);
+    // Get vendor offer (may be an AccumulatedOffer)
+    const extractedOffer = vendorMessage.extractedOffer as Offer | AccumulatedOffer || parseOfferWithDelivery(vendorMessage.content);
 
-    // Make decision
-    const decision = decideNextMove(config, extractedOffer, deal.round);
+    // Get negotiation state for fallback (simplified - just use stored state without updating)
+    const negotiationState: NegotiationState | null = deal.convoStateJson as NegotiationState | null;
+    const previousPmOffer = negotiationState ? getLastPmCounter(negotiationState) : null;
+
+    // Make decision with negotiation state
+    const decision = decideNextMove(config, extractedOffer, deal.round, negotiationState, previousPmOffer);
 
     // Compute explainability
     const explainability = computeExplainability(config, extractedOffer, decision);
@@ -1209,9 +1776,13 @@ export const generatePMFallbackResponseService = async (
       `[Fallback] PM fallback response generated for deal ${input.dealId}: ${decision.action}`
     );
 
-    // Hook: Capture vendor bid when deal reaches terminal state (fire-and-forget)
+    // Hook: Sync contract status and capture vendor bid when deal reaches terminal state (fire-and-forget)
     // CRITICAL FIX (Jan 2026): Run these in background to avoid blocking the response
     if (['ACCEPTED', 'WALKED_AWAY', 'ESCALATED'].includes(finalStatus)) {
+      // Sync contract status (fire-and-forget)
+      syncContractStatus(deal.id, finalStatus, deal.contractId)
+        .catch((err) => logger.error(`[Fallback] Failed to sync contract status: ${(err as Error).message}`));
+
       // Fire-and-forget: don't await, just log errors
       captureVendorBid(deal.id)
         .then(() => {
@@ -1451,7 +2022,7 @@ export const retryDealEmailService = async (
             {
               model: models.Product,
               as: 'Product',
-              attributes: ['id', 'productName', 'unit'],
+              attributes: ['id', 'productName', 'UOM'],
             },
           ],
         },
@@ -1590,21 +2161,24 @@ export const getDealConfigService = async (dealId: string): Promise<ExtendedNego
       throw new CustomError('Deal not found', 404);
     }
 
-    // Check if deal has stored negotiationConfigJson with wizardConfig
+    // Check if deal has stored negotiationConfigJson (with or without wizardConfig)
     const configJson = deal.negotiationConfigJson as Record<string, unknown> | null;
-    if (configJson && configJson.wizardConfig) {
-      // Return the full config including wizardConfig
+    if (configJson && configJson.parameters) {
+      // Return the stored config including wizardConfig if present
+      // This preserves priority-based thresholds set during deal creation
       return {
         parameters: configJson.parameters as NegotiationConfig['parameters'],
         accept_threshold: configJson.accept_threshold as number,
+        escalate_threshold: (configJson.escalate_threshold as number) ?? 0.50,
         walkaway_threshold: configJson.walkaway_threshold as number,
         max_rounds: configJson.max_rounds as number,
+        priority: configJson.priority as 'HIGH' | 'MEDIUM' | 'LOW' | undefined,
         wizardConfig: configJson.wizardConfig as ExtendedNegotiationConfig['wizardConfig'],
         parameterWeights: configJson.parameterWeights as Record<string, number> | undefined,
       };
     }
 
-    // Fallback: Build config from requisition or contract
+    // Fallback: Build config from requisition or contract (legacy deals)
     let baseConfig: NegotiationConfig;
     if (deal.requisitionId) {
       baseConfig = await buildConfigFromRequisition(deal.requisitionId);
@@ -1689,7 +2263,7 @@ export const getDealUtilityService = async (
       // Cast negotiationConfigJson for type safety
       const configJson = deal.negotiationConfigJson as Record<string, any> | null;
       latestOffer = {
-        unitPrice: offer.unit_price,
+        unitPrice: offer.total_price,
         paymentTerms: offer.payment_terms,
         // Additional fields from deal config if available
         deliveryDate: configJson?.delivery?.targetDate ?? null,
@@ -1701,7 +2275,7 @@ export const getDealUtilityService = async (
 
     // Convert legacy config to weighted format if needed
     const weightedConfig = convertLegacyConfig({
-      unit_price: config.parameters.unit_price,
+      total_price: config.parameters.total_price,
       payment_terms: config.parameters.payment_terms,
       accept_threshold: config.accept_threshold,
       walkaway_threshold: config.walkaway_threshold,
@@ -1726,6 +2300,136 @@ export const getDealUtilityService = async (
   } catch (error) {
     if (error instanceof CustomError) throw error;
     throw new CustomError(`Failed to get deal utility: ${(error as Error).message}`, 500);
+  }
+};
+
+/**
+ * Get behavioral analysis data for a deal
+ * Computes from existing ChatbotMessage records (no new data needed)
+ */
+export const getBehavioralDataService = async (
+  dealId: string
+): Promise<{
+  momentum: number;
+  strategy: string;
+  convergenceRate: number;
+  concessionVelocity: number;
+  isStalling: boolean;
+  isConverging: boolean;
+  isDiverging: boolean;
+  latestSentiment: string;
+  roundHistory: Array<{
+    round: number;
+    vendorPrice: number | null;
+    pmCounter: number | null;
+    gap: number | null;
+    utility: number | null;
+  }>;
+  dynamicRounds: {
+    softMax: number;
+    hardMax: number;
+    currentRound: number;
+    extendLikely: boolean;
+    reason: string;
+  } | null;
+}> => {
+  try {
+    const deal = await models.ChatbotDeal.findByPk(dealId);
+    if (!deal) {
+      throw new CustomError('Deal not found', 404);
+    }
+
+    // Get all messages
+    const allMessages = await models.ChatbotMessage.findAll({
+      where: { dealId },
+      order: [['createdAt', 'ASC']],
+    });
+
+    const config = deal.negotiationConfigJson as any;
+    const negConfig = config as NegotiationConfig | null;
+
+    // Build analyzable messages
+    const analyzableMessages = allMessages.map(m => ({
+      role: m.role as 'VENDOR' | 'ACCORDO' | 'SYSTEM' | 'PM',
+      content: m.content,
+      extractedOffer: m.extractedOffer as any,
+      counterOffer: m.counterOffer as any,
+      createdAt: m.createdAt,
+    }));
+
+    // Compute behavioral signals
+    const signals = analyzeBehavior(analyzableMessages, deal.round);
+
+    // Compute adaptive strategy if config available
+    let strategyLabel = 'Matching Pace';
+    if (negConfig) {
+      const strategy = computeAdaptiveStrategy(signals, negConfig, deal.round);
+      strategyLabel = strategy.strategyLabel;
+    }
+
+    // Build round history
+    const roundHistory: Array<{
+      round: number;
+      vendorPrice: number | null;
+      pmCounter: number | null;
+      gap: number | null;
+      utility: number | null;
+    }> = [];
+
+    let roundNum = 1;
+    for (const msg of allMessages) {
+      if (msg.role === 'VENDOR' && msg.extractedOffer) {
+        const offer = msg.extractedOffer as any;
+        const vendorPrice = offer.total_price ?? null;
+
+        // Find the matching ACCORDO response
+        const accordoMsg = allMessages.find(m =>
+          m.role === 'ACCORDO' &&
+          m.counterOffer &&
+          new Date(m.createdAt).getTime() > new Date(msg.createdAt).getTime()
+        );
+        const pmCounter = (accordoMsg?.counterOffer as any)?.total_price ?? null;
+        const gap = vendorPrice != null && pmCounter != null ? vendorPrice - pmCounter : null;
+        const utility = accordoMsg?.utilityScore ?? null;
+
+        roundHistory.push({ round: roundNum, vendorPrice, pmCounter, gap, utility });
+        roundNum++;
+      }
+    }
+
+    // Dynamic rounds info
+    let dynamicRounds: { softMax: number; hardMax: number; currentRound: number; extendLikely: boolean; reason: string } | null = null;
+    const dynamicRoundsCfg = config?.dynamicRounds;
+    if (dynamicRoundsCfg?.autoExtendEnabled) {
+      const extendLikely = signals.isConverging && signals.convergenceRate > 0.10;
+      dynamicRounds = {
+        softMax: dynamicRoundsCfg.softMaxRounds,
+        hardMax: dynamicRoundsCfg.hardMaxRounds,
+        currentRound: deal.round,
+        extendLikely,
+        reason: extendLikely
+          ? `Offers converging at ${(signals.convergenceRate * 100).toFixed(0)}%/round`
+          : signals.isStalling
+            ? 'Vendor offers stalling'
+            : `Standard pace (${(signals.convergenceRate * 100).toFixed(0)}%/round)`,
+      };
+    }
+
+    return {
+      momentum: signals.momentum,
+      strategy: strategyLabel,
+      convergenceRate: signals.convergenceRate,
+      concessionVelocity: signals.concessionVelocity,
+      isStalling: signals.isStalling,
+      isConverging: signals.isConverging,
+      isDiverging: signals.isDiverging,
+      latestSentiment: signals.latestSentiment,
+      roundHistory,
+      dynamicRounds,
+    };
+  } catch (error) {
+    if (error instanceof CustomError) throw error;
+    throw new CustomError(`Failed to get behavioral data: ${(error as Error).message}`, 500);
   }
 };
 
@@ -2226,7 +2930,7 @@ export const generateScenarioSuggestionsService = async (
       .join('\n');
 
     // Extract config values with fallbacks
-    const priceConfig = config.parameters?.unit_price || { anchor: 100, target: 90, max_acceptable: 120, concession_step: 2 };
+    const priceConfig = config.parameters?.total_price || { anchor: 100, target: 90, max_acceptable: 120, concession_step: 2 };
     const termsConfig = config.parameters?.payment_terms || { options: ['Net 30', 'Net 60', 'Net 90'] as const };
     const idealTerms = termsConfig.options?.[0] || 'Net 30';
     const acceptableTerms = termsConfig.options?.[1] || 'Net 60';
@@ -2314,11 +3018,11 @@ Each suggestion must be a complete, human-like negotiation message that naturall
 
 ${emphasisExamples}
 
-SCENARIO GUIDELINES:
-- HARD: Most aggressive - use anchor price, best terms for buyer
-- MEDIUM: Balanced - use target price, moderate terms
-- SOFT: Flexible - slightly above target, flexible on terms
-- WALK_AWAY: Final position - near max price, signals limit reached
+SCENARIO GUIDELINES (VENDOR PERSPECTIVE - vendors want HIGHER prices):
+- HARD (Strong Position): HIGHEST price - 10% below max acceptable, strong but realistic vendor stance
+- MEDIUM (Balanced Offer): MID price - 50% of range from target to max, fair middle ground
+- SOFT (Flexible Offer): LOWEST price - 25% of range from target to max, near buyer's target, quick close
+- WALK_AWAY: Final position - at max acceptable, signals vendor's absolute limit
 
 Return JSON only (no markdown, no explanation):
 {
@@ -2589,11 +3293,27 @@ Return JSON only (no markdown, no explanation):
         ];
       };
 
+      // VENDOR PERSPECTIVE: Higher prices = better for vendor
+      // Calculate prices relative to buyer's target and max acceptable
+      const priceRange = priceConfig.max_acceptable - priceConfig.target;
+
+      // HARD (Strong Position): 10% below max - strong but realistic vendor stance
+      // Example: If max=$100, HARD=$90
+      const hardPrice = Math.round(priceConfig.max_acceptable * 0.90 * 100) / 100;
+      // MEDIUM (Balanced Offer): 50% of range from target - middle ground
+      // Example: If target=$80, max=$100, MEDIUM=$90 (midpoint)
+      const mediumPrice = Math.round((priceConfig.target + priceRange * 0.50) * 100) / 100;
+      // SOFT (Flexible Offer): 25% of range from target - near target, quick close
+      // Example: If target=$80, max=$100, SOFT=$85
+      const softPrice = Math.round((priceConfig.target + priceRange * 0.25) * 100) / 100;
+      // WALK_AWAY: At max acceptable - final position, vendor's limit
+      const walkAwayPrice = Math.round(priceConfig.max_acceptable * 100) / 100;
+
       return {
-        HARD: generateForScenario('HARD', priceConfig.anchor, idealTerms),
-        MEDIUM: generateForScenario('MEDIUM', priceConfig.target - 5, acceptableTerms),
-        SOFT: generateForScenario('SOFT', priceConfig.target, acceptableTerms),
-        WALK_AWAY: generateForScenario('WALK_AWAY', priceConfig.max_acceptable, idealTerms),
+        HARD: generateForScenario('HARD', hardPrice, idealTerms),
+        MEDIUM: generateForScenario('MEDIUM', mediumPrice, acceptableTerms),
+        SOFT: generateForScenario('SOFT', softPrice, flexibleTerms),
+        WALK_AWAY: generateForScenario('WALK_AWAY', walkAwayPrice, idealTerms),
       };
     };
 
@@ -2672,7 +3392,7 @@ Return JSON only (no markdown, no explanation):
           suggestionsJson: suggestions,
           conversationContext,
           configSnapshot: config,
-          llmModel: process.env.LLM_MODEL || 'llama3.1',
+          llmModel: process.env.LLM_MODEL || 'qwen3',
           generationSource,
         });
 
@@ -3095,13 +3815,13 @@ export const getRequisitionDealsService = async (
       if (lastVendorMessage?.extractedOffer) {
         const offer = lastVendorMessage.extractedOffer as any;
         latestOffer = {
-          unitPrice: offer?.price || offer?.unit_price || offer?.unitPrice || null,
+          unitPrice: offer?.price || offer?.total_price || offer?.unitPrice || null,
           paymentTerms: offer?.paymentTerms || offer?.payment_terms || null,
         };
       } else if (deal.latestOfferJson || deal.latestVendorOffer) {
         const offer = (deal.latestOfferJson || deal.latestVendorOffer) as any;
         latestOffer = {
-          unitPrice: offer?.price || offer?.unit_price || offer?.unitPrice || null,
+          unitPrice: offer?.price || offer?.total_price || offer?.unitPrice || null,
           paymentTerms: offer?.payment_terms || offer?.paymentTerms || null,
         };
       }
@@ -3397,7 +4117,7 @@ export const getDealSummaryService = async (dealId: string): Promise<DealSummary
     // For other statuses, show the last known offer
     if (lastVendorMessage?.extractedOffer) {
       const offer = lastVendorMessage.extractedOffer as any;
-      finalOffer.unitPrice = offer?.price || offer?.unit_price || offer?.unitPrice || null;
+      finalOffer.unitPrice = offer?.price || offer?.total_price || offer?.unitPrice || null;
       finalOffer.paymentTerms = offer?.paymentTerms || offer?.payment_terms || null;
       // Convert deliveryDays to a date if we have it
       if (offer?.deliveryDays) {
@@ -3410,7 +4130,7 @@ export const getDealSummaryService = async (dealId: string): Promise<DealSummary
     // Fallback to deal-level data if messages don't have the offer
     if (!finalOffer.unitPrice && (deal.latestOfferJson || deal.latestVendorOffer)) {
       const offer = (deal.latestOfferJson || deal.latestVendorOffer) as any;
-      finalOffer.unitPrice = offer?.price || offer?.unit_price || offer?.unitPrice || null;
+      finalOffer.unitPrice = offer?.price || offer?.total_price || offer?.unitPrice || null;
       finalOffer.paymentTerms = offer?.payment_terms || offer?.paymentTerms || null;
     }
 
@@ -4325,7 +5045,7 @@ import {
  *
  * UPDATED January 2026: Now handles multiple config structures:
  * 1. wizardConfig.priceQuantity.targetUnitPrice (new wizard deals)
- * 2. parameters.unit_price.target (engine config format)
+ * 2. parameters.total_price.target (engine config format)
  * 3. Root level targetPrice/maxAcceptablePrice (legacy seeded deals)
  */
 const extractPmStance = (deal: ChatbotDeal): PmStance => {
@@ -4338,16 +5058,16 @@ const extractPmStance = (deal: ChatbotDeal): PmStance => {
   const delivery = (wizardConfig?.delivery || {}) as Record<string, string>;
   const negotiationControl = (wizardConfig?.negotiationControl || {}) as Record<string, number>;
 
-  // Also check for engine config format (parameters.unit_price)
+  // Also check for engine config format (parameters.total_price)
   const parameters = configJson?.parameters as Record<string, Record<string, number>> | undefined;
-  const unitPriceConfig = parameters?.unit_price || {};
+  const unitPriceConfig = parameters?.total_price || {};
 
   // Also check for legacy root-level config (seeded deals)
   const rootConfig = configJson as Record<string, number> | null;
 
   // Extract target price with fallback chain:
   // 1. wizardConfig.priceQuantity.targetUnitPrice (new wizard deals)
-  // 2. parameters.unit_price.target (engine config format)
+  // 2. parameters.total_price.target (engine config format)
   // 3. root level targetPrice (legacy seeded deals)
   // 4. default 100
   const targetUnitPrice =
@@ -4358,7 +5078,7 @@ const extractPmStance = (deal: ChatbotDeal): PmStance => {
 
   // Extract max price with fallback chain:
   // 1. wizardConfig.priceQuantity.maxAcceptablePrice (new wizard deals)
-  // 2. parameters.unit_price.max_acceptable (engine config format)
+  // 2. parameters.total_price.max_acceptable (engine config format)
   // 3. root level maxAcceptablePrice (legacy seeded deals)
   // 4. default to target * 1.2
   const maxAcceptablePrice =
@@ -4439,7 +5159,7 @@ export const startNegotiationService = async (dealId: string): Promise<{
       role: 'ACCORDO',
       content: pmOpeningText,
       extractedOffer: {
-        unit_price: pmStance.targetUnitPrice,
+        total_price: pmStance.targetUnitPrice,
         payment_terms: pmStance.idealPaymentDays <= 30 ? 'Net 30' :
                        pmStance.idealPaymentDays <= 60 ? 'Net 60' : 'Net 90',
       } as any,
@@ -4447,7 +5167,7 @@ export const startNegotiationService = async (dealId: string): Promise<{
       decisionAction: 'COUNTER', // PM's first offer is a counter
       utilityScore: 1.0, // PM's target = 100% utility for PM
       counterOffer: {
-        unit_price: pmStance.targetUnitPrice,
+        total_price: pmStance.targetUnitPrice,
         payment_terms: pmStance.idealPaymentDays <= 30 ? 'Net 30' :
                        pmStance.idealPaymentDays <= 60 ? 'Net 60' : 'Net 90',
       } as any,
@@ -4517,7 +5237,7 @@ export const getVendorScenariosService = async (dealId: string): Promise<{
     if (lastPmMessage && lastPmMessage.counterOffer) {
       const counterOffer = lastPmMessage.counterOffer as any;
       pmLastOffer = {
-        price: counterOffer.unit_price || counterOffer.price || 0,
+        price: counterOffer.total_price || counterOffer.price || 0,
         paymentTerms: counterOffer.payment_terms || counterOffer.paymentTerms || 'Net 30',
         deliveryDate: counterOffer.delivery_date || counterOffer.deliveryDate || new Date().toISOString().split('T')[0],
       };
@@ -4620,7 +5340,7 @@ export const vendorSendMessageService = async (
     // Generate AI-PM response
     const pmDecision = generateAiPmResponse(
       {
-        price: vendorOffer.unit_price,
+        price: vendorOffer.total_price,
         paymentTerms: vendorOffer.payment_terms,
         deliveryDate: null, // TODO: Parse delivery date from message
       },
@@ -4645,7 +5365,7 @@ export const vendorSendMessageService = async (
       decisionAction: pmDecision.action,
       utilityScore: pmDecision.utility,
       counterOffer: pmDecision.counterOffer ? {
-        unit_price: pmDecision.counterOffer.price,
+        total_price: pmDecision.counterOffer.price,
         payment_terms: pmDecision.counterOffer.paymentTerms,
       } as any : null,
       explainabilityJson: {
@@ -4666,7 +5386,7 @@ export const vendorSendMessageService = async (
       round: deal.round + 1,
       latestVendorOffer: vendorOffer as any,
       latestOfferJson: pmDecision.counterOffer ? {
-        unit_price: pmDecision.counterOffer.price,
+        total_price: pmDecision.counterOffer.price,
         payment_terms: pmDecision.counterOffer.paymentTerms,
       } as any : null,
       latestDecisionAction: pmDecision.action,
@@ -4732,7 +5452,7 @@ export const vendorSendMessageService = async (
               newStatus: finalStatus,
               utility: pmDecision.utility,
               vendorOffer: {
-                price: vendorOffer.unit_price,
+                price: vendorOffer.total_price,
                 paymentTerms: vendorOffer.payment_terms,
               },
               reasoning: pmDecision.reasoning ? [pmDecision.reasoning] : undefined,

@@ -28,7 +28,7 @@ Politely ask them to share their unit price and payment terms.
 Keep it brief and friendly. DO NOT mention utility scores or algorithms.`,
 
   COUNTER_DIRECT: (data: { counterOffer: Offer }) => `You are Accordo, an AI negotiation assistant.
-Present this counter-offer to the vendor: $${data.counterOffer.unit_price} with ${data.counterOffer.payment_terms}.
+Present this counter-offer to the vendor: $${data.counterOffer.total_price} with ${data.counterOffer.payment_terms}.
 Be professional and direct. Provide brief reasoning if helpful.
 DO NOT mention utility scores, algorithms, or internal calculations.
 Keep response under 150 words.`,
@@ -40,13 +40,13 @@ DO NOT mention utility scores, algorithms, or specific numbers unless absolutely
 Keep response under 100 words.`,
 
   ACCEPT: (data: { vendorOffer: Offer }) => `You are Accordo, an AI negotiation assistant.
-The vendor's offer of $${data.vendorOffer.unit_price} with ${data.vendorOffer.payment_terms} is acceptable!
+The vendor's offer of $${data.vendorOffer.total_price} with ${data.vendorOffer.payment_terms} is acceptable!
 Generate a professional acceptance message. Express appreciation and confirm next steps.
 DO NOT mention utility scores or algorithms.
 Keep response under 100 words.`,
 
   WALK_AWAY: (data: { vendorOffer: Offer }) => `You are Accordo, an AI negotiation assistant.
-Unfortunately, the vendor's offer of $${data.vendorOffer.unit_price} with ${data.vendorOffer.payment_terms} is not acceptable.
+Unfortunately, the vendor's offer of $${data.vendorOffer.total_price} with ${data.vendorOffer.payment_terms} is not acceptable.
 Politely decline and thank them for their time. Be respectful but firm.
 DO NOT mention utility scores or internal thresholds.
 Keep response under 100 words.`,
@@ -146,7 +146,7 @@ function validateReply(reply: string, intent: ConversationIntent, data?: any): b
     case 'COUNTER_DIRECT':
       // Must include the exact counter-offer values
       if (data?.counterOffer) {
-        const hasPrice = reply.includes(String(data.counterOffer.unit_price));
+        const hasPrice = reply.includes(String(data.counterOffer.total_price));
         const hasTerms = reply.includes(data.counterOffer.payment_terms);
         if (!hasPrice || !hasTerms) {
           logger.warn('[LlamaReplyGenerator] Counter-offer missing exact values', {
@@ -196,12 +196,12 @@ const FALLBACK_TEMPLATES: Record<ConversationIntent, string | ((data: any) => st
   ASK_FOR_OFFER: "Could you please provide your unit price and payment terms so we can proceed?",
 
   COUNTER_DIRECT: (data: { counterOffer: Offer }) =>
-    `We can offer $${data.counterOffer.unit_price} with ${data.counterOffer.payment_terms}. Can you work with these terms?`,
+    `We can offer $${data.counterOffer.total_price} with ${data.counterOffer.payment_terms}. Can you work with these terms?`,
 
   COUNTER_INDIRECT: "We'd need better terms to move forward. What flexibility do you have?",
 
   ACCEPT: (data: { vendorOffer: Offer }) =>
-    `Great! We accept your offer of $${data.vendorOffer.unit_price} with ${data.vendorOffer.payment_terms}. Thank you for negotiating with us.`,
+    `Great! We accept your offer of $${data.vendorOffer.total_price} with ${data.vendorOffer.payment_terms}. Thank you for negotiating with us.`,
 
   WALK_AWAY: "Unfortunately, we cannot proceed with the current terms. Thank you for your time.",
 

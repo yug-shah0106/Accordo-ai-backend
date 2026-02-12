@@ -11,10 +11,13 @@ import { Offer, Explainability, Decision, extractPaymentDays } from './types.js'
  *
  * UPDATED January 2026: Payment terms now support any "Net X" format (X = 1-120 days)
  * Non-standard terms (not 30/60/90) are interpolated for utility calculation.
+ *
+ * UPDATED February 2026: Changed from unit_price to total_price.
+ * Negotiation is now based on total price instead of per-unit pricing.
  */
 export interface NegotiationConfig {
   parameters: {
-    unit_price: {
+    total_price: {
       weight: number;
       direction: string;
       anchor: number;
@@ -39,6 +42,8 @@ export interface NegotiationConfig {
   /** Walk away threshold - utility < this triggers WALK_AWAY (default: 0.30 = 30%) */
   walkaway_threshold: number;
   max_rounds: number;
+  /** Negotiation priority/strategy: HIGH=Maximize Savings, MEDIUM=Fair Deal, LOW=Quick Close */
+  priority?: 'HIGH' | 'MEDIUM' | 'LOW';
 }
 
 const clamp01 = (x: number) => Math.max(0, Math.min(1, x));
@@ -47,7 +52,8 @@ export function priceUtility(config: NegotiationConfig, price: number) {
   // CRITICAL FIX (Jan 2026): Use TARGET as the 100% utility point, not ANCHOR
   // The anchor is our opening position (aggressive), target is what we actually want
   // This ensures we only ACCEPT when vendor meets or beats our target, not just our anchor
-  const { target, max_acceptable } = config.parameters.unit_price;
+  // UPDATED Feb 2026: Now uses total_price instead of unit_price
+  const { target, max_acceptable } = config.parameters.total_price;
   if (price <= target) return 1;  // At or below target = 100% utility
   if (price >= max_acceptable) return 0;  // At or above max = 0% utility
   // Linear interpolation between target and max_acceptable
@@ -120,11 +126,11 @@ export function termsUtility(
 }
 
 export function totalUtility(config: NegotiationConfig, offer: Offer) {
-  const wP = config.parameters.unit_price.weight;
+  const wP = config.parameters.total_price.weight;
   const wT = config.parameters.payment_terms.weight;
 
   const pu =
-    offer.unit_price == null ? 0 : priceUtility(config, offer.unit_price);
+    offer.total_price == null ? 0 : priceUtility(config, offer.total_price);
   const tu =
     offer.payment_terms == null
       ? 0
@@ -135,19 +141,20 @@ export function totalUtility(config: NegotiationConfig, offer: Offer) {
 /**
  * Compute explainability payload from config, vendor offer, and decision
  * This provides a complete audit trail of how the decision was made
+ * UPDATED Feb 2026: Now uses total_price instead of unit_price
  */
 export function computeExplainability(
   config: NegotiationConfig,
   vendorOffer: Offer,
   decision: Decision
 ): Explainability {
-  const wP = config.parameters.unit_price.weight;
+  const wP = config.parameters.total_price.weight;
   const wT = config.parameters.payment_terms.weight;
 
   const pu =
-    vendorOffer.unit_price == null
+    vendorOffer.total_price == null
       ? null
-      : priceUtility(config, vendorOffer.unit_price);
+      : priceUtility(config, vendorOffer.total_price);
   const tu =
     vendorOffer.payment_terms == null
       ? null
@@ -163,7 +170,7 @@ export function computeExplainability(
 
   return {
     vendorOffer: {
-      unit_price: vendorOffer.unit_price,
+      total_price: vendorOffer.total_price,
       payment_terms: vendorOffer.payment_terms,
     },
     utilities: {
@@ -185,11 +192,11 @@ export function computeExplainability(
         escalate: config.escalate_threshold ?? 0.50,
         walkaway: config.walkaway_threshold,
       },
-      unitPrice: {
-        anchor: config.parameters.unit_price.anchor,
-        target: config.parameters.unit_price.target,
-        max: config.parameters.unit_price.max_acceptable,
-        step: config.parameters.unit_price.concession_step,
+      totalPrice: {
+        anchor: config.parameters.total_price.anchor,
+        target: config.parameters.total_price.target,
+        max: config.parameters.total_price.max_acceptable,
+        step: config.parameters.total_price.concession_step,
       },
       termOptions: [...config.parameters.payment_terms.options],
     },

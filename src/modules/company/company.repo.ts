@@ -44,12 +44,51 @@ const repo: CompanyRepository = {
   },
 
   getCompany: async (companyId: number): Promise<Company | null> => {
-    return models.Company.findByPk(companyId, {
-      include: {
-        model: models.User,
-        as: 'Users',
+    const company = await models.Company.findByPk(companyId, {
+      include: [
+        {
+          model: models.User,
+          as: 'Users',
+        },
+        {
+          model: models.VendorCompany,
+          as: 'VendorCompanies',
+          required: false,
+          include: [
+            {
+              model: models.User,
+              as: 'Vendor',
+              where: { userType: 'vendor' },
+              required: false,
+            },
+          ],
+        },
+        {
+          model: models.Address,
+          as: 'Addresses',
+          required: false,
+        },
+      ],
+    });
+
+    if (!company) {
+      return null;
+    }
+
+    // Manually fetch vendor users for this company
+    const vendors = await models.User.findAll({
+      where: {
+        companyId: companyId,
+        userType: 'vendor',
       },
     });
+
+    // Get plain object and manually add Vendor array
+    const companyData = company.get({ plain: true }) as any;
+    companyData.Vendor = vendors.map(v => v.get({ plain: true }));
+
+    // Return the enhanced plain object cast as Company
+    return companyData as Company;
   },
 
   updateCompany: async (

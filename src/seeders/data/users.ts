@@ -18,6 +18,7 @@ export interface UserData {
   companyId: number;
   isActive: boolean;
   approvalLimit?: number; // For Manager/Director/VP
+  isProtected?: boolean; // Protected users cannot be deleted or have their role changed
 }
 
 // Standard passwords by role
@@ -197,10 +198,10 @@ export const systemUsers: UserData[] = [
     isActive: true,
     approvalLimit: 999999999,
   },
-  // AK Test user for seed data testing
+  // AK Super Admin - Protected user (cannot be deleted or have role changed)
   {
     id: userId++,
-    name: 'AK Test Superuser',
+    name: 'AK Super Admin',
     email: 'ak75963@gmail.com',
     password: 'Welcome@56',
     type: 'admin',
@@ -208,6 +209,7 @@ export const systemUsers: UserData[] = [
     companyId: 1, // Accordo Technologies
     isActive: true,
     approvalLimit: 999999999,
+    isProtected: true,
   },
 ];
 

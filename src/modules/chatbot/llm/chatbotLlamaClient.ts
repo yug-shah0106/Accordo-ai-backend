@@ -6,7 +6,7 @@
  *
  * Environment Variables:
  * - CHATBOT_LLM_BASE_URL: Ollama base URL (defaults to main LLM_BASE_URL)
- * - CHATBOT_LLM_MODEL: Model name (defaults to 'llama3.1')
+ * - CHATBOT_LLM_MODEL: Model name (defaults to 'qwen3')
  */
 
 import axios, { AxiosError } from 'axios';
@@ -16,13 +16,13 @@ import logger from '../../../config/logger.js';
 // Chatbot-specific LLM configuration
 const CHATBOT_LLM_BASE_URL =
   process.env.CHATBOT_LLM_BASE_URL || env.llm.baseURL || 'http://localhost:11434';
-const CHATBOT_LLM_MODEL = process.env.CHATBOT_LLM_MODEL || 'llama3.1';
+const CHATBOT_LLM_MODEL = process.env.CHATBOT_LLM_MODEL || 'qwen3';
 
-// Performance-optimized defaults for fast responses
-const DEFAULT_MAX_TOKENS = 80;  // Reduced from 500 - vendor messages are 2-3 sentences
-const DEFAULT_TEMPERATURE = 0.6;  // Reduced from 0.7 - faster convergence
-const DEFAULT_NUM_CTX = 2048;  // Limit context window for speed
-const FAST_TIMEOUT_MS = 8000;  // 8 second timeout (reduced from 60s)
+// Performance-optimized defaults for Qwen3 model
+const DEFAULT_MAX_TOKENS = 120;  // Qwen3 is efficient, moderate token limit for responses
+const DEFAULT_TEMPERATURE = 0.6;  // Balanced temperature for coherent, natural responses
+const DEFAULT_NUM_CTX = 4096;  // Qwen3 supports good context window
+const FAST_TIMEOUT_MS = 8000;  // 8 second timeout - Qwen3 is fast and lightweight
 
 /**
  * Message interface for chat completion
@@ -59,7 +59,7 @@ export async function generateChatbotLlamaCompletion(
     const {
       temperature = DEFAULT_TEMPERATURE,
       maxTokens = DEFAULT_MAX_TOKENS,
-      topP = 0.9,
+      topP = 0.9,  // Balanced top-p for natural responses with Qwen3
     } = options;
 
     // Prepare messages array
@@ -215,7 +215,7 @@ export async function streamChatbotLlamaCompletion(
   const {
     temperature = DEFAULT_TEMPERATURE,
     maxTokens = DEFAULT_MAX_TOKENS,
-    topP = 0.9,
+    topP = 0.9,  // Balanced top-p for natural responses with Qwen3
   } = options;
 
   // Prepare messages array

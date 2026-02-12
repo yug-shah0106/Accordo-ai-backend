@@ -1,6 +1,8 @@
-import models from '../../models/index.js';
+import models, { sequelize } from '../../models/index.js';
 import type { Contract } from '../../models/contract.js';
 import type { WhereOptions, FindOptions } from 'sequelize';
+import { QueryTypes } from 'sequelize';
+import logger from '../../config/logger.js';
 
 export interface ContractData {
   companyId?: number | null;
@@ -76,6 +78,31 @@ const repo = {
 
   createContract: async (contractData: ContractData): Promise<Contract> => {
     return models.Contract.create(contractData as any);
+  },
+
+  /**
+   * Reset the Contracts table sequence to the max ID + 1
+   * This fixes the "id must be unique" error when the sequence gets out of sync
+   */
+  resetContractSequence: async (): Promise<void> => {
+    try {
+      // Get the current max ID from the Contracts table
+      const [result] = await sequelize.query<{ max_id: number }>(
+        'SELECT COALESCE(MAX(id), 0) as max_id FROM "Contracts"',
+        { type: QueryTypes.SELECT }
+      );
+      const maxId = result?.max_id || 0;
+
+      // Reset the sequence to max_id + 1
+      await sequelize.query(
+        `SELECT setval('"Contracts_id_seq"', ${maxId + 1}, false)`
+      );
+
+      logger.info(`Contract sequence reset to ${maxId + 1}`);
+    } catch (error) {
+      logger.error('Failed to reset contract sequence:', error);
+      throw error;
+    }
   },
 
   getContract: async (contractId: number): Promise<Contract | null> => {

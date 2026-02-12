@@ -347,8 +347,8 @@ function extractCurrentPrice(
 
   // Try to get from deal's latest vendor offer
   const latestOffer = deal.latestVendorOffer as any;
-  if (latestOffer?.unit_price) {
-    return latestOffer.unit_price;
+  if (latestOffer?.total_price) {
+    return latestOffer.total_price;
   }
 
   return undefined;

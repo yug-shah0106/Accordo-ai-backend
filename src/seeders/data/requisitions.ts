@@ -34,6 +34,7 @@ export interface RequisitionData {
   status: 'Draft' | 'Created' | 'NegotiationStarted' | 'Awarded' | 'Fulfilled' | 'Expired' | 'Cancelled';
   priority: 'High' | 'Medium' | 'Low';
   deliveryDate: Date;
+  maxDeliveryDate: Date;  // Hard deadline for delivery
   negotiationClosureDate: Date;
   createdAt: Date;
   estimatedValue: number;
@@ -290,6 +291,7 @@ requisitionTemplates.forEach((template, index) => {
     status,
     priority: template.priority,
     deliveryDate: deadlines.deliveryDate,
+    maxDeliveryDate: deadlines.maxDeliveryDate,
     negotiationClosureDate: deadlines.negotiationClosureDate,
     createdAt,
     estimatedValue: Math.round(estimatedValue * 100) / 100,

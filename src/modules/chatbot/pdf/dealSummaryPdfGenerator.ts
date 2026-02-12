@@ -83,7 +83,7 @@ export interface DealSummaryPDFInput {
     role: string;
     content: string;
     createdAt: string;
-    extractedOffer?: { unit_price?: number; payment_terms?: string } | null;
+    extractedOffer?: { total_price?: number; payment_terms?: string } | null;
   }>;
   rfqId: number;
   generatedAt: Date;

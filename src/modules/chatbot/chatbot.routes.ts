@@ -283,6 +283,20 @@ chatbotRouter.get(
   controller.getLastExplainability
 );
 
+/**
+ * Get behavioral analysis data for a deal (Adaptive Negotiation Engine)
+ * GET /api/chatbot/requisitions/:rfqId/vendors/:vendorId/deals/:dealId/behavioral
+ *
+ * Returns behavioral signals, adaptive strategy, convergence data,
+ * round history, and dynamic rounds info.
+ */
+chatbotRouter.get(
+  '/requisitions/:rfqId/vendors/:vendorId/deals/:dealId/behavioral',
+  authMiddleware,
+  validateParams(nestedDealSchema),
+  controller.getBehavioralData
+);
+
 // ==================== Messaging (Merged INSIGHTS + CONVERSATION) ====================
 
 /**

@@ -20,18 +20,24 @@ import vectorRoutes from '../modules/vector/vector.routes.js';
 import bidComparisonRoutes from '../modules/bidComparison/bidComparison.routes.js';
 import bidAnalysisRoutes from '../modules/bidAnalysis/bidAnalysis.routes.js';
 import healthRoutes from '../modules/health/health.routes.js';
+import documentRoutes from '../modules/document/document.routes.js';
+import vendorChatRoutes from '../modules/vendor-chat/vendor-chat.routes.js';
 
 const router = Router();
 
 // Health check routes (comprehensive)
 router.use('/health', healthRoutes);
 
+// Public vendor chat routes (no authMiddleware)
+router.use('/vendor-chat', vendorChatRoutes);
+
 router.use('/auth', authRoutes);
 router.use('/company', companyRoutes);
 router.use('/requisition', requisitionRoutes);
 router.use('/contract', contractRoutes);
 router.use('/po', poRoutes);
-router.use('/vendor', vendorRoutes);
+router.use('/vendor-management', vendorRoutes);
+router.use('/vendor', vendorRoutes); // Alias for backward compatibility
 router.use('/product', productRoutes);
 router.use('/project', projectRoutes);
 router.use('/role', roleRoutes);
@@ -46,5 +52,6 @@ router.use('/chatbot', chatbotRoutes);
 router.use('/vector', vectorRoutes);
 router.use('/bid-comparison', bidComparisonRoutes);
 router.use('/bid-analysis', bidAnalysisRoutes);
+router.use('/document', documentRoutes);
 
 export default router;

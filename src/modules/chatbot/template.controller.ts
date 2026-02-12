@@ -7,6 +7,7 @@
 import type { Request, Response, NextFunction } from 'express';
 import * as templateService from './template.service.js';
 import { CustomError } from '../../utils/custom-error.js';
+import { getParam } from '../../types/index.js';
 
 /**
  * Create a new negotiation template
@@ -51,7 +52,7 @@ export const getTemplate = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const { id } = req.params;
+    const id = getParam(req.params.id);
     const includeParameters = req.query.includeParameters === 'true';
 
     const template = await templateService.getTemplateService(
@@ -117,7 +118,7 @@ export const updateTemplate = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const { id } = req.params;
+    const id = getParam(req.params.id);
     const { name, description, configJson, isActive } = req.body;
 
     const template = await templateService.updateTemplateService(id, {
@@ -147,7 +148,7 @@ export const deleteTemplate = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const { id } = req.params;
+    const id = getParam(req.params.id);
 
     await templateService.deleteTemplateService(id);
 
@@ -170,7 +171,7 @@ export const permanentDeleteTemplate = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const { id } = req.params;
+    const id = getParam(req.params.id);
 
     await templateService.permanentDeleteTemplateService(id);
 
@@ -224,7 +225,7 @@ export const setDefaultTemplate = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const { id } = req.params;
+    const id = getParam(req.params.id);
     const { deactivateOthers } = req.body;
 
     const template = await templateService.setDefaultTemplateService(

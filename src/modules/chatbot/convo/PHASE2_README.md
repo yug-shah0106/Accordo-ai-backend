@@ -406,7 +406,7 @@ function extractCurrentPrice(vendorMessage: string, deal: ChatbotDeal): number |
   if (priceMatch) return parseFloat(priceMatch[1].replace(/,/g, ''));
 
   // Fallback to deal's latest offer
-  return deal.latestVendorOffer?.unit_price;
+  return deal.latestVendorOffer?.total_price;
 }
 ```
 

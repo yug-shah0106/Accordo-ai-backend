@@ -7,6 +7,7 @@ import * as vectorService from './vector.service.js';
 import * as migrationJob from './migration.job.js';
 import { embeddingClient } from './embedding.client.js';
 import logger from '../../config/logger.js';
+import { getParam } from '../../types/index.js';
 
 /**
  * Search for similar messages
@@ -123,7 +124,7 @@ export async function searchPatterns(req: Request, res: Response, next: NextFunc
  */
 export async function buildContext(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const { dealId } = req.params;
+    const dealId = getParam(req.params.dealId);
     const { message } = req.body;
 
     if (!message || typeof message !== 'string') {
@@ -153,7 +154,7 @@ export async function buildContext(req: Request, res: Response, next: NextFuncti
  */
 export async function getRAGContext(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const { dealId } = req.params;
+    const dealId = getParam(req.params.dealId);
     const { message } = req.body;
 
     if (!message || typeof message !== 'string') {
@@ -183,7 +184,7 @@ export async function getRAGContext(req: Request, res: Response, next: NextFunct
  */
 export async function embedMessage(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const { messageId } = req.params;
+    const messageId = getParam(req.params.messageId);
 
     // Import models here to avoid circular dependency
     const { ChatbotMessage, ChatbotDeal } = await import('../../models/index.js');
@@ -225,7 +226,7 @@ export async function embedMessage(req: Request, res: Response, next: NextFuncti
  */
 export async function embedDeal(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const { dealId } = req.params;
+    const dealId = getParam(req.params.dealId);
 
     const result = await vectorService.vectorizeDeal(dealId);
 

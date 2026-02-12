@@ -83,7 +83,7 @@ export async function generateVendorReply(
     // - Vendor should start ABOVE PM's max (for HARD scenario)
     // - Vendor's floor (minPrice) should be around PM's target to max range
     // - Vendor wants to maximize profit, so starts high and makes concessions
-    const basePrice = pmPriceConfig?.maxAcceptablePrice || lastAccordoOffer?.unit_price || 100;
+    const basePrice = pmPriceConfig?.maxAcceptablePrice || lastAccordoOffer?.total_price || 100;
     const policy = mergeVendorPolicy(scenario, customPolicy || {}, basePrice);
 
     // Check if vendor should walk away
@@ -91,7 +91,7 @@ export async function generateVendorReply(
       policy,
       round,
       policy.startPrice, // Current vendor price
-      lastAccordoOffer?.unit_price || null
+      lastAccordoOffer?.total_price || null
     );
 
     if (shouldWalkAway) {
@@ -101,7 +101,7 @@ export async function generateVendorReply(
         data: {
           content: "I appreciate your time, but we're unable to proceed with these terms. Thank you for considering our offer.",
           offer: {
-            unit_price: null,
+            total_price: null,
             payment_terms: null,
           },
           scenario,
@@ -115,7 +115,7 @@ export async function generateVendorReply(
       policy,
       currentPrice,
       round,
-      lastAccordoOffer?.unit_price || null
+      lastAccordoOffer?.total_price || null
     );
 
     const nextTerms = calculateNextVendorTerms(
@@ -182,15 +182,15 @@ export async function generateVendorReply(
     // Validate extracted offer matches policy
     // If LLM generated incorrect values, replace with policy-calculated values
     let finalOffer = extractedOffer;
-    if (extractedOffer.unit_price !== nextPrice || extractedOffer.payment_terms !== nextTerms) {
+    if (extractedOffer.total_price !== nextPrice || extractedOffer.payment_terms !== nextTerms) {
       logger.warn('[VendorAgent] LLM-generated offer does not match policy, using policy values', {
         extracted: extractedOffer,
-        policy: { unit_price: nextPrice, payment_terms: nextTerms },
+        policy: { total_price: nextPrice, payment_terms: nextTerms },
       });
 
       // Re-generate message with explicit values
       vendorMessage = buildFallbackVendorMessage(round, nextPrice, nextTerms, scenario);
-      finalOffer = { unit_price: nextPrice, payment_terms: nextTerms };
+      finalOffer = { total_price: nextPrice, payment_terms: nextTerms };
     }
 
     logger.info('[VendorAgent] Vendor reply generated successfully', {
@@ -229,7 +229,7 @@ export async function generateVendorReply(
  */
 function buildVendorPrompt(
   round: number,
-  lastAccordoOffer: { unit_price: number | null; payment_terms: string | null } | null,
+  lastAccordoOffer: { total_price: number | null; payment_terms: string | null } | null,
   nextPrice: number,
   nextTerms: string,
   scenario: VendorScenario
@@ -244,7 +244,7 @@ Introduce yourself briefly and present your offer clearly.`;
   }
 
   // Response to buyer's counter-offer
-  const accordoPrice = lastAccordoOffer?.unit_price || 'unknown';
+  const accordoPrice = lastAccordoOffer?.total_price || 'unknown';
   const accordoTerms = lastAccordoOffer?.payment_terms || 'unknown';
 
   return `The buyer offered: $${accordoPrice} with ${accordoTerms}

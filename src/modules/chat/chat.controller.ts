@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { chatService } from './chat.service.js';
 import models from '../../models/index.js';
+import { getParam } from '../../types/index.js';
 
 export const sendMessage = async (
   req: Request,
@@ -108,7 +109,7 @@ export const getSession = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const { sessionId } = req.params;
+    const sessionId = getParam(req.params.sessionId);
     const userId = req.context?.userId || req.user?.id;
 
     if (!userId) {

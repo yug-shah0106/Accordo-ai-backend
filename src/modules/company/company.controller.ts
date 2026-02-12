@@ -47,7 +47,29 @@ export const getCompany = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const data = await getCompanyService(Number(req.params.companyid));
+    const companyId = req.params.companyid;
+
+    // Validate company ID - check if it's undefined, null, or not a valid number
+    if (!companyId || companyId === 'undefined' || companyId === 'null') {
+      res.status(400).json({
+        message: 'Invalid company ID',
+        data: null,
+        error: 'Company ID is required'
+      });
+      return;
+    }
+
+    const companyIdNum = Number(companyId);
+    if (isNaN(companyIdNum)) {
+      res.status(400).json({
+        message: 'Invalid company ID',
+        data: null,
+        error: 'Company ID must be a valid number'
+      });
+      return;
+    }
+
+    const data = await getCompanyService(companyIdNum);
     res.status(200).json({ message: 'Company Details', data });
   } catch (error) {
     next(error);
@@ -62,9 +84,21 @@ export const updateCompany = async (
   try {
     const { companyid } = req.params;
     const files = (req.files as Express.Multer.File[]) || [];
+
+    // Parse addresses JSON string from FormData if provided
+    const companyData = { ...req.body };
+    if (typeof companyData.addresses === 'string') {
+      try {
+        companyData.addresses = JSON.parse(companyData.addresses);
+      } catch {
+        // If parsing fails, leave as undefined
+        delete companyData.addresses;
+      }
+    }
+
     const data = await updadateCompanyService(
       Number(companyid),
-      req.body,
+      companyData,
       req.context?.userId as number,
       files
     );

@@ -19,8 +19,9 @@ import { chatCompletion } from '../../../services/llm.service.js';
 import { detectVendorTone, getToneDescription, type VendorTone, type ToneMessage } from './toneDetector.js';
 import { extractVendorConcerns, getAcknowledgmentSentence, type VendorConcern, type ConcernMessage } from './concernExtractor.js';
 import { formatDeliveryDate, formatDeliveryShort, type DeliveryConfig } from './deliveryUtility.js';
-import type { Offer, Decision } from './types.js';
+import type { Offer, Decision, AccumulatedOffer, OfferComponent } from './types.js';
 import type { NegotiationConfig } from './utility.js';
+import { getProvidedComponents, getMissingComponents } from './offerAccumulator.js';
 
 /**
  * Input for response generation
@@ -35,6 +36,10 @@ export interface ResponseGeneratorInput {
   dealTitle?: string;
   round?: number;
   maxRounds?: number;
+  /** Current partial extraction from vendor's latest message (for ASK_CLARIFY) */
+  currentExtraction?: Offer;
+  /** Accumulated offer state (for ASK_CLARIFY acknowledgment) */
+  accumulatedOffer?: AccumulatedOffer;
 }
 
 /**
@@ -86,6 +91,63 @@ function formatDeliveryFromConfig(config?: DeliveryConfig): string {
 }
 
 /**
+ * Build natural ASK_CLARIFY LLM prompt that acknowledges what was provided
+ * and asks naturally for what's missing
+ */
+function buildAskClarifyPrompt(input: ResponseGeneratorInput, tone: VendorTone): string {
+  const { vendorOffer, currentExtraction, accumulatedOffer } = input;
+  const toneDescription = getToneDescription(tone);
+
+  // Determine what was provided in current message vs what's missing
+  const currentProvided = currentExtraction ? getProvidedComponents(currentExtraction) : [];
+  const missing = getMissingComponents(accumulatedOffer || vendorOffer);
+
+  // Build context about what we have and what we need
+  const providedText = currentProvided.length > 0
+    ? `Vendor just provided: ${currentProvided.join(', ')}`
+    : 'Vendor message did not include specific offer details';
+
+  const missingText = missing.length > 0
+    ? `Still need: ${missing.join(' and ')}`
+    : 'All required information received';
+
+  // Format accumulated state
+  const accumulatedText = accumulatedOffer
+    ? `Current accumulated offer: ${accumulatedOffer.total_price ? `$${accumulatedOffer.total_price.toLocaleString()}` : 'no price'}, ${accumulatedOffer.payment_terms || 'no terms'}`
+    : '';
+
+  return `
+You are Accordo, a Procurement Manager. Generate a natural ${toneDescription} response that acknowledges what the vendor provided and asks for what's missing.
+
+CURRENT MESSAGE CONTEXT:
+${providedText}
+${accumulatedText}
+${missingText}
+
+TONE: ${tone} (conversational, not robotic)
+
+REQUIREMENTS:
+1. FIRST acknowledge what the vendor just provided (if anything)
+   - For price: "Got it - $37K" or "Thanks for the pricing at $37,000" or "$37K - noted"
+   - For terms: "Net 60 works" or "Thanks for confirming Net 60"
+2. THEN naturally ask for the missing piece(s)
+   - For missing price: "What about the total price?" or "And the pricing?"
+   - For missing terms: "What about payment terms?" or "How about terms - Net 30, 60, or something else?"
+3. Keep it SHORT - 1-2 sentences max
+4. Sound natural and human, like a real conversation
+5. DO NOT say "I need clarification" or "Could you please provide" - too formal
+6. DO NOT mention: utility, algorithm, system, analysis
+
+EXAMPLE RESPONSES:
+- "Got it - $37K. What about payment terms?"
+- "Net 60 works for us. And the total price?"
+- "Thanks for that. Can you confirm both the price and payment terms?"
+- "$37,000 noted. How about terms - Net 30, 60?"
+
+Generate response:`;
+}
+
+/**
  * Build LLM prompt for response generation
  */
 function buildPrompt(
@@ -112,7 +174,7 @@ function buildPrompt(
 You are Accordo, a Procurement Manager. Generate a ${toneDescription} acceptance response.
 
 VENDOR'S OFFER:
-- Price: $${vendorOffer.unit_price?.toFixed(2) || 'not specified'}/unit
+- Total Price: $${vendorOffer.total_price?.toFixed(2) || 'not specified'} (for entire order)
 - Payment: ${vendorOffer.payment_terms || 'not specified'}
 - Delivery: ${vendorDelivery}
 
@@ -121,12 +183,13 @@ ${concernsText}
 TONE: ${tone} (mirror the vendor's communication style)
 
 REQUIREMENTS:
-1. Confirm ALL THREE terms: price, payment, delivery
+1. Confirm ALL THREE terms: total price, payment, delivery
 2. Express genuine appreciation
 3. ${concerns.length > 0 ? 'Briefly acknowledge their efforts/challenges positively' : 'Thank them for the negotiation'}
 4. Keep to 2-3 sentences
 5. DO NOT mention: utility, algorithm, score, threshold, calculation, analysis
 6. Sound human and warm, not robotic
+7. IMPORTANT: Always refer to the price as "total" or "total price" - NOT per unit
 
 Generate response:`,
 
@@ -134,12 +197,12 @@ Generate response:`,
 You are Accordo, a Procurement Manager. Generate a ${toneDescription} counter-offer response.
 
 VENDOR'S OFFER:
-- Price: $${vendorOffer.unit_price?.toFixed(2) || 'not specified'}/unit
+- Total Price: $${vendorOffer.total_price?.toFixed(2) || 'not specified'} (for entire order)
 - Payment: ${vendorOffer.payment_terms || 'not specified'}
 - Delivery: ${vendorDelivery}
 
 OUR COUNTER:
-- Price: $${counterOffer?.unit_price?.toFixed(2) || 'flexible'}/unit
+- Total Price: $${counterOffer?.total_price?.toFixed(2) || 'flexible'} (for entire order)
 - Payment: ${counterOffer?.payment_terms || 'flexible'}
 - Delivery: ${counterDelivery}
 
@@ -162,6 +225,7 @@ REQUIREMENTS:
 5. Length: 2-4 sentences
 6. DO NOT mention: utility, algorithm, score, threshold, calculation, percentage, analysis
 7. Sound collaborative, not demanding
+8. IMPORTANT: Always refer to the price as "total" or "total price" - NOT per unit
 
 Generate response:`,
 
@@ -169,7 +233,7 @@ Generate response:`,
 You are Accordo, a Procurement Manager. Generate a professional, regretful response declining to continue.
 
 FINAL SITUATION:
-- Vendor's offer: $${vendorOffer.unit_price?.toFixed(2) || 'N/A'}, ${vendorOffer.payment_terms || 'N/A'}, ${vendorDelivery}
+- Vendor's offer: $${vendorOffer.total_price?.toFixed(2) || 'N/A'}, ${vendorOffer.payment_terms || 'N/A'}, ${vendorDelivery}
 - Round: ${round || 'final'} of ${maxRounds || 6}
 - Gap: Too far from our requirements
 
@@ -201,20 +265,7 @@ REQUIREMENTS:
 
 Generate response:`,
 
-    ASK_CLARIFY: `
-You are Accordo, a Procurement Manager. You need clarification on the offer.
-
-VENDOR'S MESSAGE: Missing clear pricing or terms
-
-TONE: ${tone} (helpful and patient)
-
-REQUIREMENTS:
-1. Politely ask for clarification on missing details
-2. Specifically mention what's unclear (price, payment terms, or delivery)
-3. Be encouraging, not critical
-4. 1-2 sentences
-
-Generate response:`
+    ASK_CLARIFY: buildAskClarifyPrompt(input, tone)
   };
 
   return actionPrompts[action] || actionPrompts.COUNTER;
@@ -299,16 +350,16 @@ const FALLBACK_TEMPLATES = {
     const concernAck = concerns.length > 0 ? getAcknowledgmentSentence(concerns) : '';
 
     const templates = [
-      `Great news! We accept your offer of $${vendorOffer.unit_price?.toFixed(2)}/unit with ${vendorOffer.payment_terms} and delivery ${delivery}. ${concernAck || 'Thank you for working with us!'}`,
-      `Excellent! We have a deal - $${vendorOffer.unit_price?.toFixed(2)} per unit, ${vendorOffer.payment_terms}, delivered ${delivery}. ${concernAck || 'Looking forward to a great partnership.'}`,
-      `I'm pleased to confirm we accept: $${vendorOffer.unit_price?.toFixed(2)}/unit, ${vendorOffer.payment_terms}, delivery ${delivery}. ${concernAck || 'Appreciate your flexibility!'}`,
-      `We're happy to accept your terms: $${vendorOffer.unit_price?.toFixed(2)}/unit with ${vendorOffer.payment_terms} payment and ${delivery} delivery. ${concernAck || "Let's finalize the paperwork."}`,
-      `Deal! $${vendorOffer.unit_price?.toFixed(2)} per unit, ${vendorOffer.payment_terms}, ${delivery}. ${concernAck || 'Thank you for the productive negotiation.'}`,
+      `Great news! We accept your offer of $${vendorOffer.total_price?.toFixed(2)} total with ${vendorOffer.payment_terms} and delivery ${delivery}. ${concernAck || 'Thank you for working with us!'}`,
+      `Excellent! We have a deal - $${vendorOffer.total_price?.toFixed(2)} total, ${vendorOffer.payment_terms}, delivered ${delivery}. ${concernAck || 'Looking forward to a great partnership.'}`,
+      `I'm pleased to confirm we accept: $${vendorOffer.total_price?.toFixed(2)} total, ${vendorOffer.payment_terms}, delivery ${delivery}. ${concernAck || 'Appreciate your flexibility!'}`,
+      `We're happy to accept your terms: $${vendorOffer.total_price?.toFixed(2)} total with ${vendorOffer.payment_terms} payment and ${delivery} delivery. ${concernAck || "Let's finalize the paperwork."}`,
+      `Deal! $${vendorOffer.total_price?.toFixed(2)} total, ${vendorOffer.payment_terms}, ${delivery}. ${concernAck || 'Thank you for the productive negotiation.'}`,
     ];
 
     // Adjust formality based on tone
     const formalTemplates = [
-      `We are pleased to formally accept your offer of $${vendorOffer.unit_price?.toFixed(2)} per unit with ${vendorOffer.payment_terms} payment terms and delivery ${delivery}. ${concernAck || 'We appreciate your professionalism throughout this negotiation.'}`,
+      `We are pleased to formally accept your offer of $${vendorOffer.total_price?.toFixed(2)} total with ${vendorOffer.payment_terms} payment terms and delivery ${delivery}. ${concernAck || 'We appreciate your professionalism throughout this negotiation.'}`,
     ];
 
     if (tone === 'formal') {
@@ -324,15 +375,15 @@ const FALLBACK_TEMPLATES = {
     const concernAck = concerns.length > 0 ? getAcknowledgmentSentence(concerns) + ' ' : '';
 
     const templates = [
-      `${concernAck}Thank you for your offer. We'd like to propose $${counterOffer?.unit_price?.toFixed(2)}/unit with ${counterOffer?.payment_terms} and delivery ${counterDelivery}. This better aligns with our project requirements.`,
-      `${concernAck}I appreciate the offer of $${vendorOffer.unit_price?.toFixed(2)}. Our counter: $${counterOffer?.unit_price?.toFixed(2)}, ${counterOffer?.payment_terms}, delivery ${counterDelivery}. Can we meet in the middle?`,
-      `${concernAck}Your proposal is noted. Given our constraints, we can offer $${counterOffer?.unit_price?.toFixed(2)}/unit, ${counterOffer?.payment_terms}, with delivery ${counterDelivery}. Let me know your thoughts.`,
-      `${concernAck}Thanks for the offer. We're looking at $${counterOffer?.unit_price?.toFixed(2)} per unit with ${counterOffer?.payment_terms} payment and ${counterDelivery} delivery. Does this work for you?`,
-      `${concernAck}I've reviewed your offer. We can do $${counterOffer?.unit_price?.toFixed(2)}/unit, ${counterOffer?.payment_terms}, delivered ${counterDelivery}. This helps us stay within budget.`,
+      `${concernAck}Thank you for your offer. We'd like to propose $${counterOffer?.total_price?.toFixed(2)} total with ${counterOffer?.payment_terms} and delivery ${counterDelivery}. This better aligns with our project requirements.`,
+      `${concernAck}I appreciate the offer of $${vendorOffer.total_price?.toFixed(2)}. Our counter: $${counterOffer?.total_price?.toFixed(2)} total, ${counterOffer?.payment_terms}, delivery ${counterDelivery}. Can we meet in the middle?`,
+      `${concernAck}Your proposal is noted. Given our constraints, we can offer $${counterOffer?.total_price?.toFixed(2)} total, ${counterOffer?.payment_terms}, with delivery ${counterDelivery}. Let me know your thoughts.`,
+      `${concernAck}Thanks for the offer. We're looking at $${counterOffer?.total_price?.toFixed(2)} total with ${counterOffer?.payment_terms} payment and ${counterDelivery} delivery. Does this work for you?`,
+      `${concernAck}I've reviewed your offer. We can do $${counterOffer?.total_price?.toFixed(2)} total, ${counterOffer?.payment_terms}, delivered ${counterDelivery}. This helps us stay within budget.`,
     ];
 
     const formalTemplates = [
-      `${concernAck}Thank you for your proposal. We would like to respectfully counter with $${counterOffer?.unit_price?.toFixed(2)} per unit, ${counterOffer?.payment_terms} payment terms, and delivery ${counterDelivery}. We believe this arrangement would be mutually beneficial.`,
+      `${concernAck}Thank you for your proposal. We would like to respectfully counter with $${counterOffer?.total_price?.toFixed(2)} total, ${counterOffer?.payment_terms} payment terms, and delivery ${counterDelivery}. We believe this arrangement would be mutually beneficial.`,
     ];
 
     if (tone === 'formal') {
@@ -367,18 +418,42 @@ const FALLBACK_TEMPLATES = {
   },
 
   ASK_CLARIFY: (input: ResponseGeneratorInput): string => {
-    const { vendorOffer } = input;
-    const missing = [];
-    if (!vendorOffer.unit_price) missing.push('unit price');
-    if (!vendorOffer.payment_terms) missing.push('payment terms');
+    const { vendorOffer, currentExtraction, accumulatedOffer } = input;
 
-    const templates = [
-      `I'd like to clarify your offer. Could you please provide ${missing.join(' and ')}?`,
-      `To move forward, I need a bit more detail on ${missing.join(' and ')}. Can you specify?`,
-      `Thanks for your message. Could you clarify the ${missing.join(' and ')} so we can evaluate properly?`,
-    ];
+    // Get what was provided and what's missing
+    const currentProvided = currentExtraction ? getProvidedComponents(currentExtraction) : [];
+    const missing = getMissingComponents(accumulatedOffer || vendorOffer);
 
-    return templates[Math.floor(Math.random() * templates.length)];
+    // Build acknowledgment based on what was provided
+    let acknowledgment = '';
+    if (currentProvided.length > 0) {
+      const priceAcks = ['Got it', 'Thanks for that', 'Noted', 'Perfect'];
+      acknowledgment = `${priceAcks[Math.floor(Math.random() * priceAcks.length)]} - ${currentProvided.join(' and ')}. `;
+    }
+
+    // Build request for missing items
+    const missingRequests: Record<string, string[]> = {
+      'price': [
+        'What about the total price?',
+        'And the pricing?',
+        'Can you share the price?',
+      ],
+      'payment terms': [
+        'What about payment terms?',
+        'How about terms - Net 30, 60?',
+        'And the payment terms?',
+      ],
+      'price and payment terms': [
+        'Can you confirm both price and payment terms?',
+        'What are you thinking for price and terms?',
+      ],
+    };
+
+    const missingKey = missing.length === 2 ? 'price and payment terms' : missing[0] || 'price';
+    const requests = missingRequests[missingKey] || missingRequests['price'];
+    const request = requests[Math.floor(Math.random() * requests.length)];
+
+    return `${acknowledgment}${request}`;
   }
 };
 
@@ -413,8 +488,8 @@ function generateFallback(
  *   decision: { action: 'COUNTER', utilityScore: 0.65, ... },
  *   config: negotiationConfig,
  *   conversationHistory: messages,
- *   vendorOffer: { unit_price: 98, payment_terms: 'Net 30' },
- *   counterOffer: { unit_price: 94, payment_terms: 'Net 60' },
+ *   vendorOffer: { total_price: 98, payment_terms: 'Net 30' },
+ *   counterOffer: { total_price: 94, payment_terms: 'Net 60' },
  *   deliveryConfig: { requiredDate: '2026-03-15' }
  * });
  * // result.response = "I understand the supply chain challenges..."

@@ -1,6 +1,6 @@
 export const negotiationConfig = {
   parameters: {
-    unit_price: {
+    total_price: {
       weight: 0.6,
       direction: "lower_better",
       anchor: 75,

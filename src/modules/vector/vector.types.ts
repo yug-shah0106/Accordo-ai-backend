@@ -29,7 +29,7 @@ export interface EmbedBatchResponse {
 }
 
 export interface EmbeddingServiceHealth {
-  status: 'healthy' | 'loading' | 'unavailable';
+  status: 'healthy' | 'loading' | 'unavailable' | 'initializing';
   model: string;
   dimension: number;
   device: string;

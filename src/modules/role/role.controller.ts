@@ -7,6 +7,7 @@ import {
   updateRoleService,
   getRoleService,
 } from "./role.service.js";
+import { getParam } from '../../types/index.js';
 
 /**
  * Create a new role
@@ -51,7 +52,7 @@ export const getRole = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const data = await getRoleService(req.params.roleid);
+    const data = await getRoleService(getParam(req.params.roleid));
     res.status(201).json({ message: "Role", data });
   } catch (error) {
     next(error);
@@ -67,7 +68,7 @@ export const updateRole = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const data = await updateRoleService(req.params.roleid, req.body, req.context.userId);
+    const data = await updateRoleService(getParam(req.params.roleid), req.body, req.context.userId);
     res.status(201).json({ message: "Role updated successfully", data });
   } catch (error) {
     next(error);
@@ -83,7 +84,7 @@ export const deleteRole = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const data = await deleteRoleService(req.params.roleid);
+    const data = await deleteRoleService(getParam(req.params.roleid));
     res.status(201).json({ message: "Role deleted successfully", data });
   } catch (error) {
     next(error);

@@ -64,11 +64,26 @@ export interface ProcessVendorTurnResult {
 // ============================================================================
 
 /**
- * Load negotiation config from deal's template
+ * Load negotiation config from deal's stored config or template
+ * CRITICAL: Prioritize stored negotiationConfigJson to preserve priority-based thresholds
  */
 async function loadNegotiationConfig(deal: ChatbotDeal): Promise<NegotiationConfig> {
+  // Priority 1: Use stored negotiation config (includes priority-adjusted thresholds and weights)
+  if (deal.negotiationConfigJson) {
+    const storedConfig = deal.negotiationConfigJson as NegotiationConfig & { wizardConfig?: unknown };
+    return {
+      parameters: storedConfig.parameters,
+      accept_threshold: storedConfig.accept_threshold,
+      escalate_threshold: storedConfig.escalate_threshold,
+      walkaway_threshold: storedConfig.walkaway_threshold,
+      max_rounds: storedConfig.max_rounds,
+      priority: storedConfig.priority,
+    };
+  }
+
+  // Priority 2: Fallback to template config (for legacy deals)
   if (!deal.templateId) {
-    throw new Error('Deal has no template configured');
+    throw new Error('Deal has no negotiation config or template configured');
   }
 
   const template = await models.ChatbotTemplate.findByPk(deal.templateId);
@@ -91,10 +106,10 @@ function generateAccordoResponse(decision: Decision, round: number): string {
       return `Great! I accept your offer. Let's finalize the agreement.`;
 
     case 'COUNTER':
-      if (!counterOffer || !counterOffer.unit_price || !counterOffer.payment_terms) {
+      if (!counterOffer || !counterOffer.total_price || !counterOffer.payment_terms) {
         return `I'd like to discuss this further. Can we explore other options?`;
       }
-      return `Thank you for your offer. I'd like to propose a counter-offer: $${counterOffer.unit_price.toFixed(
+      return `Thank you for your offer. I'd like to propose a counter-offer: $${counterOffer.total_price.toFixed(
         2
       )} per unit with ${counterOffer.payment_terms} payment terms. Does this work for you?`;
 
@@ -192,7 +207,7 @@ export async function processVendorTurn(
     const extractedOffer = parseOfferRegex(vendorMessage);
 
     logger.info(`Extracted offer:`, {
-      unit_price: extractedOffer.unit_price,
+      total_price: extractedOffer.total_price,
       payment_terms: extractedOffer.payment_terms,
       meta: extractedOffer.meta,
     });
@@ -219,7 +234,7 @@ export async function processVendorTurn(
 
     let explainability: Explainability | null = null;
 
-    if (extractedOffer.unit_price !== null && extractedOffer.payment_terms !== null) {
+    if (extractedOffer.total_price !== null && extractedOffer.payment_terms !== null) {
       explainability = computeExplainability(config, extractedOffer, decision);
       logger.info(`Computed explainability:`, {
         total_utility: explainability.utilities.total,
@@ -248,7 +263,7 @@ export async function processVendorTurn(
         role: 'VENDOR',
         content: vendorMessage,
         extractedOffer:
-          extractedOffer.unit_price !== null || extractedOffer.payment_terms !== null
+          extractedOffer.total_price !== null || extractedOffer.payment_terms !== null
             ? (extractedOffer as any)
             : null,
         engineDecision: null, // Vendor messages don't have engine decisions

@@ -232,7 +232,7 @@ Run through these tests to verify everything works:
 
 **Solutions**:
 1. Check Ollama is running: `ollama list`
-2. Verify model is pulled: `ollama pull llama3.1`
+2. Verify model is pulled: `ollama pull qwen3`
 3. Check environment variables: `CHATBOT_LLM_BASE_URL`, `CHATBOT_LLM_MODEL`
 4. System falls back to heuristics automatically
 

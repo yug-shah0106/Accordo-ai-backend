@@ -21,13 +21,17 @@ export interface RequisitionData {
 
 export interface RequisitionProductData {
   requisitionId?: number;
-  productId?: number;
-  quantity?: number;
-  unitPrice?: number;
+  productId?: number | null;
+  quantity?: number | null;
+  qty?: number | null;
+  unitPrice?: number | null;
+  targetPrice?: number | null;
+  maximum_price?: number | null;
   gstType?: string;
-  gstPercentage?: number;
-  tds?: number;
+  gstPercentage?: number | null;
+  tds?: number | null;
   specification?: string;
+  createdBy?: number;
 }
 
 export interface RequisitionAttachmentData {
@@ -56,6 +60,27 @@ export interface FindAndCountResult {
 }
 
 const repo = {
+  /**
+   * Check if a product exists by ID
+   */
+  checkProductExists: async (productId: number): Promise<boolean> => {
+    const product = await models.Product.findByPk(productId);
+    return product !== null;
+  },
+
+  /**
+   * Check if multiple products exist by their IDs
+   * Returns an array of IDs that don't exist
+   */
+  checkProductsExist: async (productIds: number[]): Promise<number[]> => {
+    const existingProducts = await models.Product.findAll({
+      where: { id: productIds },
+      attributes: ['id'],
+    });
+    const existingIds = existingProducts.map((p: any) => p.id);
+    return productIds.filter(id => !existingIds.includes(id));
+  },
+
   createRequisition: async (
     requisitionData: RequisitionData
   ): Promise<Requisition> => {
@@ -151,6 +176,13 @@ const repo = {
         {
           model: models.Contract,
           as: 'Contract',
+          include: [
+            {
+              model: models.User,
+              as: 'Vendor',
+              attributes: ['id', 'name', 'email'],
+            },
+          ],
         },
         {
           model: models.Project,
@@ -188,6 +220,13 @@ const repo = {
         {
           model: models.Contract,
           as: 'Contract',
+          include: [
+            {
+              model: models.User,
+              as: 'Vendor',
+              attributes: ['id', 'name', 'email'],
+            },
+          ],
         },
         {
           model: models.Project,
