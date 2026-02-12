@@ -37,6 +37,126 @@ export const OfferSchema = z.object({
 });
 export type Offer = z.infer<typeof OfferSchema>;
 
+// ============================================
+// OFFER ACCUMULATION TYPES (February 2026)
+// ============================================
+
+/**
+ * Components of an offer that can be provided separately
+ */
+export type OfferComponent = 'price' | 'payment terms' | 'delivery';
+
+/**
+ * Accumulated offer that tracks partial offers across messages
+ * Used to merge vendor's partial responses (e.g., "37000" then "Net 30")
+ */
+export interface AccumulatedOffer extends Offer {
+  accumulation: {
+    /** When price component was last updated */
+    priceUpdatedAt: Date | null;
+    /** When payment terms component was last updated */
+    termsUpdatedAt: Date | null;
+    /** When delivery component was last updated */
+    deliveryUpdatedAt: Date | null;
+    /** Message IDs that contributed to this accumulated offer (audit trail) */
+    sourceMessageIds: string[];
+    /** True when price AND terms are both present (delivery optional) */
+    isComplete: boolean;
+  };
+}
+
+// ============================================
+// NEGOTIATION STATE TYPES (February 2026)
+// ============================================
+
+/**
+ * Vendor's negotiation emphasis based on keyword analysis and concession patterns
+ */
+export type VendorEmphasis = 'price-focused' | 'terms-focused' | 'balanced' | 'unknown';
+
+/**
+ * Record of a price or terms concession made during negotiation
+ */
+export interface ConcessionRecord {
+  /** Round when concession was made */
+  round: number;
+  /** Previous value (price in dollars or terms in days) */
+  previousValue: number;
+  /** New value after concession */
+  newValue: number;
+  /** Amount of change (positive = moved toward PM's target) */
+  change: number;
+  /** Percentage change relative to range */
+  changePercent: number;
+  /** When this concession was recorded */
+  timestamp: Date;
+}
+
+/**
+ * PM counter-offer history for tracking our own concessions
+ */
+export interface PmCounterRecord {
+  /** Round number */
+  round: number;
+  /** Counter-offer price */
+  price: number;
+  /** Counter-offer payment terms (e.g., "Net 60") */
+  terms: string;
+  /** Counter-offer delivery days */
+  deliveryDays: number | null;
+  /** When this counter was made */
+  timestamp: Date;
+}
+
+/**
+ * Keywords detected in vendor messages
+ */
+export interface DetectedKeywords {
+  /** Price-related keywords found */
+  priceKeywords: string[];
+  /** Terms-related keywords found */
+  termsKeywords: string[];
+}
+
+/**
+ * Complete negotiation state tracking across rounds
+ * Stored in deal.convoStateJson for persistence
+ */
+export interface NegotiationState {
+  /** History of vendor's price concessions */
+  priceConcessions: ConcessionRecord[];
+  /** History of vendor's terms concessions */
+  termsConcessions: ConcessionRecord[];
+  /** History of PM's counter-offers */
+  pmCounterHistory: PmCounterRecord[];
+  /** Detected vendor emphasis (what they care more about) */
+  vendorEmphasis: VendorEmphasis;
+  /** Confidence in the emphasis detection (0.5-0.9) */
+  emphasisConfidence: number;
+  /** Keywords detected in vendor messages */
+  detectedKeywords: DetectedKeywords;
+  /** When this state was last updated */
+  lastUpdatedAt: Date;
+}
+
+/**
+ * Create an empty negotiation state
+ */
+export function createEmptyNegotiationState(): NegotiationState {
+  return {
+    priceConcessions: [],
+    termsConcessions: [],
+    pmCounterHistory: [],
+    vendorEmphasis: 'unknown',
+    emphasisConfidence: 0.5,
+    detectedKeywords: {
+      priceKeywords: [],
+      termsKeywords: [],
+    },
+    lastUpdatedAt: new Date(),
+  };
+}
+
 /**
  * Helper to check if a payment term is standard (Net 30/60/90)
  */
@@ -314,5 +434,111 @@ export function getRecommendationFromUtility(
     action: 'COUNTER',
     reason: `Utility score (${(utility * 100).toFixed(0)}%) is in negotiation zone (${(thresholds.escalate * 100).toFixed(0)}%-${(thresholds.accept * 100).toFixed(0)}%)`
   };
+}
+
+// ============================================
+// BEHAVIORAL ANALYSIS TYPES (February 2026)
+// ============================================
+
+/**
+ * Behavioral signals extracted from negotiation message history.
+ * Used by the adaptive negotiation engine to adjust strategy dynamically.
+ */
+export interface BehavioralSignals {
+  // Concession analysis
+  /** Average price concession per round ($/round) */
+  concessionVelocity: number;
+  /** Are concessions getting bigger over successive rounds? */
+  concessionAccelerating: boolean;
+  /** Most recent price change amount */
+  lastConcessionSize: number;
+
+  // Convergence analysis
+  /** Gap between vendor and PM offers for last 3 rounds */
+  priceGapTrend: number[];
+  /** % gap reduction per round (positive = converging) */
+  convergenceRate: number;
+  /** Gap shrinking consistently? */
+  isConverging: boolean;
+  /** Same/similar offers for 2+ rounds? */
+  isStalling: boolean;
+  /** Gap growing? */
+  isDiverging: boolean;
+
+  // Engagement signals (computed from message timestamps)
+  /** Average vendor response time in milliseconds */
+  avgResponseTimeMs: number;
+  /** Trend of response times */
+  responseTimeTrend: 'faster' | 'slower' | 'stable';
+
+  // Sentiment (keyword-based, not LLM)
+  /** Latest detected sentiment from vendor message */
+  latestSentiment: 'positive' | 'neutral' | 'resistant' | 'urgent';
+
+  // Overall momentum: -1 (losing) to +1 (winning)
+  /** Composite momentum score */
+  momentum: number;
+}
+
+/**
+ * Result of adaptive strategy computation.
+ * Replaces static base aggressiveness when adaptive features are enabled.
+ */
+export interface AdaptiveStrategyResult {
+  /** Modified aggressiveness (replaces static base) */
+  adjustedAggressiveness: number;
+  /** Human-readable strategy label */
+  strategyLabel: 'Holding Firm' | 'Accelerating' | 'Matching Pace' | 'Final Push';
+  /** Dynamic round extension signal */
+  shouldExtendRounds: boolean;
+  /** Early escalation signal */
+  shouldEscalateEarly: boolean;
+  /** Human-readable explanation */
+  reasoning: string;
+}
+
+/**
+ * Configuration for dynamic round limits.
+ * Stored in negotiationConfigJson when adaptive features are enabled.
+ */
+export interface DynamicRoundConfig {
+  /** Current max_rounds becomes this (user's chosen value) */
+  softMaxRounds: number;
+  /** Hard ceiling (softMax * 1.5) - never exceeded */
+  hardMaxRounds: number;
+  /** Feature flag for auto-extension */
+  autoExtendEnabled: boolean;
+}
+
+/**
+ * Historical insights for a vendor/category from past deals.
+ * Used for adaptive anchoring.
+ */
+export interface HistoricalInsights {
+  /** Average rounds to close for this vendor */
+  avgRoundsToClose: number;
+  /** Average price reduction percentage achieved */
+  avgPriceReduction: number;
+  /** Ratio of (anchor - finalPrice) / (anchor - target) */
+  anchorEffectiveness: number;
+  /** Behavioral profile of the vendor */
+  vendorBehaviorProfile: 'quick_closer' | 'hard_negotiator' | 'walker' | 'unknown';
+  /** Number of historical deals analyzed */
+  sampleSize: number;
+}
+
+/**
+ * Adaptive features configuration flags.
+ * Stored in negotiationConfigJson.adaptiveFeatures
+ */
+export interface AdaptiveFeaturesConfig {
+  /** Master flag - all adaptive features gated behind this */
+  enabled: boolean;
+  /** Whether historical anchor adjustment was applied */
+  historicalAnchor: boolean;
+  /** Dynamic round limit configuration */
+  dynamicRounds?: DynamicRoundConfig;
+  /** Original anchor before historical adjustment (for transparency) */
+  originalAnchor?: number;
 }
 

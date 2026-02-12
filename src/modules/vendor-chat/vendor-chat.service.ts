@@ -243,7 +243,10 @@ export const canEditQuote = async (uniqueToken: string): Promise<CanEditQuoteRes
   }
 
   // Check contract status
-  if (contract.status !== 'Created' && contract.status !== 'Opened' && contract.status !== 'InitialQuotation') {
+  // Allow editing only for: Created, Opened, InitialQuotation
+  // Block editing for: Active (negotiating), Escalated, Accepted, Rejected, Completed, Verified, Expired
+  const editableStatuses = ['Created', 'Opened', 'InitialQuotation'];
+  if (!editableStatuses.includes(contract.status)) {
     return {
       canEdit: false,
       reason: 'Contract status does not allow quote editing',

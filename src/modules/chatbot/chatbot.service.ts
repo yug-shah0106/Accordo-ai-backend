@@ -9,7 +9,12 @@ import { parseOfferRegex, parseOfferWithDelivery } from './engine/parseOffer.js'
 import { generateHumanLikeResponse, generateQuickFallback } from './engine/responseGenerator.js';
 import { decideNextMove } from './engine/decide.js';
 import { computeExplainability, totalUtility, type NegotiationConfig } from './engine/utility.js';
-import type { Offer, Decision, Explainability, WeightedUtilityResult, ParsedVendorOffer, ScenarioSuggestions, StructuredSuggestion, SuggestionDeliveryConfig, SuggestionEmphasis } from './engine/types.js';
+import type { Offer, Decision, Explainability, WeightedUtilityResult, ParsedVendorOffer, ScenarioSuggestions, StructuredSuggestion, SuggestionDeliveryConfig, SuggestionEmphasis, AccumulatedOffer, NegotiationState, BehavioralSignals, AdaptiveStrategyResult, AdaptiveFeaturesConfig } from './engine/types.js';
+import { createEmptyNegotiationState } from './engine/types.js';
+import { analyzeBehavior, computeAdaptiveStrategy } from './engine/behavioralAnalyzer.js';
+import { getHistoricalInsights, adjustAnchorFromHistory } from './engine/historicalAnalyzer.js';
+import { mergeOffers, shouldResetAccumulation, createAccumulatedOffer, isOfferComplete, getMissingComponents, getProvidedComponents } from './engine/offerAccumulator.js';
+import { updateNegotiationState, getLastPmCounter } from './engine/preferenceDetector.js';
 import type { DeliveryConfig } from './engine/deliveryUtility.js';
 import { calculateWeightedUtility, convertLegacyConfig, getUtilitySummary, extractValueFromOffer } from './engine/weightedUtility.js';
 import { DEFAULT_THRESHOLDS } from './engine/types.js';
@@ -20,6 +25,53 @@ import { captureVendorBid, checkAndTriggerComparison } from '../bidComparison/bi
 import { sendDealCreatedEmail, sendContinuedNegotiationEmail, sendPmDealStatusNotificationEmail, sendDealSummaryPDFEmail } from '../../services/email.service.js';
 import { getCachedSuggestions, cacheSuggestions, invalidateSuggestions, precomputeSuggestionsBackground, filterSuggestionsByEmphasis } from './suggestionCache.js';
 import { generateDealSummaryPDF, generatePDFFilename, type DealSummaryPDFInput } from './pdf/dealSummaryPdfGenerator.js';
+
+// ============================================================================
+// Contract-Deal Status Sync
+// ============================================================================
+
+import type { ContractStatus } from '../../models/contract.js';
+
+type DealStatusForSync = 'NEGOTIATING' | 'ACCEPTED' | 'WALKED_AWAY' | 'ESCALATED';
+
+const dealToContractStatusMap: Record<DealStatusForSync, ContractStatus> = {
+  'NEGOTIATING': 'Active',
+  'ACCEPTED': 'Accepted',
+  'WALKED_AWAY': 'Rejected',
+  'ESCALATED': 'Escalated',
+};
+
+/**
+ * Sync contract status based on deal status change
+ * Called when deal reaches a terminal state or starts negotiating
+ *
+ * Status Mapping:
+ * - NEGOTIATING → Active
+ * - ACCEPTED → Accepted
+ * - WALKED_AWAY → Rejected
+ * - ESCALATED → Escalated
+ */
+async function syncContractStatus(
+  dealId: string,
+  dealStatus: DealStatusForSync,
+  contractId: number | null
+): Promise<void> {
+  if (!contractId) return;
+
+  const newContractStatus = dealToContractStatusMap[dealStatus];
+  if (!newContractStatus) return;
+
+  await models.Contract.update(
+    { status: newContractStatus },
+    { where: { id: contractId } }
+  );
+
+  logger.info(`[ContractSync] Contract ${contractId} status updated to ${newContractStatus} (deal: ${dealId}, dealStatus: ${dealStatus})`);
+}
+
+// ============================================================================
+// Types and Interfaces
+// ============================================================================
 
 export interface CreateDealInput {
   title: string;
@@ -396,6 +448,46 @@ export const createDealWithConfigService = async (
       priority: input.priority,
     };
 
+    // Adaptive Features: Historical Anchor Adjustment & Dynamic Rounds
+    // All adaptive features enabled by default for new deals (backward-compatible via flag)
+    const adaptiveFeaturesConfig: AdaptiveFeaturesConfig = {
+      enabled: true,
+      historicalAnchor: false,
+      originalAnchor: negotiationConfig.parameters.total_price.anchor,
+      dynamicRounds: {
+        softMaxRounds: maxRounds,
+        hardMaxRounds: Math.ceil(maxRounds * 1.5),
+        autoExtendEnabled: true,
+      },
+    };
+
+    // Apply historical anchor adjustment
+    try {
+      const insights = await getHistoricalInsights(input.vendorId);
+      if (insights.sampleSize > 0) {
+        const originalAnchor = negotiationConfig.parameters.total_price.anchor;
+        const adjustedAnchor = adjustAnchorFromHistory(
+          originalAnchor,
+          negotiationConfig.parameters.total_price.target,
+          insights
+        );
+
+        if (adjustedAnchor !== originalAnchor) {
+          negotiationConfig.parameters.total_price.anchor = adjustedAnchor;
+          adaptiveFeaturesConfig.historicalAnchor = true;
+          adaptiveFeaturesConfig.originalAnchor = originalAnchor;
+          logger.info(`[CreateDeal] Historical anchor adjusted for vendor ${input.vendorId}: $${originalAnchor} -> $${adjustedAnchor} (profile: ${insights.vendorBehaviorProfile}, ${insights.sampleSize} deals)`);
+        }
+      }
+    } catch (histError) {
+      // Non-critical: continue with original anchor
+      logger.warn(`[CreateDeal] Historical anchor adjustment failed:`, histError);
+    }
+
+    // Store dynamic rounds config on the negotiation config
+    (negotiationConfig as any).dynamicRounds = adaptiveFeaturesConfig.dynamicRounds;
+    (negotiationConfig as any).adaptiveFeatures = adaptiveFeaturesConfig;
+
     // Store the full wizard configuration in a separate JSON field
     const wizardConfig = {
       priority: input.priority,
@@ -427,10 +519,23 @@ export const createDealWithConfigService = async (
       if (existingContract.requisitionId !== input.requisitionId || existingContract.vendorId !== input.vendorId) {
         throw new CustomError('Contract does not match requisition/vendor', 400);
       }
+
+      // Re-negotiation validation based on contract status
+      // - Rejected: Cannot start new negotiation (final state)
+      // - Active: Negotiation already in progress
+      // - Escalated: Can start new negotiation (will become Active)
+      // - Created: Normal flow
+      if (existingContract.status === 'Rejected') {
+        throw new CustomError('Cannot start new negotiation on a rejected contract', 400);
+      }
+      if (existingContract.status === 'Active') {
+        throw new CustomError('A negotiation is already in progress for this contract', 400);
+      }
+
       contractId = existingContract.id;
       contractUniqueToken = existingContract.uniqueToken;
       isExistingContract = true;
-      logger.info(`Using provided existing contract ${contractId} for vendor ${input.vendorId} on requisition ${input.requisitionId}`);
+      logger.info(`Using provided existing contract ${contractId} (status: ${existingContract.status}) for vendor ${input.vendorId} on requisition ${input.requisitionId}`);
     } else {
       // Always create a NEW contract for each deal (1:1 relationship)
       // This ensures each deal has its own unique portal link
@@ -482,6 +587,11 @@ export const createDealWithConfigService = async (
     });
 
     logger.info(`Created deal with config ${dealId}: ${input.title} (priority: ${input.priority})`);
+
+    // Update contract status to Active (negotiation started)
+    if (contractId) {
+      await syncContractStatus(dealId, 'NEGOTIATING', contractId);
+    }
 
     // Send email notification to vendor
     let emailStatus: { success: boolean; messageId?: string; error?: string } = { success: false, error: 'Email not sent' };
@@ -986,11 +1096,52 @@ export const processVendorMessageService = async (
     // Increment round
     const newRound = deal.round + 1;
 
+    // Adaptive behavioral analysis (opt-in)
+    const adaptiveFeats = (deal.negotiationConfigJson as any)?.adaptiveFeatures as AdaptiveFeaturesConfig | undefined;
+    let behavioralSigs: BehavioralSignals | null = null;
+    let adaptiveStrat: AdaptiveStrategyResult | null = null;
+
+    if (adaptiveFeats?.enabled) {
+      try {
+        const allMsgs = await models.ChatbotMessage.findAll({
+          where: { dealId: input.dealId },
+          order: [['createdAt', 'ASC']],
+        });
+        const analyzableMsgs = allMsgs.map(m => ({
+          role: m.role as 'VENDOR' | 'ACCORDO' | 'SYSTEM' | 'PM',
+          content: m.content,
+          extractedOffer: m.extractedOffer as any,
+          counterOffer: m.counterOffer as any,
+          createdAt: m.createdAt,
+        }));
+        behavioralSigs = analyzeBehavior(analyzableMsgs, newRound);
+        adaptiveStrat = computeAdaptiveStrategy(behavioralSigs, config, newRound);
+      } catch (adaptErr) {
+        logger.warn(`[ProcessVendorMessage] Adaptive analysis failed:`, adaptErr);
+      }
+    }
+
     // Make decision
-    const decision = decideNextMove(config, extractedOffer, newRound);
+    const decision = decideNextMove(config, extractedOffer, newRound, undefined, undefined, behavioralSigs, adaptiveStrat);
 
     // Compute explainability
     const explainability = computeExplainability(config, extractedOffer, decision);
+
+    // Attach behavioral data to explainability
+    if (behavioralSigs && adaptiveStrat) {
+      (explainability as any).behavioral = {
+        momentum: behavioralSigs.momentum,
+        strategy: adaptiveStrat.strategyLabel,
+        convergenceRate: behavioralSigs.convergenceRate,
+        concessionVelocity: behavioralSigs.concessionVelocity,
+        isStalling: behavioralSigs.isStalling,
+        isConverging: behavioralSigs.isConverging,
+        isDiverging: behavioralSigs.isDiverging,
+        reasoning: adaptiveStrat.reasoning,
+        shouldExtendRounds: adaptiveStrat.shouldExtendRounds,
+        latestSentiment: behavioralSigs.latestSentiment,
+      };
+    }
 
     // Save VENDOR message
     const vendorMessageId = uuidv4();
@@ -1042,9 +1193,13 @@ export const processVendorMessageService = async (
       `Processed vendor message for deal ${input.dealId}: ${decision.action} (utility: ${decision.utilityScore})`
     );
 
-    // Hook: Capture vendor bid when deal reaches terminal state (fire-and-forget)
+    // Hook: Sync contract status and capture vendor bid when deal reaches terminal state (fire-and-forget)
     // CRITICAL FIX (Jan 2026): Run these in background to avoid blocking the response
     if (['ACCEPTED', 'WALKED_AWAY', 'ESCALATED'].includes(finalStatus)) {
+      // Sync contract status (fire-and-forget)
+      syncContractStatus(deal.id, finalStatus, deal.contractId)
+        .catch((err) => logger.error(`Failed to sync contract status: ${(err as Error).message}`));
+
       // Fire-and-forget: don't await, just log errors
       captureVendorBid(deal.id)
         .then(() => {
@@ -1152,7 +1307,7 @@ export const saveVendorMessageOnlyService = async (
     const requisitionCurrency = requisition?.typeOfCurrency as 'USD' | 'INR' | 'EUR' | 'GBP' | 'AUD' | undefined;
 
     // Parse vendor offer from message (now includes delivery and currency conversion)
-    const extractedOffer = parseOfferWithDelivery(input.content, requisitionCurrency);
+    const currentExtraction = parseOfferWithDelivery(input.content, requisitionCurrency);
 
     // Calculate the round for this message pair
     // Vendor message STARTS a new round, PM response CONCLUDES it
@@ -1161,6 +1316,30 @@ export const saveVendorMessageOnlyService = async (
 
     // Save VENDOR message with round number
     const vendorMessageId = uuidv4();
+
+    // OFFER ACCUMULATION: Merge partial offers across messages
+    // If vendor provides complete offer (price AND terms), reset accumulation
+    // Otherwise, merge with previously accumulated state
+    const previousAccumulated = deal.latestVendorOffer as AccumulatedOffer | null;
+    let accumulatedOffer: AccumulatedOffer;
+
+    if (shouldResetAccumulation(currentExtraction)) {
+      // Vendor provided complete offer - start fresh
+      accumulatedOffer = createAccumulatedOffer(currentExtraction, vendorMessageId);
+      logger.info(`[Phase1] Complete offer detected, resetting accumulation for deal ${input.dealId}`);
+    } else {
+      // Merge partial offer with accumulated state
+      accumulatedOffer = mergeOffers(previousAccumulated, currentExtraction, vendorMessageId);
+      logger.info(`[Phase1] Partial offer merged for deal ${input.dealId}`, {
+        provided: getProvidedComponents(currentExtraction),
+        missing: getMissingComponents(accumulatedOffer),
+        isComplete: accumulatedOffer.accumulation.isComplete,
+      });
+    }
+
+    // Use accumulated offer as the extracted offer
+    const extractedOffer = accumulatedOffer;
+
     const message = await models.ChatbotMessage.create({
       id: vendorMessageId,
       dealId: input.dealId,
@@ -1254,14 +1433,118 @@ export const generatePMResponseAsyncService = async (
       config = negotiationConfig;
     }
 
-    // Get vendor offer from the message
-    const extractedOffer = vendorMessage.extractedOffer as Offer || parseOfferWithDelivery(vendorMessage.content);
+    // Get vendor offer from the message (may be an AccumulatedOffer)
+    const extractedOffer = vendorMessage.extractedOffer as Offer | AccumulatedOffer || parseOfferWithDelivery(vendorMessage.content);
 
-    // Make decision using the engine
-    const decision = decideNextMove(config, extractedOffer, deal.round);
+    // Get current negotiation state from deal (stored in convoStateJson)
+    let negotiationState: NegotiationState | null = deal.convoStateJson as NegotiationState | null;
+
+    // Find previous vendor offer for concession tracking
+    const previousVendorMessages = allMessages.filter(m =>
+      m.role === 'VENDOR' && m.id !== input.vendorMessageId
+    );
+    const previousVendorMessage = previousVendorMessages.length > 0
+      ? previousVendorMessages[previousVendorMessages.length - 1]
+      : null;
+    const previousVendorOffer = previousVendorMessage?.extractedOffer as Offer | AccumulatedOffer | null;
+
+    // Get previous PM counter-offer
+    const previousPmOffer = negotiationState ? getLastPmCounter(negotiationState) : null;
+
+    // Update negotiation state with new data
+    negotiationState = updateNegotiationState(
+      negotiationState,
+      previousVendorOffer,
+      extractedOffer,
+      vendorMessage.content,
+      null, // PM counter will be added after decision
+      deal.round + 1,
+      {
+        pmTargetPrice: config.parameters.total_price.target,
+        pmMaxPrice: config.parameters.total_price.max_acceptable,
+        pmMinTermsDays: 30,  // Default minimum
+        pmMaxTermsDays: 90,  // Default maximum
+      }
+    );
+
+    logger.info(`[Phase2] Negotiation state updated for deal ${input.dealId}`, {
+      vendorEmphasis: negotiationState.vendorEmphasis,
+      emphasisConfidence: negotiationState.emphasisConfidence,
+      priceConcessions: negotiationState.priceConcessions.length,
+      termsConcessions: negotiationState.termsConcessions.length,
+    });
+
+    // Adaptive behavioral analysis (opt-in via adaptiveFeatures.enabled)
+    const adaptiveFeatures = (deal.negotiationConfigJson as any)?.adaptiveFeatures as AdaptiveFeaturesConfig | undefined;
+    let behavioralSignals: BehavioralSignals | null = null;
+    let adaptiveStrategy: AdaptiveStrategyResult | null = null;
+
+    if (adaptiveFeatures?.enabled) {
+      try {
+        // Compute behavioral signals from all messages
+        const analyzableMessages = allMessages.map(m => ({
+          role: m.role as 'VENDOR' | 'ACCORDO' | 'SYSTEM' | 'PM',
+          content: m.content,
+          extractedOffer: m.extractedOffer as any,
+          counterOffer: m.counterOffer as any,
+          createdAt: m.createdAt,
+        }));
+
+        behavioralSignals = analyzeBehavior(analyzableMessages, deal.round + 1);
+        adaptiveStrategy = computeAdaptiveStrategy(behavioralSignals, config, deal.round + 1);
+
+        logger.info(`[Phase2] Adaptive analysis for deal ${input.dealId}`, {
+          strategy: adaptiveStrategy.strategyLabel,
+          momentum: behavioralSignals.momentum,
+          convergenceRate: behavioralSignals.convergenceRate,
+          isStalling: behavioralSignals.isStalling,
+          adjustedAggressiveness: adaptiveStrategy.adjustedAggressiveness,
+        });
+      } catch (adaptiveError) {
+        // Non-critical: fall back to standard decision engine
+        logger.warn(`[Phase2] Adaptive analysis failed for deal ${input.dealId}, using standard engine:`, adaptiveError);
+      }
+    }
+
+    // Make decision using the engine with negotiation state for dynamic counters
+    const decision = decideNextMove(config, extractedOffer, deal.round, negotiationState, previousPmOffer, behavioralSignals, adaptiveStrategy);
 
     // Compute explainability
     const explainability = computeExplainability(config, extractedOffer, decision);
+
+    // Attach behavioral data to explainability for frontend display
+    if (behavioralSignals && adaptiveStrategy) {
+      (explainability as any).behavioral = {
+        momentum: behavioralSignals.momentum,
+        strategy: adaptiveStrategy.strategyLabel,
+        convergenceRate: behavioralSignals.convergenceRate,
+        concessionVelocity: behavioralSignals.concessionVelocity,
+        isStalling: behavioralSignals.isStalling,
+        isConverging: behavioralSignals.isConverging,
+        isDiverging: behavioralSignals.isDiverging,
+        reasoning: adaptiveStrategy.reasoning,
+        shouldExtendRounds: adaptiveStrategy.shouldExtendRounds,
+        latestSentiment: behavioralSignals.latestSentiment,
+      };
+    }
+
+    // Update negotiation state with PM's counter-offer (if any)
+    if (decision.counterOffer) {
+      negotiationState = updateNegotiationState(
+        negotiationState,
+        previousVendorOffer,
+        extractedOffer,
+        vendorMessage.content,
+        decision.counterOffer,
+        deal.round + 1,
+        {
+          pmTargetPrice: config.parameters.total_price.target,
+          pmMaxPrice: config.parameters.total_price.max_acceptable,
+          pmMinTermsDays: 30,
+          pmMaxTermsDays: 90,
+        }
+      );
+    }
 
     // Build delivery config from deal's wizard configuration
     const dealConfig = deal.get('configJson') as { delivery?: { requiredDate?: string; preferredDate?: string } } | undefined;
@@ -1279,6 +1562,10 @@ export const generatePMResponseAsyncService = async (
       content: m.content,
     }));
 
+    // For ASK_CLARIFY, get the current partial extraction to show what was just provided
+    const currentExtraction = parseOfferWithDelivery(vendorMessage.content);
+    const accumulatedOffer = 'accumulation' in extractedOffer ? extractedOffer as AccumulatedOffer : undefined;
+
     const responseResult = await generateHumanLikeResponse({
       decision,
       config,
@@ -1289,6 +1576,8 @@ export const generatePMResponseAsyncService = async (
       dealTitle: deal.title,
       round: deal.round,
       maxRounds: config.max_rounds,
+      currentExtraction: decision.action === 'ASK_CLARIFY' ? currentExtraction : undefined,
+      accumulatedOffer: decision.action === 'ASK_CLARIFY' ? accumulatedOffer : undefined,
     });
 
     // Get the round from the vendor message (both messages in a pair share the same round)
@@ -1323,15 +1612,20 @@ export const generatePMResponseAsyncService = async (
       latestOfferJson: decision.counterOffer as any,
       latestDecisionAction: decision.action,
       latestUtility: decision.utilityScore,
+      convoStateJson: negotiationState as any, // Save negotiation state for dynamic counters
     });
 
     logger.info(
-      `[Phase2] PM response generated for deal ${input.dealId}: ${decision.action} (utility: ${decision.utilityScore}, source: ${responseResult.source})`
+      `[Phase2] PM response generated for deal ${input.dealId}: ${decision.action} (utility: ${decision.utilityScore}, source: ${responseResult.source}, emphasis: ${negotiationState.vendorEmphasis})`
     );
 
-    // Hook: Capture vendor bid when deal reaches terminal state (fire-and-forget)
+    // Hook: Sync contract status and capture vendor bid when deal reaches terminal state (fire-and-forget)
     // CRITICAL FIX (Jan 2026): Run these in background to avoid blocking the response
     if (['ACCEPTED', 'WALKED_AWAY', 'ESCALATED'].includes(finalStatus)) {
+      // Sync contract status (fire-and-forget)
+      syncContractStatus(deal.id, finalStatus, deal.contractId)
+        .catch((err) => logger.error(`[Phase2] Failed to sync contract status: ${(err as Error).message}`));
+
       // Fire-and-forget: don't await, just log errors
       captureVendorBid(deal.id)
         .then(() => {
@@ -1410,11 +1704,15 @@ export const generatePMFallbackResponseService = async (
       config = negotiationConfig;
     }
 
-    // Get vendor offer
-    const extractedOffer = vendorMessage.extractedOffer as Offer || parseOfferWithDelivery(vendorMessage.content);
+    // Get vendor offer (may be an AccumulatedOffer)
+    const extractedOffer = vendorMessage.extractedOffer as Offer | AccumulatedOffer || parseOfferWithDelivery(vendorMessage.content);
 
-    // Make decision
-    const decision = decideNextMove(config, extractedOffer, deal.round);
+    // Get negotiation state for fallback (simplified - just use stored state without updating)
+    const negotiationState: NegotiationState | null = deal.convoStateJson as NegotiationState | null;
+    const previousPmOffer = negotiationState ? getLastPmCounter(negotiationState) : null;
+
+    // Make decision with negotiation state
+    const decision = decideNextMove(config, extractedOffer, deal.round, negotiationState, previousPmOffer);
 
     // Compute explainability
     const explainability = computeExplainability(config, extractedOffer, decision);
@@ -1478,9 +1776,13 @@ export const generatePMFallbackResponseService = async (
       `[Fallback] PM fallback response generated for deal ${input.dealId}: ${decision.action}`
     );
 
-    // Hook: Capture vendor bid when deal reaches terminal state (fire-and-forget)
+    // Hook: Sync contract status and capture vendor bid when deal reaches terminal state (fire-and-forget)
     // CRITICAL FIX (Jan 2026): Run these in background to avoid blocking the response
     if (['ACCEPTED', 'WALKED_AWAY', 'ESCALATED'].includes(finalStatus)) {
+      // Sync contract status (fire-and-forget)
+      syncContractStatus(deal.id, finalStatus, deal.contractId)
+        .catch((err) => logger.error(`[Fallback] Failed to sync contract status: ${(err as Error).message}`));
+
       // Fire-and-forget: don't await, just log errors
       captureVendorBid(deal.id)
         .then(() => {
@@ -1998,6 +2300,136 @@ export const getDealUtilityService = async (
   } catch (error) {
     if (error instanceof CustomError) throw error;
     throw new CustomError(`Failed to get deal utility: ${(error as Error).message}`, 500);
+  }
+};
+
+/**
+ * Get behavioral analysis data for a deal
+ * Computes from existing ChatbotMessage records (no new data needed)
+ */
+export const getBehavioralDataService = async (
+  dealId: string
+): Promise<{
+  momentum: number;
+  strategy: string;
+  convergenceRate: number;
+  concessionVelocity: number;
+  isStalling: boolean;
+  isConverging: boolean;
+  isDiverging: boolean;
+  latestSentiment: string;
+  roundHistory: Array<{
+    round: number;
+    vendorPrice: number | null;
+    pmCounter: number | null;
+    gap: number | null;
+    utility: number | null;
+  }>;
+  dynamicRounds: {
+    softMax: number;
+    hardMax: number;
+    currentRound: number;
+    extendLikely: boolean;
+    reason: string;
+  } | null;
+}> => {
+  try {
+    const deal = await models.ChatbotDeal.findByPk(dealId);
+    if (!deal) {
+      throw new CustomError('Deal not found', 404);
+    }
+
+    // Get all messages
+    const allMessages = await models.ChatbotMessage.findAll({
+      where: { dealId },
+      order: [['createdAt', 'ASC']],
+    });
+
+    const config = deal.negotiationConfigJson as any;
+    const negConfig = config as NegotiationConfig | null;
+
+    // Build analyzable messages
+    const analyzableMessages = allMessages.map(m => ({
+      role: m.role as 'VENDOR' | 'ACCORDO' | 'SYSTEM' | 'PM',
+      content: m.content,
+      extractedOffer: m.extractedOffer as any,
+      counterOffer: m.counterOffer as any,
+      createdAt: m.createdAt,
+    }));
+
+    // Compute behavioral signals
+    const signals = analyzeBehavior(analyzableMessages, deal.round);
+
+    // Compute adaptive strategy if config available
+    let strategyLabel = 'Matching Pace';
+    if (negConfig) {
+      const strategy = computeAdaptiveStrategy(signals, negConfig, deal.round);
+      strategyLabel = strategy.strategyLabel;
+    }
+
+    // Build round history
+    const roundHistory: Array<{
+      round: number;
+      vendorPrice: number | null;
+      pmCounter: number | null;
+      gap: number | null;
+      utility: number | null;
+    }> = [];
+
+    let roundNum = 1;
+    for (const msg of allMessages) {
+      if (msg.role === 'VENDOR' && msg.extractedOffer) {
+        const offer = msg.extractedOffer as any;
+        const vendorPrice = offer.total_price ?? null;
+
+        // Find the matching ACCORDO response
+        const accordoMsg = allMessages.find(m =>
+          m.role === 'ACCORDO' &&
+          m.counterOffer &&
+          new Date(m.createdAt).getTime() > new Date(msg.createdAt).getTime()
+        );
+        const pmCounter = (accordoMsg?.counterOffer as any)?.total_price ?? null;
+        const gap = vendorPrice != null && pmCounter != null ? vendorPrice - pmCounter : null;
+        const utility = accordoMsg?.utilityScore ?? null;
+
+        roundHistory.push({ round: roundNum, vendorPrice, pmCounter, gap, utility });
+        roundNum++;
+      }
+    }
+
+    // Dynamic rounds info
+    let dynamicRounds: { softMax: number; hardMax: number; currentRound: number; extendLikely: boolean; reason: string } | null = null;
+    const dynamicRoundsCfg = config?.dynamicRounds;
+    if (dynamicRoundsCfg?.autoExtendEnabled) {
+      const extendLikely = signals.isConverging && signals.convergenceRate > 0.10;
+      dynamicRounds = {
+        softMax: dynamicRoundsCfg.softMaxRounds,
+        hardMax: dynamicRoundsCfg.hardMaxRounds,
+        currentRound: deal.round,
+        extendLikely,
+        reason: extendLikely
+          ? `Offers converging at ${(signals.convergenceRate * 100).toFixed(0)}%/round`
+          : signals.isStalling
+            ? 'Vendor offers stalling'
+            : `Standard pace (${(signals.convergenceRate * 100).toFixed(0)}%/round)`,
+      };
+    }
+
+    return {
+      momentum: signals.momentum,
+      strategy: strategyLabel,
+      convergenceRate: signals.convergenceRate,
+      concessionVelocity: signals.concessionVelocity,
+      isStalling: signals.isStalling,
+      isConverging: signals.isConverging,
+      isDiverging: signals.isDiverging,
+      latestSentiment: signals.latestSentiment,
+      roundHistory,
+      dynamicRounds,
+    };
+  } catch (error) {
+    if (error instanceof CustomError) throw error;
+    throw new CustomError(`Failed to get behavioral data: ${(error as Error).message}`, 500);
   }
 };
 

@@ -902,6 +902,28 @@ export const getVendorAddresses = async (
   }
 };
 
+/**
+ * Get behavioral analysis data for a deal
+ * GET /api/chatbot/requisitions/:rfqId/vendors/:vendorId/deals/:dealId/behavioral
+ */
+export const getBehavioralData = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const dealId = getParam(req.params.dealId);
+    const result = await chatbotService.getBehavioralDataService(dealId);
+
+    res.status(200).json({
+      message: 'Behavioral data retrieved successfully',
+      data: result,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 // ==================== NEW API RESTRUCTURE CONTROLLERS (January 2026) ====================
 
 /**

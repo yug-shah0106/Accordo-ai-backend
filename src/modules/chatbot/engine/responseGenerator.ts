@@ -19,8 +19,9 @@ import { chatCompletion } from '../../../services/llm.service.js';
 import { detectVendorTone, getToneDescription, type VendorTone, type ToneMessage } from './toneDetector.js';
 import { extractVendorConcerns, getAcknowledgmentSentence, type VendorConcern, type ConcernMessage } from './concernExtractor.js';
 import { formatDeliveryDate, formatDeliveryShort, type DeliveryConfig } from './deliveryUtility.js';
-import type { Offer, Decision } from './types.js';
+import type { Offer, Decision, AccumulatedOffer, OfferComponent } from './types.js';
 import type { NegotiationConfig } from './utility.js';
+import { getProvidedComponents, getMissingComponents } from './offerAccumulator.js';
 
 /**
  * Input for response generation
@@ -35,6 +36,10 @@ export interface ResponseGeneratorInput {
   dealTitle?: string;
   round?: number;
   maxRounds?: number;
+  /** Current partial extraction from vendor's latest message (for ASK_CLARIFY) */
+  currentExtraction?: Offer;
+  /** Accumulated offer state (for ASK_CLARIFY acknowledgment) */
+  accumulatedOffer?: AccumulatedOffer;
 }
 
 /**
@@ -83,6 +88,63 @@ function formatDeliveryFromConfig(config?: DeliveryConfig): string {
   }
 
   return 'per agreement';
+}
+
+/**
+ * Build natural ASK_CLARIFY LLM prompt that acknowledges what was provided
+ * and asks naturally for what's missing
+ */
+function buildAskClarifyPrompt(input: ResponseGeneratorInput, tone: VendorTone): string {
+  const { vendorOffer, currentExtraction, accumulatedOffer } = input;
+  const toneDescription = getToneDescription(tone);
+
+  // Determine what was provided in current message vs what's missing
+  const currentProvided = currentExtraction ? getProvidedComponents(currentExtraction) : [];
+  const missing = getMissingComponents(accumulatedOffer || vendorOffer);
+
+  // Build context about what we have and what we need
+  const providedText = currentProvided.length > 0
+    ? `Vendor just provided: ${currentProvided.join(', ')}`
+    : 'Vendor message did not include specific offer details';
+
+  const missingText = missing.length > 0
+    ? `Still need: ${missing.join(' and ')}`
+    : 'All required information received';
+
+  // Format accumulated state
+  const accumulatedText = accumulatedOffer
+    ? `Current accumulated offer: ${accumulatedOffer.total_price ? `$${accumulatedOffer.total_price.toLocaleString()}` : 'no price'}, ${accumulatedOffer.payment_terms || 'no terms'}`
+    : '';
+
+  return `
+You are Accordo, a Procurement Manager. Generate a natural ${toneDescription} response that acknowledges what the vendor provided and asks for what's missing.
+
+CURRENT MESSAGE CONTEXT:
+${providedText}
+${accumulatedText}
+${missingText}
+
+TONE: ${tone} (conversational, not robotic)
+
+REQUIREMENTS:
+1. FIRST acknowledge what the vendor just provided (if anything)
+   - For price: "Got it - $37K" or "Thanks for the pricing at $37,000" or "$37K - noted"
+   - For terms: "Net 60 works" or "Thanks for confirming Net 60"
+2. THEN naturally ask for the missing piece(s)
+   - For missing price: "What about the total price?" or "And the pricing?"
+   - For missing terms: "What about payment terms?" or "How about terms - Net 30, 60, or something else?"
+3. Keep it SHORT - 1-2 sentences max
+4. Sound natural and human, like a real conversation
+5. DO NOT say "I need clarification" or "Could you please provide" - too formal
+6. DO NOT mention: utility, algorithm, system, analysis
+
+EXAMPLE RESPONSES:
+- "Got it - $37K. What about payment terms?"
+- "Net 60 works for us. And the total price?"
+- "Thanks for that. Can you confirm both the price and payment terms?"
+- "$37,000 noted. How about terms - Net 30, 60?"
+
+Generate response:`;
 }
 
 /**
@@ -203,20 +265,7 @@ REQUIREMENTS:
 
 Generate response:`,
 
-    ASK_CLARIFY: `
-You are Accordo, a Procurement Manager. You need clarification on the offer.
-
-VENDOR'S MESSAGE: Missing clear pricing or terms
-
-TONE: ${tone} (helpful and patient)
-
-REQUIREMENTS:
-1. Politely ask for clarification on missing details
-2. Specifically mention what's unclear (price, payment terms, or delivery)
-3. Be encouraging, not critical
-4. 1-2 sentences
-
-Generate response:`
+    ASK_CLARIFY: buildAskClarifyPrompt(input, tone)
   };
 
   return actionPrompts[action] || actionPrompts.COUNTER;
@@ -369,18 +418,42 @@ const FALLBACK_TEMPLATES = {
   },
 
   ASK_CLARIFY: (input: ResponseGeneratorInput): string => {
-    const { vendorOffer } = input;
-    const missing = [];
-    if (!vendorOffer.total_price) missing.push('unit price');
-    if (!vendorOffer.payment_terms) missing.push('payment terms');
+    const { vendorOffer, currentExtraction, accumulatedOffer } = input;
 
-    const templates = [
-      `I'd like to clarify your offer. Could you please provide ${missing.join(' and ')}?`,
-      `To move forward, I need a bit more detail on ${missing.join(' and ')}. Can you specify?`,
-      `Thanks for your message. Could you clarify the ${missing.join(' and ')} so we can evaluate properly?`,
-    ];
+    // Get what was provided and what's missing
+    const currentProvided = currentExtraction ? getProvidedComponents(currentExtraction) : [];
+    const missing = getMissingComponents(accumulatedOffer || vendorOffer);
 
-    return templates[Math.floor(Math.random() * templates.length)];
+    // Build acknowledgment based on what was provided
+    let acknowledgment = '';
+    if (currentProvided.length > 0) {
+      const priceAcks = ['Got it', 'Thanks for that', 'Noted', 'Perfect'];
+      acknowledgment = `${priceAcks[Math.floor(Math.random() * priceAcks.length)]} - ${currentProvided.join(' and ')}. `;
+    }
+
+    // Build request for missing items
+    const missingRequests: Record<string, string[]> = {
+      'price': [
+        'What about the total price?',
+        'And the pricing?',
+        'Can you share the price?',
+      ],
+      'payment terms': [
+        'What about payment terms?',
+        'How about terms - Net 30, 60?',
+        'And the payment terms?',
+      ],
+      'price and payment terms': [
+        'Can you confirm both price and payment terms?',
+        'What are you thinking for price and terms?',
+      ],
+    };
+
+    const missingKey = missing.length === 2 ? 'price and payment terms' : missing[0] || 'price';
+    const requests = missingRequests[missingKey] || missingRequests['price'];
+    const request = requests[Math.floor(Math.random() * requests.length)];
+
+    return `${acknowledgment}${request}`;
   }
 };
 
