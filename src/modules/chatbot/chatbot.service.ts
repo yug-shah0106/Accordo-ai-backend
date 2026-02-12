@@ -1,0 +1,1122 @@
+import { v4 as uuidv4 } from 'uuid';
+import { Op } from 'sequelize';
+import { CustomError } from '../../utils/custom-error.js';
+import logger from '../../config/logger.js';
+import models from '../../models/index.js';
+import { parseOfferRegex } from './engine/parseOffer.js';
+import { decideNextMove } from './engine/decide.js';
+import { computeExplainability, totalUtility, type NegotiationConfig } from './engine/utility.js';
+import type { Offer, Decision, Explainability } from './engine/types.js';
+import type { ChatbotDeal } from '../../models/chatbotDeal.js';
+import type { ChatbotMessage } from '../../models/chatbotMessage.js';
+import { chatCompletion } from '../../services/llm.service.js';
+import { captureVendorBid, checkAndTriggerComparison } from '../bidComparison/bidComparison.service.js';
+
+export interface CreateDealInput {
+  title: string;
+  counterparty?: string;
+  mode?: 'INSIGHTS' | 'CONVERSATION';
+  templateId?: string;
+  requisitionId?: number;
+  contractId?: number;
+  userId: number;
+  vendorId?: number;
+}
+
+export interface ProcessMessageInput {
+  dealId: string;
+  content: string;
+  role: 'VENDOR' | 'ACCORDO' | 'SYSTEM';
+  userId: number;
+}
+
+export interface DealWithMessages {
+  deal: ChatbotDeal;
+  messages: ChatbotMessage[];
+}
+
+export interface ListDealsFilters {
+  status?: 'NEGOTIATING' | 'ACCEPTED' | 'WALKED_AWAY' | 'ESCALATED';
+  mode?: 'INSIGHTS' | 'CONVERSATION';
+  archived?: boolean;
+  deleted?: boolean;
+  userId?: number;
+  vendorId?: number;
+}
+
+export interface PaginatedDealsResponse {
+  data: ChatbotDeal[];
+  total: number;
+  page: number;
+  totalPages: number;
+}
+
+/**
+ * Map requisition data to negotiation config
+ * Uses BATNA and target price from requisition products
+ */
+export const buildConfigFromRequisition = async (
+  requisitionId: number
+): Promise<NegotiationConfig> => {
+  const requisition = await models.Requisition.findByPk(requisitionId, {
+    include: [
+      {
+        model: models.RequisitionProduct,
+        as: 'RequisitionProduct',
+      },
+    ],
+  });
+
+  if (!requisition) {
+    throw new CustomError('Requisition not found', 404);
+  }
+
+  // Calculate weighted average target price from products
+  let totalTarget = 0;
+  let totalQuantity = 0;
+
+  if (requisition.RequisitionProduct && requisition.RequisitionProduct.length > 0) {
+    for (const reqProduct of requisition.RequisitionProduct) {
+      const quantity = (reqProduct as any).qty || 1;
+      const targetPrice = (reqProduct as any).targetPrice || 0;
+      totalTarget += targetPrice * quantity;
+      totalQuantity += quantity;
+    }
+  }
+
+  const averageTarget = totalQuantity > 0 ? totalTarget / totalQuantity : 100;
+  const anchor = averageTarget * 0.85; // 15% below target
+  const maxAcceptable = averageTarget * 1.2; // 20% above target
+  const concessionStep = (averageTarget - anchor) / 6; // ~2.5% steps
+
+  return {
+    parameters: {
+      unit_price: {
+        weight: 0.6,
+        direction: 'minimize',
+        anchor,
+        target: averageTarget,
+        max_acceptable: maxAcceptable,
+        concession_step: concessionStep,
+      },
+      payment_terms: {
+        weight: 0.4,
+        options: ['Net 30', 'Net 60', 'Net 90'] as const,
+        utility: {
+          'Net 30': 0.2,
+          'Net 60': 0.6,
+          'Net 90': 1.0,
+        },
+      },
+    },
+    accept_threshold: 0.7,
+    walkaway_threshold: 0.45,
+    max_rounds: 6,
+  };
+};
+
+/**
+ * Map contract data to negotiation config
+ */
+export const buildConfigFromContract = async (
+  contractId: number
+): Promise<NegotiationConfig> => {
+  const contract = await models.Contract.findByPk(contractId, {
+    include: [
+      {
+        model: models.Requisition,
+        as: 'Requisition',
+        include: [
+          {
+            model: models.RequisitionProduct,
+            as: 'RequisitionProduct',
+          },
+        ],
+      },
+    ],
+  });
+
+  if (!contract) {
+    throw new CustomError('Contract not found', 404);
+  }
+
+  if (!contract.Requisition) {
+    throw new CustomError('Contract has no associated requisition', 400);
+  }
+
+  return buildConfigFromRequisition(contract.Requisition.id);
+};
+
+/**
+ * Create a new negotiation deal
+ */
+export const createDealService = async (
+  input: CreateDealInput
+): Promise<ChatbotDeal> => {
+  try {
+    const dealId = uuidv4();
+
+    // Validate foreign keys
+    if (input.requisitionId) {
+      const requisition = await models.Requisition.findByPk(input.requisitionId);
+      if (!requisition) {
+        throw new CustomError('Requisition not found', 404);
+      }
+    }
+
+    if (input.contractId) {
+      const contract = await models.Contract.findByPk(input.contractId);
+      if (!contract) {
+        throw new CustomError('Contract not found', 404);
+      }
+    }
+
+    if (input.vendorId) {
+      const vendor = await models.User.findByPk(input.vendorId);
+      if (!vendor) {
+        throw new CustomError('Vendor not found', 404);
+      }
+    }
+
+    const deal = await models.ChatbotDeal.create({
+      id: dealId,
+      title: input.title,
+      counterparty: input.counterparty || null,
+      status: 'NEGOTIATING',
+      round: 0,
+      mode: input.mode || 'CONVERSATION',
+      latestOfferJson: null,
+      latestVendorOffer: null,
+      latestDecisionAction: null,
+      latestUtility: null,
+      convoStateJson: input.mode === 'CONVERSATION' ? { phase: 'GREETING', history: [] } : null,
+      templateId: input.templateId || null,
+      requisitionId: input.requisitionId || null,
+      contractId: input.contractId || null,
+      userId: input.userId,
+      vendorId: input.vendorId || null,
+      archivedAt: null,
+      deletedAt: null,
+    });
+
+    logger.info(`Created deal ${dealId}: ${input.title}`);
+    return deal;
+  } catch (error) {
+    if (error instanceof CustomError) throw error;
+    throw new CustomError(`Failed to create deal: ${(error as Error).message}`, 500);
+  }
+};
+
+/**
+ * Process a vendor message in INSIGHTS (demo) mode
+ * Extracts offer, makes decision, generates counter
+ */
+/**
+ * Generate Accordo response text based on decision
+ */
+const generateAccordoResponseText = (decision: Decision, config: NegotiationConfig): string => {
+  const { action, counterOffer, utilityScore } = decision;
+
+  switch (action) {
+    case 'ACCEPT':
+      return `I'm pleased to accept your offer. We have a deal at $${counterOffer?.unit_price || 'agreed'} with ${counterOffer?.payment_terms || 'agreed'} payment terms. Thank you for the negotiation.`;
+
+    case 'COUNTER':
+      const targetPrice = config.parameters.unit_price.target;
+      const priceText = counterOffer?.unit_price
+        ? `$${counterOffer.unit_price}`
+        : `$${targetPrice}`;
+      const termsText = counterOffer?.payment_terms || 'Net 60';
+      return `Thank you for your offer. Based on our analysis, I'd like to counter with ${priceText} and ${termsText} payment terms. This would give us a utility score of ${((utilityScore || 0) * 100).toFixed(0)}%.`;
+
+    case 'WALK_AWAY':
+      return `I appreciate your time, but unfortunately the current offer doesn't meet our minimum requirements. The utility score of ${((utilityScore || 0) * 100).toFixed(0)}% falls below our walkaway threshold. We'll need to conclude this negotiation.`;
+
+    case 'ESCALATE':
+      return `This negotiation has reached a point where I need to escalate it to a human decision-maker for review. Thank you for your patience.`;
+
+    case 'ASK_CLARIFY':
+      return `I need some clarification on your offer. Could you please provide more details about the pricing and payment terms?`;
+
+    default:
+      return `Thank you for your message. Our analysis shows a utility score of ${((utilityScore || 0) * 100).toFixed(0)}%.`;
+  }
+};
+
+export const processVendorMessageService = async (
+  input: ProcessMessageInput
+): Promise<{
+  message: ChatbotMessage;
+  accordoMessage: ChatbotMessage;
+  decision: Decision;
+  explainability: Explainability;
+}> => {
+  try {
+    const deal = await models.ChatbotDeal.findByPk(input.dealId);
+    if (!deal) {
+      throw new CustomError('Deal not found', 404);
+    }
+
+    if (deal.status !== 'NEGOTIATING') {
+      throw new CustomError('Deal is not in negotiating status', 400);
+    }
+
+    // Build negotiation config from requisition or contract
+    let config: NegotiationConfig;
+    if (deal.requisitionId) {
+      config = await buildConfigFromRequisition(deal.requisitionId);
+    } else if (deal.contractId) {
+      config = await buildConfigFromContract(deal.contractId);
+    } else {
+      // Fallback to default config
+      const { negotiationConfig } = await import('./engine/config.js');
+      config = negotiationConfig;
+    }
+
+    // Parse vendor offer from message
+    const extractedOffer = parseOfferRegex(input.content);
+
+    // Increment round
+    const newRound = deal.round + 1;
+
+    // Make decision
+    const decision = decideNextMove(config, extractedOffer, newRound);
+
+    // Compute explainability
+    const explainability = computeExplainability(config, extractedOffer, decision);
+
+    // Save VENDOR message
+    const vendorMessageId = uuidv4();
+    const message = await models.ChatbotMessage.create({
+      id: vendorMessageId,
+      dealId: input.dealId,
+      role: input.role,
+      content: input.content,
+      extractedOffer: extractedOffer as any,
+      engineDecision: null,
+      decisionAction: null,
+      utilityScore: null,
+      counterOffer: null,
+      explainabilityJson: null,
+    });
+
+    // Generate and save ACCORDO response message
+    const accordoResponseText = generateAccordoResponseText(decision, config);
+    const accordoMessageId = uuidv4();
+    const accordoMessage = await models.ChatbotMessage.create({
+      id: accordoMessageId,
+      dealId: input.dealId,
+      role: 'ACCORDO',
+      content: accordoResponseText,
+      extractedOffer: null,
+      engineDecision: decision as any,
+      decisionAction: decision.action,
+      utilityScore: decision.utilityScore,
+      counterOffer: decision.counterOffer as any,
+      explainabilityJson: explainability as any,
+    });
+
+    // Update deal with latest state
+    let finalStatus: 'NEGOTIATING' | 'ACCEPTED' | 'WALKED_AWAY' | 'ESCALATED' = deal.status;
+    if (decision.action === 'ACCEPT') finalStatus = 'ACCEPTED';
+    else if (decision.action === 'WALK_AWAY') finalStatus = 'WALKED_AWAY';
+    else if (decision.action === 'ESCALATE') finalStatus = 'ESCALATED';
+
+    await deal.update({
+      round: newRound,
+      status: finalStatus,
+      latestVendorOffer: extractedOffer as any,
+      latestOfferJson: decision.counterOffer as any,
+      latestDecisionAction: decision.action,
+      latestUtility: decision.utilityScore,
+    });
+
+    logger.info(
+      `Processed vendor message for deal ${input.dealId}: ${decision.action} (utility: ${decision.utilityScore})`
+    );
+
+    // Hook: Capture vendor bid when deal reaches terminal state
+    if (['ACCEPTED', 'WALKED_AWAY', 'ESCALATED'].includes(finalStatus)) {
+      try {
+        await captureVendorBid(deal.id);
+        if (deal.requisitionId) {
+          await checkAndTriggerComparison(deal.requisitionId);
+        }
+        logger.info(`Captured vendor bid for deal ${deal.id} with status ${finalStatus}`);
+      } catch (bidError) {
+        // Log but don't fail the message processing
+        logger.error(`Failed to capture vendor bid: ${(bidError as Error).message}`);
+      }
+    }
+
+    return { message, accordoMessage, decision, explainability };
+  } catch (error) {
+    if (error instanceof CustomError) throw error;
+    throw new CustomError(
+      `Failed to process vendor message: ${(error as Error).message}`,
+      500
+    );
+  }
+};
+
+/**
+ * Get deal with messages
+ */
+export const getDealService = async (dealId: string): Promise<DealWithMessages> => {
+  try {
+    const deal = await models.ChatbotDeal.findByPk(dealId, {
+      include: [
+        { model: models.Requisition, as: 'Requisition' },
+        { model: models.Contract, as: 'Contract' },
+        { model: models.User, as: 'User', attributes: ['id', 'name', 'email'] },
+        { model: models.User, as: 'Vendor', attributes: ['id', 'name', 'email'] },
+      ],
+    });
+
+    if (!deal) {
+      throw new CustomError('Deal not found', 404);
+    }
+
+    const messages = await models.ChatbotMessage.findAll({
+      where: { dealId },
+      order: [['createdAt', 'ASC']],
+    });
+
+    return { deal, messages };
+  } catch (error) {
+    if (error instanceof CustomError) throw error;
+    throw new CustomError(`Failed to get deal: ${(error as Error).message}`, 500);
+  }
+};
+
+/**
+ * List deals with filters and pagination
+ */
+export const listDealsService = async (
+  filters: ListDealsFilters,
+  page: number = 1,
+  limit: number = 10
+): Promise<PaginatedDealsResponse> => {
+  try {
+    const where: any = {};
+
+    if (filters.status) where.status = filters.status;
+    if (filters.mode) where.mode = filters.mode;
+    if (filters.userId) where.userId = filters.userId;
+    if (filters.vendorId) where.vendorId = filters.vendorId;
+
+    // Handle archived/deleted filters
+    if (filters.archived === true) {
+      where.archivedAt = { [Op.ne]: null };
+    } else if (filters.archived === false) {
+      where.archivedAt = null;
+    }
+
+    if (filters.deleted === true) {
+      where.deletedAt = { [Op.ne]: null };
+    } else if (filters.deleted === false) {
+      where.deletedAt = null;
+    }
+
+    const offset = (page - 1) * limit;
+
+    const { rows, count } = await models.ChatbotDeal.findAndCountAll({
+      where,
+      limit,
+      offset,
+      order: [['createdAt', 'DESC']],
+      include: [
+        { model: models.Requisition, as: 'Requisition', attributes: ['id', 'subject', 'rfqId'] },
+        { model: models.Contract, as: 'Contract', attributes: ['id', 'status'] },
+        { model: models.User, as: 'User', attributes: ['id', 'name', 'email'] },
+        { model: models.User, as: 'Vendor', attributes: ['id', 'name', 'email'] },
+      ],
+    });
+
+    return {
+      data: rows,
+      total: count,
+      page,
+      totalPages: Math.ceil(count / limit),
+    };
+  } catch (error) {
+    throw new CustomError(`Failed to list deals: ${(error as Error).message}`, 500);
+  }
+};
+
+/**
+ * Reset a deal (clear messages and state)
+ */
+export const resetDealService = async (dealId: string): Promise<ChatbotDeal> => {
+  try {
+    const deal = await models.ChatbotDeal.findByPk(dealId);
+    if (!deal) {
+      throw new CustomError('Deal not found', 404);
+    }
+
+    // Delete all messages
+    await models.ChatbotMessage.destroy({ where: { dealId } });
+
+    // Reset deal state
+    await deal.update({
+      status: 'NEGOTIATING',
+      round: 0,
+      latestOfferJson: null,
+      latestVendorOffer: null,
+      latestDecisionAction: null,
+      latestUtility: null,
+      convoStateJson: deal.mode === 'CONVERSATION' ? { phase: 'GREETING', history: [] } : null,
+    });
+
+    logger.info(`Reset deal ${dealId}`);
+    return deal;
+  } catch (error) {
+    if (error instanceof CustomError) throw error;
+    throw new CustomError(`Failed to reset deal: ${(error as Error).message}`, 500);
+  }
+};
+
+/**
+ * Archive a deal
+ */
+export const archiveDealService = async (dealId: string): Promise<ChatbotDeal> => {
+  try {
+    const deal = await models.ChatbotDeal.findByPk(dealId);
+    if (!deal) {
+      throw new CustomError('Deal not found', 404);
+    }
+
+    await deal.update({ archivedAt: new Date() });
+    logger.info(`Archived deal ${dealId}`);
+    return deal;
+  } catch (error) {
+    if (error instanceof CustomError) throw error;
+    throw new CustomError(`Failed to archive deal: ${(error as Error).message}`, 500);
+  }
+};
+
+/**
+ * Unarchive a deal (also clears deletedAt to fully recover)
+ */
+export const unarchiveDealService = async (dealId: string): Promise<ChatbotDeal> => {
+  try {
+    const deal = await models.ChatbotDeal.findByPk(dealId);
+    if (!deal) {
+      throw new CustomError('Deal not found', 404);
+    }
+
+    // Clear both archived and deleted flags to fully recover the deal
+    await deal.update({ archivedAt: null, deletedAt: null });
+    logger.info(`Unarchived deal ${dealId}`);
+    return deal;
+  } catch (error) {
+    if (error instanceof CustomError) throw error;
+    throw new CustomError(`Failed to unarchive deal: ${(error as Error).message}`, 500);
+  }
+};
+
+/**
+ * Soft delete a deal
+ */
+export const softDeleteDealService = async (dealId: string): Promise<ChatbotDeal> => {
+  try {
+    const deal = await models.ChatbotDeal.findByPk(dealId);
+    if (!deal) {
+      throw new CustomError('Deal not found', 404);
+    }
+
+    await deal.update({ deletedAt: new Date() });
+    logger.info(`Soft deleted deal ${dealId}`);
+    return deal;
+  } catch (error) {
+    if (error instanceof CustomError) throw error;
+    throw new CustomError(`Failed to soft delete deal: ${(error as Error).message}`, 500);
+  }
+};
+
+/**
+ * Restore a soft-deleted deal (also clears archivedAt to fully recover)
+ */
+export const restoreDealService = async (dealId: string): Promise<ChatbotDeal> => {
+  try {
+    const deal = await models.ChatbotDeal.findByPk(dealId);
+    if (!deal) {
+      throw new CustomError('Deal not found', 404);
+    }
+
+    // Clear both deleted and archived flags to fully recover the deal
+    await deal.update({ deletedAt: null, archivedAt: null });
+    logger.info(`Restored deal ${dealId}`);
+    return deal;
+  } catch (error) {
+    if (error instanceof CustomError) throw error;
+    throw new CustomError(`Failed to restore deal: ${(error as Error).message}`, 500);
+  }
+};
+
+/**
+ * Permanently delete a deal and all messages
+ */
+export const permanentDeleteDealService = async (dealId: string): Promise<void> => {
+  try {
+    const deal = await models.ChatbotDeal.findByPk(dealId);
+    if (!deal) {
+      throw new CustomError('Deal not found', 404);
+    }
+
+    // Delete all messages (CASCADE should handle this, but explicit is safer)
+    await models.ChatbotMessage.destroy({ where: { dealId } });
+
+    // Delete deal
+    await deal.destroy();
+
+    logger.info(`Permanently deleted deal ${dealId}`);
+  } catch (error) {
+    if (error instanceof CustomError) throw error;
+    throw new CustomError(
+      `Failed to permanently delete deal: ${(error as Error).message}`,
+      500
+    );
+  }
+};
+
+/**
+ * Get negotiation config for a deal
+ */
+export const getDealConfigService = async (dealId: string): Promise<NegotiationConfig> => {
+  try {
+    const deal = await models.ChatbotDeal.findByPk(dealId);
+    if (!deal) {
+      throw new CustomError('Deal not found', 404);
+    }
+
+    if (deal.requisitionId) {
+      return await buildConfigFromRequisition(deal.requisitionId);
+    } else if (deal.contractId) {
+      return await buildConfigFromContract(deal.contractId);
+    } else {
+      // Return default config
+      const { negotiationConfig } = await import('./engine/config.js');
+      return negotiationConfig;
+    }
+  } catch (error) {
+    if (error instanceof CustomError) throw error;
+    throw new CustomError(`Failed to get deal config: ${(error as Error).message}`, 500);
+  }
+};
+
+/**
+ * Get last explainability for a deal (from most recent message)
+ */
+export const getLastExplainabilityService = async (
+  dealId: string
+): Promise<Explainability | null> => {
+  try {
+    const lastMessage = await models.ChatbotMessage.findOne({
+      where: { dealId, explainabilityJson: { [Op.ne]: null } },
+      order: [['createdAt', 'DESC']],
+    });
+
+    return lastMessage ? (lastMessage.explainabilityJson as Explainability) : null;
+  } catch (error) {
+    throw new CustomError(
+      `Failed to get last explainability: ${(error as Error).message}`,
+      500
+    );
+  }
+};
+
+/**
+ * Create a system message (for automated responses)
+ */
+export const createSystemMessageService = async (
+  dealId: string,
+  content: string
+): Promise<ChatbotMessage> => {
+  try {
+    const messageId = uuidv4();
+    const message = await models.ChatbotMessage.create({
+      id: messageId,
+      dealId,
+      role: 'SYSTEM',
+      content,
+      extractedOffer: null,
+      engineDecision: null,
+      decisionAction: null,
+      utilityScore: null,
+      counterOffer: null,
+      explainabilityJson: null,
+    });
+
+    return message;
+  } catch (error) {
+    throw new CustomError(`Failed to create system message: ${(error as Error).message}`, 500);
+  }
+};
+
+/**
+ * Create a message with explicit properties
+ */
+export const createMessageService = async (input: {
+  dealId: string;
+  role: 'VENDOR' | 'ACCORDO' | 'SYSTEM';
+  content: string;
+  extractedOffer?: Offer | null;
+  engineDecision?: Decision | null;
+  decisionAction?: string | null;
+  utilityScore?: number | null;
+  counterOffer?: Offer | null;
+  explainabilityJson?: Explainability | null;
+}): Promise<ChatbotMessage> => {
+  try {
+    const messageId = uuidv4();
+    const message = await models.ChatbotMessage.create({
+      id: messageId,
+      dealId: input.dealId,
+      role: input.role,
+      content: input.content,
+      extractedOffer: input.extractedOffer || null,
+      engineDecision: input.engineDecision || null,
+      decisionAction: input.decisionAction || null,
+      utilityScore: input.utilityScore || null,
+      counterOffer: input.counterOffer || null,
+      explainabilityJson: input.explainabilityJson || null,
+    });
+
+    return message;
+  } catch (error) {
+    throw new CustomError(`Failed to create message: ${(error as Error).message}`, 500);
+  }
+};
+
+/**
+ * Run full demo negotiation with autopilot vendor
+ *
+ * Algorithm:
+ * 1. Reset deal to initial state
+ * 2. Set vendor scenario policy
+ * 3. Loop until terminal state (ACCEPTED, WALKED_AWAY, ESCALATED, or maxRounds):
+ *    - Generate vendor message using vendorAgent
+ *    - Process vendor message (extract offer)
+ *    - Run decision engine
+ *    - Generate Accordo response
+ *    - Save both messages
+ *    - Check if deal is in terminal state
+ * 4. Return complete transcript with steps array
+ *
+ * @param dealId - Deal ID
+ * @param scenario - Vendor scenario (HARD, SOFT, WALK_AWAY)
+ * @param maxRounds - Maximum number of rounds (default: 10)
+ * @returns Complete demo transcript
+ */
+export const runDemoService = async (
+  dealId: string,
+  scenario: 'HARD' | 'SOFT' | 'WALK_AWAY',
+  maxRounds: number = 10
+): Promise<{
+  deal: ChatbotDeal;
+  messages: ChatbotMessage[];
+  steps: Array<{
+    vendorMessage: ChatbotMessage;
+    accordoMessage: ChatbotMessage;
+    round: number;
+  }>;
+  finalStatus: string;
+  totalRounds: number;
+  finalUtility: number | null;
+}> => {
+  try {
+    logger.info('[RunDemo] Starting demo negotiation', { dealId, scenario, maxRounds });
+
+    // Reset deal to initial state
+    const resetDeal = await resetDealService(dealId);
+
+    // Validate deal mode is INSIGHTS
+    if (resetDeal.mode !== 'INSIGHTS') {
+      throw new CustomError('Run demo only works in INSIGHTS mode', 400);
+    }
+
+    // Import vendor agent (dynamic to avoid circular deps)
+    const { generateVendorReply } = await import('./vendor/vendorAgent.js');
+
+    const steps: Array<{
+      vendorMessage: ChatbotMessage;
+      accordoMessage: ChatbotMessage;
+      round: number;
+    }> = [];
+
+    let currentRound = 0;
+    let dealStatus: string = 'NEGOTIATING';
+    let lastAccordoOffer: Offer | null = null;
+
+    // Run negotiation loop
+    while (
+      currentRound < maxRounds &&
+      dealStatus === 'NEGOTIATING'
+    ) {
+      logger.info('[RunDemo] Starting round', { dealId, round: currentRound, scenario });
+
+      // Generate vendor message using vendorAgent
+      const vendorReplyResult = await generateVendorReply({
+        dealId,
+        round: currentRound,
+        lastAccordoOffer,
+        scenario,
+        customPolicy: undefined,
+      });
+
+      if (!vendorReplyResult.success || !vendorReplyResult.data) {
+        throw new CustomError(
+          vendorReplyResult.message || 'Failed to generate vendor reply',
+          500
+        );
+      }
+
+      const { content: vendorContent, offer: vendorOffer } = vendorReplyResult.data;
+
+      // Save vendor message
+      const vendorMessage = await createMessageService({
+        dealId,
+        role: 'VENDOR',
+        content: vendorContent,
+        extractedOffer: vendorOffer as Offer,
+      });
+
+      logger.info('[RunDemo] Vendor message generated', {
+        dealId,
+        round: currentRound,
+        messageId: vendorMessage.id,
+        offer: vendorOffer,
+      });
+
+      // Process vendor message through decision engine
+      const processResult = await processVendorMessageService({
+        dealId,
+        content: vendorContent,
+        role: 'VENDOR',
+        userId: 0, // System user for autopilot
+      });
+
+      const { accordoMessage, decision } = processResult;
+
+      logger.info('[RunDemo] Accordo message generated', {
+        dealId,
+        round: currentRound,
+        messageId: accordoMessage.id,
+        decision: decision.action,
+      });
+
+      // Add step to transcript
+      steps.push({
+        vendorMessage,
+        accordoMessage,
+        round: currentRound,
+      });
+
+      // Update last Accordo offer for next round
+      lastAccordoOffer = accordoMessage.counterOffer as Offer | null;
+
+      // Check terminal state
+      const updatedDeal = await models.ChatbotDeal.findByPk(dealId);
+      if (!updatedDeal) {
+        throw new CustomError('Deal not found after processing', 500);
+      }
+
+      dealStatus = updatedDeal.status;
+
+      if (
+        dealStatus === 'ACCEPTED' ||
+        dealStatus === 'WALKED_AWAY' ||
+        dealStatus === 'ESCALATED'
+      ) {
+        logger.info('[RunDemo] Demo completed with terminal state', {
+          dealId,
+          status: dealStatus,
+          round: currentRound,
+        });
+        break;
+      }
+
+      currentRound++;
+    }
+
+    // If maxRounds reached without terminal state, set status to ESCALATED
+    if (currentRound >= maxRounds && dealStatus === 'NEGOTIATING') {
+      await models.ChatbotDeal.update(
+        { status: 'ESCALATED' },
+        { where: { id: dealId } }
+      );
+
+      await createSystemMessageService(
+        dealId,
+        `Maximum rounds (${maxRounds}) reached. Deal escalated to human.`
+      );
+
+      dealStatus = 'ESCALATED';
+      logger.info('[RunDemo] Max rounds reached, deal escalated', {
+        dealId,
+        maxRounds,
+      });
+    }
+
+    // Get final deal state and all messages
+    const finalDealData = await getDealService(dealId);
+    const { deal, messages } = finalDealData;
+
+    logger.info('[RunDemo] Demo negotiation completed', {
+      dealId,
+      scenario,
+      totalRounds: currentRound,
+      finalStatus: deal.status,
+      finalUtility: deal.latestUtility,
+    });
+
+    return {
+      deal,
+      messages,
+      steps,
+      finalStatus: deal.status,
+      totalRounds: currentRound,
+      finalUtility: deal.latestUtility,
+    };
+  } catch (error) {
+    logger.error('[RunDemo] Failed to run demo negotiation', {
+      dealId,
+      scenario,
+      error: error instanceof Error ? error.message : String(error),
+    });
+
+    if (error instanceof CustomError) {
+      throw error;
+    }
+
+    throw new CustomError(
+      `Failed to run demo: ${error instanceof Error ? error.message : String(error)}`,
+      500
+    );
+  }
+};
+
+/**
+ * Resume an escalated deal
+ *
+ * Changes status from ESCALATED back to NEGOTIATING and adds a system message.
+ *
+ * @param dealId - Deal ID
+ * @returns Updated deal
+ */
+export const resumeDealService = async (dealId: string): Promise<ChatbotDeal> => {
+  try {
+    const deal = await models.ChatbotDeal.findByPk(dealId);
+
+    if (!deal) {
+      throw new CustomError('Deal not found', 404);
+    }
+
+    if (deal.status !== 'ESCALATED') {
+      throw new CustomError('Only ESCALATED deals can be resumed', 400);
+    }
+
+    // Update deal status
+    deal.status = 'NEGOTIATING';
+    await deal.save();
+
+    // Add system message
+    await createSystemMessageService(dealId, 'Deal resumed by human negotiator.');
+
+    logger.info('[ResumeService] Deal resumed', { dealId, status: deal.status });
+
+    return deal;
+  } catch (error) {
+    if (error instanceof CustomError) {
+      throw error;
+    }
+
+    throw new CustomError(
+      `Failed to resume deal: ${error instanceof Error ? error.message : String(error)}`,
+      500
+    );
+  }
+};
+
+/**
+ * Generate AI-powered scenario suggestions
+ *
+ * Analyzes the conversation history and negotiation context to generate
+ * contextually relevant counter-offer suggestions for each scenario type.
+ *
+ * @param dealId - The deal UUID
+ * @returns Object with scenario suggestions: { HARD: [...], MEDIUM: [...], SOFT: [...], WALK_AWAY: [...] }
+ */
+export const generateScenarioSuggestionsService = async (
+  dealId: string,
+  userId: number
+): Promise<Record<string, string[]>> => {
+  try {
+    // Get deal with messages and config
+    const deal = await models.ChatbotDeal.findOne({
+      where: { id: dealId },
+      include: [
+        {
+          model: models.ChatbotMessage,
+          as: 'Messages',
+          where: { role: { [Op.in]: ['VENDOR', 'ACCORDO'] } },
+          required: false,
+          order: [['createdAt', 'ASC']],
+        },
+      ],
+    });
+
+    if (!deal) {
+      throw new CustomError('Deal not found', 404);
+    }
+
+    // Get negotiation config
+    const config = deal.negotiationConfigJson as NegotiationConfig;
+    if (!config) {
+      throw new CustomError('Deal has no negotiation config', 400);
+    }
+
+    // Get last vendor message for context
+    const messages = (deal as any).Messages || [];
+    const lastVendorMessage = messages.filter((m: ChatbotMessage) => m.role === 'VENDOR').pop();
+
+    // Build conversation context
+    const conversationContext = messages
+      .map((m: ChatbotMessage) => `${m.role}: ${m.content}`)
+      .join('\n');
+
+    // Extract config values with fallbacks
+    const priceConfig = config.parameters?.unit_price || { anchor: 100, target: 90, max_acceptable: 120, concession_step: 2 };
+    const termsConfig = config.parameters?.payment_terms || { options: ['Net 30', 'Net 60', 'Net 90'] as const };
+    const idealTerms = termsConfig.options?.[0] || 'Net 30';
+    const acceptableTerms = termsConfig.options?.[1] || 'Net 60';
+
+    // Generate suggestions using LLM
+    const prompt = `You are a procurement negotiation assistant. Analyze this negotiation and generate 4 counter-offer suggestions for each scenario type.
+
+NEGOTIATION CONTEXT:
+Deal: ${deal.title}
+Current Round: ${deal.round}
+Status: ${deal.status}
+
+NEGOTIATION CONFIG:
+Target Price: $${priceConfig.target}
+Min Price: $${priceConfig.anchor}
+Max Price: $${priceConfig.max_acceptable}
+Ideal Payment Terms: ${idealTerms}
+Acceptable Payment Terms: ${acceptableTerms}
+
+CONVERSATION HISTORY:
+${conversationContext || 'No messages yet'}
+
+LAST VENDOR MESSAGE:
+${lastVendorMessage ? lastVendorMessage.content : 'None'}
+
+Generate 4 counter-offer suggestions for EACH of these scenarios:
+1. HARD: Aggressive, push for best price, short payment terms
+2. MEDIUM: Balanced approach, reasonable price, moderate terms
+3. SOFT: Flexible, focus on relationship, longer terms acceptable
+4. WALK_AWAY: Unreasonable offers that signal walking away
+
+Format your response as JSON only (no markdown, no explanation):
+{
+  "HARD": ["offer1", "offer2", "offer3", "offer4"],
+  "MEDIUM": ["offer1", "offer2", "offer3", "offer4"],
+  "SOFT": ["offer1", "offer2", "offer3", "offer4"],
+  "WALK_AWAY": ["offer1", "offer2", "offer3", "offer4"]
+}
+
+Each offer should be a short message (under 50 chars) like "We can do $92 Net 30" or "Best I can offer is $88 Net 60".`;
+
+    const llmResponse = await chatCompletion(
+      [{ role: 'user', content: prompt }],
+      { temperature: 0.7, maxTokens: 1000 }
+    );
+
+    // Parse LLM response
+    let suggestions: Record<string, string[]>;
+    let generationSource: 'llm' | 'fallback' = 'llm';
+
+    try {
+      // Clean response - remove markdown code blocks if present
+      const cleanedResponse = llmResponse.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+      suggestions = JSON.parse(cleanedResponse);
+    } catch (parseError) {
+      logger.error('[ScenarioSuggestions] Failed to parse LLM response', {
+        dealId,
+        llmResponse,
+        error: parseError,
+      });
+
+      generationSource = 'fallback';
+
+      // Fallback to default suggestions
+      suggestions = {
+        HARD: [
+          `We can do $${priceConfig.anchor} ${idealTerms}`,
+          `Best I can offer is $${priceConfig.anchor + 2} ${idealTerms}`,
+          `Final: $${priceConfig.anchor + 5} ${idealTerms}`,
+          `Absolute limit: $${priceConfig.anchor + 8} ${idealTerms}`,
+        ],
+        MEDIUM: [
+          `We can do $${priceConfig.target - 5} ${acceptableTerms}`,
+          `How about $${priceConfig.target - 8} ${acceptableTerms}?`,
+          `We're open to $${priceConfig.target - 12} Net 90`,
+          `Final offer: $${priceConfig.target - 15} Net 90`,
+        ],
+        SOFT: [
+          `We can do $${priceConfig.target} ${acceptableTerms}`,
+          `How about $${priceConfig.target - 2} Net 90?`,
+          `We're willing to go to $${priceConfig.target - 5} Net 90`,
+          `Final offer: $${priceConfig.target - 8} Net 90`,
+        ],
+        WALK_AWAY: [
+          `We can do $${priceConfig.max_acceptable} ${idealTerms}`,
+          `Best I can offer is $${priceConfig.max_acceptable - 2} ${idealTerms}`,
+          `Our final offer is $${priceConfig.max_acceptable + 10} ${idealTerms} - take it or leave it`,
+          `Sorry, we can't go lower than $${priceConfig.max_acceptable + 10}`,
+        ],
+      };
+    }
+
+    logger.info('[ScenarioSuggestions] Generated suggestions', { dealId, round: deal.round });
+
+    // Log to training data for future LLM fine-tuning
+    try {
+      await models.NegotiationTrainingData.create({
+        dealId: deal.id,
+        userId,
+        round: deal.round,
+        suggestionsJson: suggestions,
+        conversationContext,
+        configSnapshot: config,
+        llmModel: process.env.LLM_MODEL || 'llama3.2',
+        generationSource,
+      });
+
+      logger.info('[ScenarioSuggestions] Training data logged', {
+        dealId,
+        round: deal.round,
+        generationSource
+      });
+    } catch (loggingError) {
+      // Don't fail the request if logging fails
+      logger.error('[ScenarioSuggestions] Failed to log training data', {
+        dealId,
+        error: loggingError,
+      });
+    }
+
+    return suggestions;
+  } catch (error) {
+    if (error instanceof CustomError) {
+      throw error;
+    }
+
+    throw new CustomError(
+      `Failed to generate scenario suggestions: ${error instanceof Error ? error.message : String(error)}`,
+      500
+    );
+  }
+};

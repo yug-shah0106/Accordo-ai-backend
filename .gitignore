@@ -1,18 +1,39 @@
+# Dependencies
 node_modules/
-.env
-logs/
-dist/
-coverage/
-npm-debug.log
-yarn.lock
-.DS_Store
 
-# Diff files (can be very large)
-*.diff
-changes.diff
-*.patch
+# Build output
+dist/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Testing
+coverage/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
 
 # Temporary files
 *.tmp
 *.temp
-create-diff.sh
+*.diff
+*.patch
+
+# Lock files (optional - remove if you want to track them)
+yarn.lock
+
+CLAUDE.md
