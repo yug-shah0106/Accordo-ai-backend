@@ -12,6 +12,9 @@ import { generateChatbotLlamaCompletion } from '../llm/chatbotLlamaClient.js';
 import { parseOfferRegex } from '../engine/parseOffer.js';
 import logger from '../../../config/logger.js';
 
+// Fast fallback timeout - if LLM takes longer than this, use template
+const LLM_FAST_TIMEOUT_MS = 5000;  // 5 second hard limit for fast fallback
+
 /**
  * Scenario-specific vendor persona prompts
  */
@@ -57,7 +60,7 @@ Keep responses brief (2-3 sentences).`,
 export async function generateVendorReply(
   input: GenerateVendorReplyInput
 ): Promise<VendorReplyResult> {
-  const { dealId, round, lastAccordoOffer, scenario = 'SOFT', customPolicy } = input;
+  const { dealId, round, lastAccordoOffer, scenario = 'SOFT', customPolicy, pmPriceConfig } = input;
 
   try {
     logger.info('[VendorAgent] Generating vendor reply', {
@@ -65,10 +68,22 @@ export async function generateVendorReply(
       round,
       scenario,
       lastAccordoOffer,
+      pmPriceConfig,
     });
 
-    // Get vendor policy for scenario
-    const basePrice = lastAccordoOffer?.unit_price || 100;
+    // IMPORTANT: Vendor prices should be ABOVE PM's target price
+    // Use PM's max acceptable price as the baseline for vendor policy calculations
+    // This ensures vendor starts with offers that are competitive but above PM's target
+    //
+    // From PM's perspective:
+    // - targetUnitPrice = lowest price PM wants to pay (ideal)
+    // - maxAcceptablePrice = ceiling PM will pay (walkaway above this)
+    //
+    // From VENDOR's perspective:
+    // - Vendor should start ABOVE PM's max (for HARD scenario)
+    // - Vendor's floor (minPrice) should be around PM's target to max range
+    // - Vendor wants to maximize profit, so starts high and makes concessions
+    const basePrice = pmPriceConfig?.maxAcceptablePrice || lastAccordoOffer?.total_price || 100;
     const policy = mergeVendorPolicy(scenario, customPolicy || {}, basePrice);
 
     // Check if vendor should walk away
@@ -76,7 +91,7 @@ export async function generateVendorReply(
       policy,
       round,
       policy.startPrice, // Current vendor price
-      lastAccordoOffer?.unit_price || null
+      lastAccordoOffer?.total_price || null
     );
 
     if (shouldWalkAway) {
@@ -86,7 +101,7 @@ export async function generateVendorReply(
         data: {
           content: "I appreciate your time, but we're unable to proceed with these terms. Thank you for considering our offer.",
           offer: {
-            unit_price: null,
+            total_price: null,
             payment_terms: null,
           },
           scenario,
@@ -100,7 +115,7 @@ export async function generateVendorReply(
       policy,
       currentPrice,
       round,
-      lastAccordoOffer?.unit_price || null
+      lastAccordoOffer?.total_price || null
     );
 
     const nextTerms = calculateNextVendorTerms(
@@ -121,21 +136,42 @@ export async function generateVendorReply(
     const systemPrompt = VENDOR_PERSONAS[scenario];
     const userPrompt = buildVendorPrompt(round, lastAccordoOffer, nextPrice, nextTerms, scenario);
 
-    // Generate vendor message via LLM
+    // Generate vendor message via LLM with fast timeout fallback
     let vendorMessage: string;
+    const startTime = Date.now();
+
     try {
-      vendorMessage = await generateChatbotLlamaCompletion(
-        systemPrompt,
-        [{ role: 'user', content: userPrompt }],
-        {
-          temperature: 0.8, // Higher temperature for more varied vendor responses
-          maxTokens: 150,
-        }
+      // Create a timeout promise for fast fallback
+      const timeoutPromise = new Promise<string>((_, reject) =>
+        setTimeout(() => reject(new Error('LLM_TIMEOUT')), LLM_FAST_TIMEOUT_MS)
       );
+
+      // Race between LLM response and timeout
+      vendorMessage = await Promise.race([
+        generateChatbotLlamaCompletion(
+          systemPrompt,
+          [{ role: 'user', content: userPrompt }],
+          {
+            temperature: 0.6,  // Reduced for faster convergence
+            maxTokens: 80,     // Reduced - vendor messages are 2-3 sentences
+          }
+        ),
+        timeoutPromise,
+      ]);
+
+      logger.info('[VendorAgent] LLM response received', {
+        dealId,
+        responseTimeMs: Date.now() - startTime,
+      });
     } catch (llmError) {
-      // Fallback to template if LLM fails
+      // Fallback to template if LLM fails or times out
+      const errorMsg = llmError instanceof Error ? llmError.message : String(llmError);
+      const isTimeout = errorMsg === 'LLM_TIMEOUT';
+
       logger.warn('[VendorAgent] LLM generation failed, using fallback template', {
-        error: llmError instanceof Error ? llmError.message : String(llmError),
+        error: errorMsg,
+        isTimeout,
+        elapsedMs: Date.now() - startTime,
       });
       vendorMessage = buildFallbackVendorMessage(round, nextPrice, nextTerms, scenario);
     }
@@ -146,15 +182,15 @@ export async function generateVendorReply(
     // Validate extracted offer matches policy
     // If LLM generated incorrect values, replace with policy-calculated values
     let finalOffer = extractedOffer;
-    if (extractedOffer.unit_price !== nextPrice || extractedOffer.payment_terms !== nextTerms) {
+    if (extractedOffer.total_price !== nextPrice || extractedOffer.payment_terms !== nextTerms) {
       logger.warn('[VendorAgent] LLM-generated offer does not match policy, using policy values', {
         extracted: extractedOffer,
-        policy: { unit_price: nextPrice, payment_terms: nextTerms },
+        policy: { total_price: nextPrice, payment_terms: nextTerms },
       });
 
       // Re-generate message with explicit values
       vendorMessage = buildFallbackVendorMessage(round, nextPrice, nextTerms, scenario);
-      finalOffer = { unit_price: nextPrice, payment_terms: nextTerms };
+      finalOffer = { total_price: nextPrice, payment_terms: nextTerms };
     }
 
     logger.info('[VendorAgent] Vendor reply generated successfully', {
@@ -193,7 +229,7 @@ export async function generateVendorReply(
  */
 function buildVendorPrompt(
   round: number,
-  lastAccordoOffer: { unit_price: number | null; payment_terms: string | null } | null,
+  lastAccordoOffer: { total_price: number | null; payment_terms: string | null } | null,
   nextPrice: number,
   nextTerms: string,
   scenario: VendorScenario
@@ -208,7 +244,7 @@ Introduce yourself briefly and present your offer clearly.`;
   }
 
   // Response to buyer's counter-offer
-  const accordoPrice = lastAccordoOffer?.unit_price || 'unknown';
+  const accordoPrice = lastAccordoOffer?.total_price || 'unknown';
   const accordoTerms = lastAccordoOffer?.payment_terms || 'unknown';
 
   return `The buyer offered: $${accordoPrice} with ${accordoTerms}

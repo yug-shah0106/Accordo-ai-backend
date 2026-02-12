@@ -8,6 +8,13 @@ import {
   getAllProduct,
 } from './product.controller.js';
 import { authMiddleware, checkPermission } from '../../middlewares/auth.middleware.js';
+import {
+  validateBody,
+  validateParams,
+  createProductSchema,
+  updateProductSchema,
+  productIdSchema,
+} from './product.validator.js';
 
 const productRouter = Router();
 const moduleId = 4;
@@ -16,6 +23,7 @@ productRouter.post(
   '/create',
   authMiddleware,
   (req, res, next) => checkPermission(req, res, next, moduleId, 3),
+  validateBody(createProductSchema),
   createProduct
 );
 
@@ -30,6 +38,7 @@ productRouter.get(
   '/get/:productid',
   authMiddleware,
   (req, res, next) => checkPermission(req, res, next, moduleId, 1),
+  validateParams(productIdSchema),
   getProduct
 );
 
@@ -44,6 +53,8 @@ productRouter.put(
   '/update/:productid',
   authMiddleware,
   (req, res, next) => checkPermission(req, res, next, moduleId, 2),
+  validateParams(productIdSchema),
+  validateBody(updateProductSchema),
   updateProduct
 );
 
@@ -51,6 +62,7 @@ productRouter.delete(
   '/delete/:productid',
   authMiddleware,
   (req, res, next) => checkPermission(req, res, next, moduleId, 3),
+  validateParams(productIdSchema),
   deleteProduct
 );
 

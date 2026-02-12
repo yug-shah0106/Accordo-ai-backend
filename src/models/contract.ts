@@ -12,12 +12,14 @@ import {
 
 const statusEnum = [
   'Created',
+  'Active',      // Deal is NEGOTIATING
   'Opened',
   'Completed',
   'Verified',
   'Accepted',
   'Rejected',
   'Expired',
+  'Escalated',   // Deal was ESCALATED (can start new negotiation)
   'InitialQuotation',
 ] as const;
 

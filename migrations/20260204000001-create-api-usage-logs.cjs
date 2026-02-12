@@ -1,0 +1,60 @@
+'use strict';
+
+/** @type {import('sequelize-cli').Migration} */
+module.exports = {
+  async up(queryInterface, Sequelize) {
+    await queryInterface.createTable('ApiUsageLogs', {
+      id: {
+        type: Sequelize.INTEGER,
+        autoIncrement: true,
+        primaryKey: true,
+      },
+      provider: {
+        type: Sequelize.ENUM('openai', 'ollama'),
+        allowNull: false,
+      },
+      model: {
+        type: Sequelize.STRING(100),
+        allowNull: false,
+      },
+      promptTokens: {
+        type: Sequelize.INTEGER,
+        allowNull: false,
+        defaultValue: 0,
+      },
+      completionTokens: {
+        type: Sequelize.INTEGER,
+        allowNull: false,
+        defaultValue: 0,
+      },
+      totalTokens: {
+        type: Sequelize.INTEGER,
+        allowNull: false,
+        defaultValue: 0,
+      },
+      dealId: {
+        type: Sequelize.UUID,
+        allowNull: true,
+      },
+      userId: {
+        type: Sequelize.INTEGER,
+        allowNull: true,
+      },
+      createdAt: {
+        type: Sequelize.DATE,
+        allowNull: false,
+        defaultValue: Sequelize.literal('CURRENT_TIMESTAMP'),
+      },
+    });
+
+    // Add indexes
+    await queryInterface.addIndex('ApiUsageLogs', ['provider']);
+    await queryInterface.addIndex('ApiUsageLogs', ['createdAt']);
+    await queryInterface.addIndex('ApiUsageLogs', ['dealId']);
+    await queryInterface.addIndex('ApiUsageLogs', ['userId']);
+  },
+
+  async down(queryInterface, Sequelize) {
+    await queryInterface.dropTable('ApiUsageLogs');
+  },
+};

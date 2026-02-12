@@ -107,7 +107,7 @@ export async function captureVendorBid(dealId: string): Promise<CaptureVendorBid
     dealStatus: deal.status as 'NEGOTIATING' | 'ACCEPTED' | 'WALKED_AWAY' | 'ESCALATED',
     chatSummaryMetrics: summaryMetrics,
     chatSummaryNarrative: summaryNarrative,
-    chatLink: `${env.chatbotFrontendUrl}/conversation/deals/${dealId}`,
+    chatLink: `${env.chatbotFrontendUrl}/chatbot/requisitions/${deal.requisitionId}/vendors/${deal.Contract.vendorId}/deals/${dealId}`,
     completedAt: ['ACCEPTED', 'WALKED_AWAY', 'ESCALATED'].includes(deal.status) ? new Date() : null,
   });
 

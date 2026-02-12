@@ -40,7 +40,7 @@ import {
   shouldAutoStartConversation,
   getDefaultGreeting,
 } from './conversationManager.js';
-import { generateAccordoReply } from './llamaReplyGenerator.js';
+import { generateAccordoReply } from './openaiReplyGenerator.js';
 
 /**
  * Start a new conversation
@@ -208,9 +208,21 @@ export async function processConversationMessage(
     // 2. Get conversation state
     let conversationState = (deal.convoStateJson as ConversationState) || initializeConversationState();
 
-    // 3. Get negotiation config
+    // 3. Get negotiation config - CRITICAL: Use stored config to preserve priority-based thresholds
     let config: NegotiationConfig;
-    if (deal.requisitionId) {
+    if (deal.negotiationConfigJson) {
+      // Use stored negotiation config from deal (includes priority-adjusted thresholds and weights)
+      const storedConfig = deal.negotiationConfigJson as NegotiationConfig & { wizardConfig?: unknown };
+      config = {
+        parameters: storedConfig.parameters,
+        accept_threshold: storedConfig.accept_threshold,
+        escalate_threshold: storedConfig.escalate_threshold,
+        walkaway_threshold: storedConfig.walkaway_threshold,
+        max_rounds: storedConfig.max_rounds,
+        priority: storedConfig.priority,
+      };
+    } else if (deal.requisitionId) {
+      // Fallback to building from requisition (for legacy deals without stored config)
       config = await buildConfigFromRequisition(deal.requisitionId);
     } else {
       throw new CustomError('Deal must be linked to a requisition for negotiation config', 400);
@@ -219,8 +231,11 @@ export async function processConversationMessage(
     // 4. Check for refusal
     const refusalType = classifyRefusal(vendorMessage);
 
-    // 5. Parse vendor offer
-    const parsedOffer = parseOfferRegex(vendorMessage);
+    // 5. Parse vendor offer (with currency conversion if requisition has different currency)
+    // Get requisition currency for proper conversion (February 2026)
+    const requisition = (deal as any).Requisition;
+    const requisitionCurrency = requisition?.typeOfCurrency as 'USD' | 'INR' | 'EUR' | 'GBP' | 'AUD' | undefined;
+    const parsedOffer = parseOfferRegex(vendorMessage, requisitionCurrency);
 
     // 6. Merge with last known offer if incomplete
     const vendorOffer = mergeWithLastOffer(parsedOffer, conversationState.lastVendorOffer);
@@ -229,7 +244,7 @@ export async function processConversationMessage(
     let decision: Decision;
     let explainability: Explainability | null = null;
 
-    if (vendorOffer.unit_price !== null && vendorOffer.payment_terms !== null) {
+    if (vendorOffer.total_price !== null && vendorOffer.payment_terms !== null) {
       decision = decideNextMove(config, vendorOffer, deal.round + 1);
       explainability = computeExplainability(config, vendorOffer, decision);
     } else {
@@ -238,7 +253,7 @@ export async function processConversationMessage(
         action: 'ASK_CLARIFY',
         utilityScore: 0,
         counterOffer: null,
-        reasons: ['Missing complete offer (unit_price or payment_terms)'],
+        reasons: ['Missing complete offer (total_price or payment_terms)'],
       };
     }
 
@@ -269,14 +284,14 @@ export async function processConversationMessage(
       content: msg.content,
     }));
 
-    // 11. Generate Accordo reply using LLM
+    // 11. Generate Accordo reply using OpenAI GPT-3.5 (with Qwen3 fallback)
     const accordoReplyContent = await generateAccordoReply(intent, conversationHistory, {
       counterOffer: decision.counterOffer || undefined,
       vendorOffer,
       decision,
       preference: detectedPreference,
       refusalType,
-    });
+    }, dealId);
 
     // 12. Update conversation state
     const newConversationState = updateConversationState(

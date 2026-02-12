@@ -1,38 +1,47 @@
 /**
- * Embedding Service Client - HTTP client for the Python embedding microservice
+ * Embedding Client - Facade delegating to the active embedding provider.
+ * Same public API as the original HTTP client for full backward compatibility.
  */
 
-import axios, { AxiosInstance, AxiosError } from 'axios';
 import logger from '../../config/logger.js';
-import type {
-  EmbedRequest,
-  EmbedBatchRequest,
-  EmbedResponse,
-  EmbedBatchResponse,
-  EmbeddingServiceHealth,
-} from './vector.types.js';
+import type { EmbeddingServiceHealth } from './vector.types.js';
+import type { EmbeddingProvider } from './providers/embedding-provider.interface.js';
+import { createEmbeddingProvider } from './providers/provider.factory.js';
 
-const EMBEDDING_SERVICE_URL = process.env.EMBEDDING_SERVICE_URL || 'http://localhost:8001';
-const EMBEDDING_TIMEOUT = Number(process.env.EMBEDDING_TIMEOUT || 30000);
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 1000;
 
 class EmbeddingClient {
-  private client: AxiosInstance;
+  private provider: EmbeddingProvider | null = null;
+  private initPromise: Promise<void> | null = null;
   private isHealthy: boolean = false;
   private lastHealthCheck: Date | null = null;
   private healthCheckInterval: number = 30000; // 30 seconds
 
   constructor() {
-    this.client = axios.create({
-      baseURL: EMBEDDING_SERVICE_URL,
-      timeout: EMBEDDING_TIMEOUT,
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    });
+    logger.info('Embedding client created (provider will be initialized on first use)');
+  }
 
-    logger.info(`Embedding client initialized with URL: ${EMBEDDING_SERVICE_URL}`);
+  /**
+   * Ensure the provider is initialized (lazy, once).
+   */
+  private async ensureInitialized(): Promise<EmbeddingProvider> {
+    if (this.provider) return this.provider;
+
+    if (!this.initPromise) {
+      this.initPromise = (async () => {
+        try {
+          this.provider = await createEmbeddingProvider();
+          this.isHealthy = true;
+        } catch (error) {
+          this.initPromise = null; // Allow retry on next call
+          throw error;
+        }
+      })();
+    }
+
+    await this.initPromise;
+    return this.provider!;
   }
 
   /**
@@ -40,13 +49,14 @@ class EmbeddingClient {
    */
   async checkHealth(): Promise<EmbeddingServiceHealth> {
     try {
-      const response = await this.client.get<EmbeddingServiceHealth>('/health');
-      this.isHealthy = response.data.status === 'healthy';
+      const provider = await this.ensureInitialized();
+      const health = await provider.checkHealth();
+      this.isHealthy = health.status === 'healthy';
       this.lastHealthCheck = new Date();
-      return response.data;
+      return health;
     } catch (error) {
       this.isHealthy = false;
-      logger.error('Embedding service health check failed:', error);
+      logger.error('Embedding health check failed:', error);
       return {
         status: 'unavailable',
         model: 'unknown',
@@ -69,13 +79,17 @@ class EmbeddingClient {
       return this.checkHealth();
     }
 
-    return {
-      status: this.isHealthy ? 'healthy' : 'unavailable',
-      model: 'BAAI/bge-large-en-v1.5',
-      dimension: 1024,
-      device: 'unknown',
-      gpu_available: false,
-    };
+    if (this.provider) {
+      return {
+        status: this.isHealthy ? 'healthy' : 'unavailable',
+        model: this.provider.providerName,
+        dimension: 0,
+        device: 'cached',
+        gpu_available: false,
+      };
+    }
+
+    return this.checkHealth();
   }
 
   /**
@@ -103,12 +117,10 @@ class EmbeddingClient {
    * Generate embedding for a single text
    */
   async embed(text: string, instruction?: string): Promise<number[]> {
-    const request: EmbedRequest = { text, instruction };
-
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
       try {
-        const response = await this.client.post<EmbedResponse>('/embed', request);
-        return response.data.embedding;
+        const provider = await this.ensureInitialized();
+        return await provider.embed(text, instruction);
       } catch (error) {
         const isLastAttempt = attempt === MAX_RETRIES;
         this.handleError(error, 'embed', isLastAttempt);
@@ -130,31 +142,10 @@ class EmbeddingClient {
       return [];
     }
 
-    // Split into chunks of 100 if needed
-    const maxBatchSize = 100;
-    if (texts.length > maxBatchSize) {
-      const results: number[][] = [];
-      for (let i = 0; i < texts.length; i += maxBatchSize) {
-        const chunk = texts.slice(i, i + maxBatchSize);
-        const chunkEmbeddings = await this.embedBatchInternal(chunk, instruction);
-        results.push(...chunkEmbeddings);
-      }
-      return results;
-    }
-
-    return this.embedBatchInternal(texts, instruction);
-  }
-
-  /**
-   * Internal batch embedding method
-   */
-  private async embedBatchInternal(texts: string[], instruction?: string): Promise<number[][]> {
-    const request: EmbedBatchRequest = { texts, instruction };
-
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
       try {
-        const response = await this.client.post<EmbedBatchResponse>('/embed/batch', request);
-        return response.data.embeddings;
+        const provider = await this.ensureInitialized();
+        return await provider.embedBatch(texts, instruction);
       } catch (error) {
         const isLastAttempt = attempt === MAX_RETRIES;
         this.handleError(error, 'embedBatch', isLastAttempt);
@@ -172,16 +163,8 @@ class EmbeddingClient {
    * Compute similarity between two texts
    */
   async computeSimilarity(text1: string, text2: string): Promise<number> {
-    try {
-      const response = await this.client.post<{ similarity: number }>('/similarity', {
-        text1,
-        text2,
-      });
-      return response.data.similarity;
-    } catch (error) {
-      this.handleError(error, 'computeSimilarity', true);
-      throw error;
-    }
+    const [emb1, emb2] = await this.embedBatch([text1, text2]);
+    return this.cosineSimilarity(emb1, emb2);
   }
 
   /**
@@ -214,22 +197,10 @@ class EmbeddingClient {
    * Handle and log errors
    */
   private handleError(error: unknown, operation: string, shouldThrow: boolean): void {
-    if (axios.isAxiosError(error)) {
-      const axiosError = error as AxiosError;
-      const status = axiosError.response?.status;
-      const message = axiosError.message;
-
-      if (status === 503) {
-        logger.warn(`Embedding service temporarily unavailable during ${operation}`);
-      } else if (axiosError.code === 'ECONNREFUSED') {
-        logger.error(`Embedding service not running (${operation})`);
-        this.isHealthy = false;
-      } else {
-        logger.error(`Embedding service error during ${operation}: ${message}`);
-      }
-
+    if (error instanceof Error) {
+      logger.error(`Embedding error during ${operation}: ${error.message}`);
       if (shouldThrow) {
-        throw new Error(`Embedding service error: ${message}`);
+        throw new Error(`Embedding service error: ${error.message}`);
       }
     } else {
       logger.error(`Unexpected error during ${operation}:`, error);

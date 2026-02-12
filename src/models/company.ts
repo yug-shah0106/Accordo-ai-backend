@@ -8,9 +8,20 @@ import {
   ModelStatic,
 } from 'sequelize';
 
-const natureEnum = ['Domestic', 'Interational'] as const;
+const natureEnum = ['Domestic', 'Interational', 'International'] as const;
 const employeesEnum = ['0-10', '10-100', '100-1000', '1000+'] as const;
-const industryEnum = ['Industry1', 'Industry2'] as const;
+const industryEnum = [
+  'Construction',
+  'Healthcare',
+  'Transportation',
+  'Information Technology',
+  'Oil and Gas',
+  'Defence',
+  'Renewable Energy',
+  'Telecommunication',
+  'Agriculture',
+  'Other',
+] as const;
 const currencyEnum = ['INR', 'USD', 'EUR'] as const;
 
 export type CompanyNature = (typeof natureEnum)[number];
@@ -33,6 +44,7 @@ export class Company extends Model<
   declare numberOfEmployees: EmployeesRange | null;
   declare annualTurnover: string | null;
   declare industryType: IndustryType | null;
+  declare customIndustryType: string | null;
   declare gstNumber: string | null;
   declare gstFileUrl: string | null;
   declare panNumber: string | null;
@@ -66,6 +78,18 @@ export class Company extends Model<
   declare createdAt: CreationOptional<Date>;
   declare updatedAt: CreationOptional<Date>;
 
+  // Association fields populated via include
+  declare Addresses?: {
+    id: number;
+    label: string;
+    address: string;
+    city: string | null;
+    state: string | null;
+    country: string | null;
+    postalCode: string | null;
+    isDefault: boolean;
+  }[];
+
   static associate(models: Record<string, typeof Model>): void {
     this.hasMany(models.User as ModelStatic<Model>, { foreignKey: 'companyId', as: 'Users' });
     this.hasMany(models.User as ModelStatic<Model>, { foreignKey: 'companyId', as: 'Vendor' });
@@ -78,6 +102,10 @@ export class Company extends Model<
     this.hasMany(models.VendorCompany as ModelStatic<Model>, {
       foreignKey: 'companyId',
       as: 'vendorCompany',
+    });
+    this.hasMany(models.Address as ModelStatic<Model>, {
+      foreignKey: 'companyId',
+      as: 'Addresses',
     });
   }
 }
@@ -100,6 +128,7 @@ export default function companyModel(sequelize: Sequelize): typeof Company {
       numberOfEmployees: DataTypes.ENUM(...employeesEnum),
       annualTurnover: DataTypes.STRING,
       industryType: DataTypes.ENUM(...industryEnum),
+      customIndustryType: DataTypes.STRING(100),
       gstNumber: DataTypes.STRING(100),
       gstFileUrl: DataTypes.STRING,
       panNumber: DataTypes.STRING(100),

@@ -8,9 +8,10 @@ import {
   ForeignKey,
   ModelStatic,
   NonAttribute,
+  Op,
 } from 'sequelize';
 
-const currencyEnum = ['USD', 'INR', 'EUR'] as const;
+const currencyEnum = ['USD', 'INR', 'EUR', 'GBP', 'AUD'] as const;
 const statusEnum = [
   'Draft',
   'Created',
@@ -55,7 +56,9 @@ export class Requisition extends Model<
   declare deliveryDate: Date | null;
   declare negotiationClosureDate: Date | null;
   declare typeOfCurrency: RequisitionCurrency | null;
+  declare totalQuantity: number | null;
   declare totalPrice: number | null;
+  declare totalMaxPrice: number | null;
   declare finalPrice: number | null;
   declare status: RequisitionStatus | null;
   declare savingsInPrice: number | null;
@@ -84,6 +87,7 @@ export class Requisition extends Model<
   declare submittedForApprovalAt: Date | null;
   declare submittedByUserId: ForeignKey<number> | null;
   declare createdAt: CreationOptional<Date>;
+  declare archivedAt: Date | null;
 
   // Associations
   declare RequisitionProduct?: NonAttribute<any[]>;
@@ -133,7 +137,9 @@ export default function requisitionModel(sequelize: Sequelize): typeof Requisiti
       deliveryDate: DataTypes.DATE,
       negotiationClosureDate: DataTypes.DATE,
       typeOfCurrency: DataTypes.ENUM(...currencyEnum),
+      totalQuantity: DataTypes.INTEGER,
       totalPrice: DataTypes.DOUBLE,
+      totalMaxPrice: DataTypes.DOUBLE,
       finalPrice: DataTypes.DOUBLE,
       status: DataTypes.ENUM(...statusEnum),
       savingsInPrice: DataTypes.DOUBLE,
@@ -186,6 +192,11 @@ export default function requisitionModel(sequelize: Sequelize): typeof Requisiti
         defaultValue: null,
       },
       createdAt: DataTypes.DATE,
+      archivedAt: {
+        type: DataTypes.DATE,
+        allowNull: true,
+        defaultValue: null,
+      },
     },
     {
       sequelize,
@@ -198,19 +209,32 @@ export default function requisitionModel(sequelize: Sequelize): typeof Requisiti
 
   Requisition.beforeCreate(async (requisition: Requisition) => {
     if (!requisition.rfqId) {
-      const last = await Requisition.findOne({
-        order: [['createdAt', 'DESC']],
+      // Find the maximum RFQ number from all existing requisitions
+      // Fetch all rfqIds and filter/parse in JavaScript for reliability
+      const allRequisitions = await Requisition.findAll({
+        attributes: ['rfqId'],
+        where: {
+          rfqId: {
+            [Op.not]: null,
+          },
+        },
       });
 
-      let next = 1;
-      if (last?.rfqId) {
-        const parsed = parseInt(last.rfqId.replace('RFQ', ''), 10);
-        if (!Number.isNaN(parsed)) {
-          next = parsed + 1;
+      let maxNum = 0;
+      for (const req of allRequisitions) {
+        if (req.rfqId) {
+          // Match standard format RFQ0001, RFQ0002, etc.
+          const match = req.rfqId.match(/^RFQ(\d+)$/);
+          if (match) {
+            const num = parseInt(match[1], 10);
+            if (!Number.isNaN(num) && num > maxNum) {
+              maxNum = num;
+            }
+          }
         }
       }
 
-      requisition.rfqId = `RFQ${String(next).padStart(4, '0')}`;
+      requisition.rfqId = `RFQ${String(maxNum + 1).padStart(4, '0')}`;
     }
   });
 

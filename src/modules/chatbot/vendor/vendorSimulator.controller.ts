@@ -8,6 +8,7 @@ import { Request, Response, NextFunction } from 'express';
 import * as vendorSimulatorService from './vendorSimulator.service.js';
 import { CustomError } from '../../../utils/custom-error.js';
 import logger from '../../../config/logger.js';
+import { getParam } from '../../../types/index.js';
 
 /**
  * Generate next vendor message (autopilot)
@@ -35,7 +36,7 @@ export const generateNextVendorMessage = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const { dealId } = req.params;
+    const dealId = getParam(req.params.dealId);
     const { scenario } = req.body;
 
     if (!scenario) {

@@ -56,13 +56,13 @@ interface VendorCountResult {
 
 interface VendorStatsResult {
   totalVendors: string;
-  activeActiveVendors: string;
+  activeVendors: string;
   totalInactiveVendors: string;
 }
 
 interface VendorCountStats {
   totalVendors: number;
-  activeActiveVendors: number;
+  activeVendors: number;
   totalInactiveVendors: number;
 }
 
@@ -82,8 +82,11 @@ const applyFilters = (rows: VendorWithCounts[], queryOptions: QueryOptions): Ven
 
   if (queryOptions.search) {
     const term = queryOptions.search.toLowerCase();
+    // Multi-field OR search: Vendor ID, Name, Email
     filtered = filtered.filter((row) =>
-      row.Vendor?.name?.toLowerCase().includes(term)
+      String(row.Vendor?.id || '').toLowerCase().includes(term) ||
+      row.Vendor?.name?.toLowerCase().includes(term) ||
+      row.Vendor?.email?.toLowerCase().includes(term)
     );
   }
 
@@ -130,6 +133,109 @@ const repo = {
    */
   createVendor: async (vendorData: VendorData): Promise<User> => {
     return models.User.create({ ...vendorData, userType: 'vendor' } as any);
+  },
+
+  /**
+   * Get all vendors for admin users (across all companies)
+   */
+  getAllVendorsForAdmin: async (queryOptions: QueryOptions = {}): Promise<GetAllVendorCompanyResult> => {
+    const include = {
+      model: models.Vendor,
+      as: 'Vendor',
+      attributes: ['id', 'name', 'email', 'phone', 'companyId', 'roleId', 'status'],
+      include: [
+        {
+          model: models.Company,
+          as: 'Company',
+          attributes: ['id', 'companyName', 'fullAddress', 'pocPhone', 'pocEmail'],
+        },
+      ],
+    };
+
+    // Get ALL vendor companies (no companyId filter)
+    const vendorCompanies = await models.VendorCompany.findAll({
+      include,
+    });
+
+    const countQuery = `
+      SELECT
+        vc.id,
+        vc."vendorId",
+        COUNT(DISTINCT c.id) AS "contractCount",
+        COUNT(DISTINCT CASE WHEN c.status = 'Accepted' THEN c.id END) AS "approvedContractCount"
+      FROM "VendorCompanies" vc
+      LEFT JOIN "User" v ON v.id = vc."vendorId"
+      LEFT JOIN "Contracts" c ON c."vendorId" = v.id
+      GROUP BY vc.id, vc."vendorId";
+    `;
+
+    const vendorCounts = await sequelize.query(countQuery, {
+      type: QueryTypes.SELECT,
+    }) as VendorCountResult[];
+
+    const countMap: Record<number, { contractCount: number; approvedContractCount: number }> =
+      vendorCounts.reduce((acc, curr) => {
+        acc[curr.vendorId] = {
+          contractCount: Number.parseInt(curr.contractCount, 10) || 0,
+          approvedContractCount: Number.parseInt(curr.approvedContractCount, 10) || 0,
+        };
+        return acc;
+      }, {} as Record<number, { contractCount: number; approvedContractCount: number }>);
+
+    const rows: VendorWithCounts[] = vendorCompanies.map((item) => {
+      const vendor = (item as any).Vendor;
+      return {
+        id: item.id,
+        vendorId: item.vendorId,
+        Vendor: {
+          id: vendor?.id ?? 0,
+          name: vendor?.name ?? '',
+          email: vendor?.email ?? '',
+          phone: vendor?.phone ?? '',
+          companyId: vendor?.companyId,
+          roleId: vendor?.roleId,
+          status: vendor?.status ?? '',
+          contractCount: countMap[vendor?.id]?.contractCount ?? 0,
+          approvedContractCount: countMap[vendor?.id]?.approvedContractCount ?? 0,
+          Company: vendor?.Company
+            ? {
+                id: vendor.Company.id,
+                companyName: vendor.Company.companyName,
+              }
+            : null,
+        },
+      };
+    });
+
+    const filteredRows = applyFilters(rows, queryOptions);
+    const total = filteredRows.length;
+    const paginatedRows = paginateRows(filteredRows, queryOptions.limit, queryOptions.offset);
+
+    // Get overall stats (all vendors across all companies)
+    const statsQuery = `
+      SELECT
+        COALESCE(COUNT(*), 0) AS "totalVendors",
+        COALESCE(SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END), 0) AS "activeVendors",
+        COALESCE(SUM(CASE WHEN status = 'inactive' THEN 1 ELSE 0 END), 0) AS "totalInactiveVendors"
+      FROM "User"
+      WHERE "userType" = 'vendor';
+    `;
+
+    const [stats] = await sequelize.query(statsQuery, {
+      type: QueryTypes.SELECT,
+    }) as VendorStatsResult[];
+
+    return {
+      response: {
+        rows: paginatedRows,
+        count: total,
+      },
+      vendorCount: {
+        totalVendors: Number.parseInt(stats?.totalVendors, 10) || 0,
+        activeVendors: Number.parseInt(stats?.activeVendors, 10) || 0,
+        totalInactiveVendors: Number.parseInt(stats?.totalInactiveVendors, 10) || 0,
+      },
+    };
   },
 
   /**
@@ -220,7 +326,7 @@ const repo = {
     const statsQuery = `
       SELECT
         COALESCE(COUNT(*), 0) AS "totalVendors",
-        COALESCE(SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END), 0) AS "activeActiveVendors",
+        COALESCE(SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END), 0) AS "activeVendors",
         COALESCE(SUM(CASE WHEN status = 'inactive' THEN 1 ELSE 0 END), 0) AS "totalInactiveVendors"
       FROM "User"
       WHERE "companyId" = :companyId AND "userType" = 'vendor';
@@ -238,7 +344,7 @@ const repo = {
       },
       vendorCount: {
         totalVendors: Number.parseInt(stats?.totalVendors, 10) || 0,
-        activeActiveVendors: Number.parseInt(stats?.activeActiveVendors, 10) || 0,
+        activeVendors: Number.parseInt(stats?.activeVendors, 10) || 0,
         totalInactiveVendors: Number.parseInt(stats?.totalInactiveVendors, 10) || 0,
       },
     };

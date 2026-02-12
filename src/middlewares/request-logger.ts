@@ -63,7 +63,7 @@ export const requestLogger = (
     // Include request details for errors
     if (res.statusCode >= 400) {
       logData.request = {
-        params: req.params,
+        params: req.params as Record<string, string>,
         query: req.query as Record<string, unknown>,
         body: sanitizeRequestBody(req.body as RequestBody),
       };

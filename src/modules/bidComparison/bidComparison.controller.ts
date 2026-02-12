@@ -9,6 +9,7 @@ import {
 } from './bidComparison.service.js';
 import { triggerDeadlineCheck } from './scheduler/deadlineChecker.js';
 import type { SelectionMethod } from './bidComparison.types.js';
+import { getParam, getNumericParam } from '../../types/index.js';
 
 const { Requisition, VendorBid, BidComparison, VendorSelection, VendorNotification, User } = models;
 
@@ -22,8 +23,7 @@ export async function getComparisonStatus(
   next: NextFunction
 ): Promise<void> {
   try {
-    const { requisitionId } = req.params;
-    const reqId = parseInt(requisitionId, 10);
+    const reqId = getNumericParam(req.params.requisitionId);
 
     if (isNaN(reqId)) {
       throw new CustomError('Invalid requisition ID', 400);
@@ -82,8 +82,7 @@ export async function listBids(
   next: NextFunction
 ): Promise<void> {
   try {
-    const { requisitionId } = req.params;
-    const reqId = parseInt(requisitionId, 10);
+    const reqId = getNumericParam(req.params.requisitionId);
 
     if (isNaN(reqId)) {
       throw new CustomError('Invalid requisition ID', 400);
@@ -132,9 +131,8 @@ export async function getTop(
   next: NextFunction
 ): Promise<void> {
   try {
-    const { requisitionId } = req.params;
     const limit = parseInt(req.query.limit as string, 10) || 3;
-    const reqId = parseInt(requisitionId, 10);
+    const reqId = getNumericParam(req.params.requisitionId);
 
     if (isNaN(reqId)) {
       throw new CustomError('Invalid requisition ID', 400);
@@ -161,8 +159,7 @@ export async function downloadPDF(
   next: NextFunction
 ): Promise<void> {
   try {
-    const { requisitionId } = req.params;
-    const reqId = parseInt(requisitionId, 10);
+    const reqId = getNumericParam(req.params.requisitionId);
 
     if (isNaN(reqId)) {
       throw new CustomError('Invalid requisition ID', 400);
@@ -193,8 +190,7 @@ export async function generateComparison(
   next: NextFunction
 ): Promise<void> {
   try {
-    const { requisitionId } = req.params;
-    const reqId = parseInt(requisitionId, 10);
+    const reqId = getNumericParam(req.params.requisitionId);
 
     if (isNaN(reqId)) {
       throw new CustomError('Invalid requisition ID', 400);
@@ -232,9 +228,9 @@ export async function selectVendorHandler(
   next: NextFunction
 ): Promise<void> {
   try {
-    const { requisitionId, bidId } = req.params;
+    const bidId = getParam(req.params.bidId);
     const { reason, method } = req.body;
-    const reqId = parseInt(requisitionId, 10);
+    const reqId = getNumericParam(req.params.requisitionId);
 
     if (isNaN(reqId)) {
       throw new CustomError('Invalid requisition ID', 400);
@@ -283,8 +279,7 @@ export async function getSelectionDetails(
   next: NextFunction
 ): Promise<void> {
   try {
-    const { requisitionId } = req.params;
-    const reqId = parseInt(requisitionId, 10);
+    const reqId = getNumericParam(req.params.requisitionId);
 
     if (isNaN(reqId)) {
       throw new CustomError('Invalid requisition ID', 400);

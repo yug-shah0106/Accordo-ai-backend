@@ -55,6 +55,14 @@ export const createContractService = async (
     // Remove non-model fields from contractData
     const { skipEmail: _, skipChatbot: __, ...cleanContractData } = contractData as any;
 
+    // Ensure IDs are numbers (frontend may send strings)
+    if (cleanContractData.vendorId) {
+      cleanContractData.vendorId = parseInt(String(cleanContractData.vendorId), 10);
+    }
+    if (cleanContractData.requisitionId) {
+      cleanContractData.requisitionId = parseInt(String(cleanContractData.requisitionId), 10);
+    }
+
     // Fetch vendor details
     const vendor = await models.User.findByPk(cleanContractData.vendorId);
     if (!vendor) {
@@ -97,12 +105,38 @@ export const createContractService = async (
 
     // Create contract with chatbot deal ID
     const uniqueToken = crypto.randomBytes(16).toString('hex');
-    const contract = await repo.createContract({
-      ...cleanContractData,
-      status: 'Created',
-      uniqueToken,
-      chatbotDealId: dealId,
-    });
+    let contract: Contract;
+
+    try {
+      contract = await repo.createContract({
+        ...cleanContractData,
+        status: 'Created',
+        uniqueToken,
+        chatbotDealId: dealId,
+      });
+    } catch (createError) {
+      // Check if this is a sequence sync error (id must be unique)
+      if (
+        (createError as any).name === 'SequelizeUniqueConstraintError' &&
+        (createError as any).errors?.some((e: any) => e.path === 'id')
+      ) {
+        logger.warn('Contract sequence out of sync, attempting to fix...');
+
+        // Reset the sequence and retry once
+        await repo.resetContractSequence();
+
+        contract = await repo.createContract({
+          ...cleanContractData,
+          status: 'Created',
+          uniqueToken,
+          chatbotDealId: dealId,
+        });
+
+        logger.info('Contract created successfully after sequence reset');
+      } else {
+        throw createError;
+      }
+    }
 
     // Send email notification to vendor (unless skipped)
     if (!skipEmail && vendor.email) {
@@ -127,6 +161,13 @@ export const createContractService = async (
     if (error instanceof CustomError) {
       throw error;
     }
+    // Log the actual error for debugging
+    logger.error('Contract creation failed with error:', {
+      errorName: (error as any).name,
+      errorMessage: (error as Error).message,
+      errorStack: (error as Error).stack,
+      errors: (error as any).errors?.map((e: any) => ({ message: e.message, path: e.path, value: e.value })),
+    });
     throw new CustomError((error as Error).message || String(error), 400);
   }
 };

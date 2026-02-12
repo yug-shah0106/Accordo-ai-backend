@@ -14,6 +14,7 @@ const storage = multer.diskStorage({
 });
 
 const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.svg'];
+const documentExtensions = ['.pdf', '.jpg', '.jpeg', '.png', '.gif', '.svg'];
 
 const fileFilter = (
   _req: Request,
@@ -27,4 +28,18 @@ const fileFilter = (
   }
 };
 
+// File filter for documents (images + PDF)
+const documentFileFilter = (
+  _req: Request,
+  file: Express.Multer.File,
+  cb: FileFilterCallback
+): void => {
+  if (!documentExtensions.includes(path.extname(file.originalname).toLowerCase())) {
+    cb(new Error('You can upload only images or PDF files!'));
+  } else {
+    cb(null, true);
+  }
+};
+
 export const upload = multer({ storage, fileFilter });
+export const uploadDocument = multer({ storage, fileFilter: documentFileFilter });

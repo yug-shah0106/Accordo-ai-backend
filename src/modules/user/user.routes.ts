@@ -8,6 +8,7 @@ import {
   updateProfile,
   getAllUsers,
   getUser,
+  deleteUser,
 } from "./user.controller.js";
 import { authMiddleware, checkPermission } from "../../middlewares/auth.middleware.js";
 import { upload } from "../../middlewares/upload.middleware.js";
@@ -90,6 +91,17 @@ userRouter.get(
   authMiddleware,
   (req: Request, res: Response, next: NextFunction) => checkPermission(req, res, next, moduleId, 1),
   getUserRolePermission
+);
+
+/**
+ * Delete a user
+ * Requires: Authentication + Delete permission (level 4)
+ */
+userRouter.delete(
+  "/delete/:userid",
+  authMiddleware,
+  (req: Request, res: Response, next: NextFunction) => checkPermission(req, res, next, moduleId, 4),
+  deleteUser
 );
 
 export default userRouter;

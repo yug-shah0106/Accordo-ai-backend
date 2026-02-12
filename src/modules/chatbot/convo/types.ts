@@ -52,13 +52,30 @@ export type ConversationIntent =
 /**
  * Offer structure (from engine/types.ts)
  * Using snake_case to match engine types
+ * UPDATED January 2026: payment_terms now accepts any "Net X" format (X = 1-120 days)
+ * UPDATED February 2026: Changed from unit_price to total_price
+ * UPDATED February 2026: Added currency detection and conversion meta fields
  */
 export interface Offer {
-  unit_price: number | null;
-  payment_terms: 'Net 30' | 'Net 60' | 'Net 90' | null;
+  total_price: number | null;
+  payment_terms: string | null;  // Any "Net X" format (e.g., "Net 45", "Net 30", etc.)
+  payment_terms_days?: number | null;  // Days value for utility calculations
+  delivery_date?: string | null;  // ISO date string (YYYY-MM-DD)
+  delivery_days?: number | null;  // Days from today
   meta?: {
     raw_terms_days?: number;
     non_standard_terms?: boolean;
+    // Delivery meta
+    delivery_source?: 'explicit_date' | 'relative_days' | 'timeframe' | 'asap';
+    raw_delivery_text?: string;
+    // Price parsing meta (February 2026)
+    raw_price_text?: string;
+    raw_terms_text?: string;
+    // Currency meta (February 2026)
+    currency_detected?: 'USD' | 'INR' | 'EUR' | 'GBP' | 'AUD';
+    currency_converted?: boolean;
+    original_currency?: 'USD' | 'INR' | 'EUR' | 'GBP' | 'AUD';
+    original_price?: number;
   };
 }
 

@@ -5,6 +5,7 @@ import {
   getCompany,
   getAllCompany,
   deleteCompany,
+  getAddresses,
 } from './company.controller.js';
 import { authMiddleware } from '../../middlewares/auth.middleware.js';
 import { upload } from '../../middlewares/upload.middleware.js';
@@ -25,5 +26,8 @@ companyRouter.put(
 companyRouter.get('/get-all', authMiddleware, getAllCompany);
 companyRouter.get('/get/:companyid', authMiddleware, getCompany);
 companyRouter.delete('/delete/:companyid', authMiddleware, deleteCompany);
+
+// Get delivery addresses for deal creation wizard
+companyRouter.get('/addresses', authMiddleware, getAddresses);
 
 export default companyRouter;

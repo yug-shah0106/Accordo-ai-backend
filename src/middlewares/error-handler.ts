@@ -137,7 +137,7 @@ export const errorHandler = (
       method: req.method,
       url: req.originalUrl,
       path: req.path,
-      params: req.params,
+      params: req.params as Record<string, string>,
       query: req.query as Record<string, unknown>,
       body: sanitizeRequestBody(req.body as RequestBody),
       headers: {

@@ -10,6 +10,7 @@ import {
   refreshTokenService,
   logoutService,
 } from "./auth.service.js";
+import { getParam } from '../../types/index.js';
 
 /**
  * Request with context (added by auth middleware)
@@ -31,7 +32,7 @@ interface RequestWithContext extends Request {
  */
 export const resetPassword = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
-    const { userid } = req.params;
+    const userid = getParam(req.params.userid);
     const { password } = req.body;
     const data = await resetPasswordService(userid, password);
     res.status(201).json({ message: "Password updated successfully", data });
@@ -48,7 +49,7 @@ export const resetPassword = async (req: Request, res: Response, next: NextFunct
  */
 export const resetPasswordAuto = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
-    const { userid } = req.params;
+    const userid = getParam(req.params.userid);
     const data = await resetPasswordAutoService(userid);
     res.status(201).json({ message: "Password updated successfully", data });
   } catch (error) {
