@@ -98,11 +98,18 @@ export const createDealWithConfigSchema = Joi.object({
   // Contract & SLA
   contractSla: Joi.object({
     warrantyPeriod: Joi.string()
-      .valid('6_MONTHS', '1_YEAR', '2_YEARS', '3_YEARS')
+      .valid('0_MONTHS', '6_MONTHS', '1_YEAR', '2_YEARS', '3_YEARS', '5_YEARS', 'CUSTOM')
       .required()
       .messages({
         'any.required': 'Warranty period is required',
       }),
+    customWarrantyMonths: Joi.when('warrantyPeriod', {
+      is: 'CUSTOM',
+      then: Joi.number().integer().min(0).max(120).required().messages({
+        'any.required': 'Custom warranty months is required when warranty period is CUSTOM',
+      }),
+      otherwise: Joi.any().allow(null).optional(),
+    }),
     defectLiabilityMonths: Joi.number().integer().positive().allow(null).optional(),
     lateDeliveryPenaltyPerDay: Joi.number().min(0.5).max(2).required().messages({
       'any.required': 'Late delivery penalty is required',

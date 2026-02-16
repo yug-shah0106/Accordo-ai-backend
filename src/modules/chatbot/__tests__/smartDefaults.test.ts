@@ -9,7 +9,7 @@ import {
   createMockRequisitionProduct,
   createMockRole,
   createMockProduct,
-} from '../../../tests/factories.js';
+} from '../../../../tests/factories.js';
 
 describe('Smart Defaults Service - Date Extraction', () => {
   let company: any;

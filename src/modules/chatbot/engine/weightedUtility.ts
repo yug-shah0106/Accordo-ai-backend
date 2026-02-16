@@ -20,10 +20,16 @@ import type {
   WeightedUtilityResult,
   WeightedNegotiationConfig,
   ParsedVendorOffer,
+  WizardConfig,
+  ResolvedNegotiationConfig,
+  ExtendedOffer,
 } from "./types.js";
 import {
   DEFAULT_THRESHOLDS,
   getRecommendationFromUtility,
+  ACCORDO_DEFAULTS,
+  DEFAULT_WEIGHTS,
+  parseWarrantyPeriodToMonths,
 } from "./types.js";
 import {
   calculateParameterUtility,
@@ -521,4 +527,621 @@ function formatValue(value: number | string | boolean | null): string {
     }
   }
   return String(value);
+}
+
+// ============================================
+// PACTUM-STYLE CONFIG RESOLUTION (Feb 2026)
+// ============================================
+
+/**
+ * Resolve negotiation configuration from wizard config
+ * Applies user-provided values with fallback to Accordo defaults
+ *
+ * Priority system:
+ * 1. User-provided value (from wizard) takes priority
+ * 2. Accordo default value is used when user hasn't modified
+ *
+ * This ensures the negotiation engine uses appropriate values
+ * whether the user customized them or not.
+ */
+export function resolveNegotiationConfig(
+  wizardConfig: WizardConfig | null | undefined,
+  legacyConfig?: {
+    total_price?: { target?: number; max_acceptable?: number; anchor?: number };
+    accept_threshold?: number;
+    escalate_threshold?: number;
+    walkaway_threshold?: number;
+    max_rounds?: number;
+    priority?: 'HIGH' | 'MEDIUM' | 'LOW';
+  }
+): ResolvedNegotiationConfig {
+  const sources: Record<string, 'user' | 'default' | 'calculated'> = {};
+
+  // Helper to track source
+  const getValueWithSource = <T>(
+    key: string,
+    userValue: T | null | undefined,
+    defaultValue: T
+  ): T => {
+    if (userValue !== null && userValue !== undefined) {
+      sources[key] = 'user';
+      return userValue;
+    }
+    sources[key] = 'default';
+    return defaultValue;
+  };
+
+  // ============================================
+  // Resolve VALUES from wizard or legacy config
+  // ============================================
+
+  // Price values
+  let targetPrice: number;
+  let maxAcceptablePrice: number;
+
+  if (wizardConfig?.priceQuantity?.targetUnitPrice != null) {
+    targetPrice = wizardConfig.priceQuantity.targetUnitPrice;
+    sources['targetPrice'] = 'user';
+  } else if (legacyConfig?.total_price?.target != null) {
+    targetPrice = legacyConfig.total_price.target;
+    sources['targetPrice'] = 'user';
+  } else {
+    targetPrice = 1000; // Fallback default
+    sources['targetPrice'] = 'default';
+  }
+
+  if (wizardConfig?.priceQuantity?.maxAcceptablePrice != null) {
+    maxAcceptablePrice = wizardConfig.priceQuantity.maxAcceptablePrice;
+    sources['maxAcceptablePrice'] = 'user';
+  } else if (legacyConfig?.total_price?.max_acceptable != null) {
+    maxAcceptablePrice = legacyConfig.total_price.max_acceptable;
+    sources['maxAcceptablePrice'] = 'user';
+  } else {
+    maxAcceptablePrice = targetPrice * 1.25; // 25% above target
+    sources['maxAcceptablePrice'] = 'calculated';
+  }
+
+  // Volume discount
+  const volumeDiscountExpectation = getValueWithSource(
+    'volumeDiscountExpectation',
+    wizardConfig?.priceQuantity?.volumeDiscountExpectation,
+    ACCORDO_DEFAULTS.volumeDiscountExpectation
+  );
+
+  // Payment terms
+  const paymentTermsMinDays = getValueWithSource(
+    'paymentTermsMinDays',
+    wizardConfig?.paymentTerms?.minDays,
+    ACCORDO_DEFAULTS.paymentTermsMinDays
+  );
+
+  const paymentTermsMaxDays = getValueWithSource(
+    'paymentTermsMaxDays',
+    wizardConfig?.paymentTerms?.maxDays,
+    ACCORDO_DEFAULTS.paymentTermsMaxDays
+  );
+
+  const advancePaymentLimit = getValueWithSource(
+    'advancePaymentLimit',
+    wizardConfig?.paymentTerms?.advancePaymentLimit,
+    ACCORDO_DEFAULTS.advancePaymentLimit
+  );
+
+  // Delivery dates
+  let deliveryDate: Date | null = null;
+  if (wizardConfig?.delivery?.requiredDate) {
+    deliveryDate = new Date(wizardConfig.delivery.requiredDate);
+    sources['deliveryDate'] = 'user';
+  } else {
+    sources['deliveryDate'] = 'default';
+  }
+
+  let preferredDeliveryDate: Date | null = null;
+  if (wizardConfig?.delivery?.preferredDate) {
+    preferredDeliveryDate = new Date(wizardConfig.delivery.preferredDate);
+    sources['preferredDeliveryDate'] = 'user';
+  } else {
+    sources['preferredDeliveryDate'] = 'default';
+  }
+
+  const partialDeliveryAllowed = getValueWithSource(
+    'partialDeliveryAllowed',
+    wizardConfig?.delivery?.partialDelivery?.allowed,
+    false
+  );
+
+  // Contract SLA
+  const warrantyPeriodMonths = wizardConfig?.contractSla?.warrantyPeriod
+    ? parseWarrantyPeriodToMonths(wizardConfig.contractSla.warrantyPeriod)
+    : ACCORDO_DEFAULTS.warrantyPeriodMonths;
+  sources['warrantyPeriodMonths'] = wizardConfig?.contractSla?.warrantyPeriod ? 'user' : 'default';
+
+  // Use custom months if CUSTOM period is selected
+  if (wizardConfig?.contractSla?.warrantyPeriod === 'CUSTOM' && wizardConfig.contractSla.customWarrantyMonths) {
+    sources['warrantyPeriodMonths'] = 'user';
+  }
+
+  const lateDeliveryPenaltyPerDay = getValueWithSource(
+    'lateDeliveryPenaltyPerDay',
+    wizardConfig?.contractSla?.lateDeliveryPenaltyPerDay,
+    ACCORDO_DEFAULTS.lateDeliveryPenaltyPerDay
+  );
+
+  const qualityStandards = getValueWithSource(
+    'qualityStandards',
+    wizardConfig?.contractSla?.qualityStandards,
+    ACCORDO_DEFAULTS.qualityStandards
+  );
+
+  // Negotiation control
+  let maxRounds = getValueWithSource(
+    'maxRounds',
+    wizardConfig?.negotiationControl?.maxRounds,
+    legacyConfig?.max_rounds ?? ACCORDO_DEFAULTS.maxRounds
+  );
+
+  let walkawayThreshold = getValueWithSource(
+    'walkawayThreshold',
+    wizardConfig?.negotiationControl?.walkawayThreshold,
+    legacyConfig?.walkaway_threshold ? legacyConfig.walkaway_threshold * 100 : ACCORDO_DEFAULTS.walkawayThreshold
+  );
+
+  const priority = getValueWithSource(
+    'priority',
+    wizardConfig?.priority ?? legacyConfig?.priority,
+    ACCORDO_DEFAULTS.priority
+  );
+
+  // ============================================
+  // Resolve WEIGHTS from wizard or defaults
+  // ============================================
+
+  let weights: Record<string, number>;
+  let weightsAreUserModified: boolean;
+
+  if (wizardConfig?.aiSuggested === false && wizardConfig.parameterWeights) {
+    // User modified weights
+    weights = { ...wizardConfig.parameterWeights };
+    weightsAreUserModified = true;
+  } else if (wizardConfig?.parameterWeights) {
+    // AI-suggested weights from wizard
+    weights = { ...wizardConfig.parameterWeights };
+    weightsAreUserModified = false;
+  } else {
+    // Use Accordo defaults
+    weights = { ...DEFAULT_WEIGHTS };
+    weightsAreUserModified = false;
+  }
+
+  // Ensure all default weights exist (for backwards compatibility)
+  for (const [key, value] of Object.entries(DEFAULT_WEIGHTS)) {
+    if (!(key in weights)) {
+      weights[key] = value;
+    }
+  }
+
+  // ============================================
+  // Calculate derived thresholds based on priority
+  // ============================================
+
+  let acceptThreshold: number;
+  let escalateThreshold: number;
+  let walkAwayThreshold: number;
+
+  if (legacyConfig?.accept_threshold != null) {
+    acceptThreshold = legacyConfig.accept_threshold;
+    escalateThreshold = legacyConfig.escalate_threshold ?? 0.50;
+    walkAwayThreshold = legacyConfig.walkaway_threshold ?? 0.30;
+  } else {
+    // Priority-based thresholds
+    switch (priority) {
+      case 'HIGH':
+        // Maximize Savings: Stricter thresholds
+        acceptThreshold = 0.75;
+        escalateThreshold = 0.55;
+        walkAwayThreshold = 0.35;
+        break;
+      case 'LOW':
+        // Quick Close: Relaxed thresholds
+        acceptThreshold = 0.65;
+        escalateThreshold = 0.45;
+        walkAwayThreshold = 0.25;
+        break;
+      case 'MEDIUM':
+      default:
+        // Fair Deal: Balanced thresholds
+        acceptThreshold = 0.70;
+        escalateThreshold = 0.50;
+        walkAwayThreshold = 0.30;
+    }
+  }
+
+  // Override with user-specified walkaway if provided
+  if (wizardConfig?.negotiationControl?.walkawayThreshold != null) {
+    walkAwayThreshold = wizardConfig.negotiationControl.walkawayThreshold / 100;
+  }
+
+  // ============================================
+  // Calculate price-related values
+  // ============================================
+
+  const anchorPrice = legacyConfig?.total_price?.anchor ?? targetPrice * 0.85;
+  sources['anchorPrice'] = legacyConfig?.total_price?.anchor != null ? 'user' : 'calculated';
+
+  const priceRange = maxAcceptablePrice - targetPrice;
+  sources['priceRange'] = 'calculated';
+
+  const concessionStep = priceRange / (maxRounds > 0 ? maxRounds : 10);
+  sources['concessionStep'] = 'calculated';
+
+  return {
+    // Values
+    targetPrice,
+    maxAcceptablePrice,
+    volumeDiscountExpectation,
+    paymentTermsMinDays,
+    paymentTermsMaxDays,
+    advancePaymentLimit,
+    deliveryDate,
+    preferredDeliveryDate,
+    partialDeliveryAllowed,
+    warrantyPeriodMonths,
+    lateDeliveryPenaltyPerDay,
+    qualityStandards,
+    maxRounds,
+    walkawayThreshold,
+    priority,
+
+    // Weights
+    weights,
+    weightsAreUserModified,
+
+    // Thresholds
+    acceptThreshold,
+    escalateThreshold,
+    walkAwayThreshold,
+
+    // Calculated
+    anchorPrice,
+    priceRange,
+    concessionStep,
+
+    // Source tracking
+    sources,
+  };
+}
+
+/**
+ * Calculate weighted utility using resolved configuration
+ * This is the main entry point for the Pactum-style utility calculation
+ */
+export function calculateWeightedUtilityFromResolved(
+  vendorOffer: ExtendedOffer,
+  resolvedConfig: ResolvedNegotiationConfig
+): WeightedUtilityResult {
+  const parameterUtilities: Record<string, ParameterUtilityResult> = {};
+  let totalUtility = 0;
+  let totalWeight = 0;
+
+  const { weights } = resolvedConfig;
+
+  // ============================================
+  // Price Parameters
+  // ============================================
+
+  // Target Price Utility
+  if (weights.targetUnitPrice > 0 && vendorOffer.total_price != null) {
+    const priceUtility = calculatePriceUtility(
+      vendorOffer.total_price,
+      resolvedConfig.targetPrice,
+      resolvedConfig.maxAcceptablePrice
+    );
+    const contribution = priceUtility * (weights.targetUnitPrice / 100);
+    parameterUtilities['targetUnitPrice'] = {
+      parameterId: 'targetUnitPrice',
+      parameterName: 'Target Price',
+      utility: priceUtility,
+      weight: weights.targetUnitPrice,
+      contribution,
+      currentValue: vendorOffer.total_price,
+      targetValue: resolvedConfig.targetPrice,
+      maxValue: resolvedConfig.maxAcceptablePrice,
+      status: getStatusFromScore(priceUtility),
+      color: getColorFromScore(priceUtility),
+    };
+    totalUtility += contribution;
+    totalWeight += weights.targetUnitPrice;
+  }
+
+  // Max Price Utility (penalty for exceeding)
+  if (weights.maxAcceptablePrice > 0 && vendorOffer.total_price != null) {
+    const maxPriceUtility = vendorOffer.total_price <= resolvedConfig.maxAcceptablePrice ? 1 : 0;
+    const contribution = maxPriceUtility * (weights.maxAcceptablePrice / 100);
+    parameterUtilities['maxAcceptablePrice'] = {
+      parameterId: 'maxAcceptablePrice',
+      parameterName: 'Max Acceptable Price',
+      utility: maxPriceUtility,
+      weight: weights.maxAcceptablePrice,
+      contribution,
+      currentValue: vendorOffer.total_price,
+      targetValue: resolvedConfig.maxAcceptablePrice,
+      status: getStatusFromScore(maxPriceUtility),
+      color: getColorFromScore(maxPriceUtility),
+    };
+    totalUtility += contribution;
+    totalWeight += weights.maxAcceptablePrice;
+  }
+
+  // Volume Discount Utility
+  if (weights.volumeDiscountExpectation > 0 && vendorOffer.volume_discount != null) {
+    const targetDiscount = resolvedConfig.volumeDiscountExpectation ?? 10;
+    const discountUtility = Math.min(1, vendorOffer.volume_discount / targetDiscount);
+    const contribution = discountUtility * (weights.volumeDiscountExpectation / 100);
+    parameterUtilities['volumeDiscountExpectation'] = {
+      parameterId: 'volumeDiscountExpectation',
+      parameterName: 'Volume Discount',
+      utility: discountUtility,
+      weight: weights.volumeDiscountExpectation,
+      contribution,
+      currentValue: vendorOffer.volume_discount,
+      targetValue: targetDiscount,
+      status: getStatusFromScore(discountUtility),
+      color: getColorFromScore(discountUtility),
+    };
+    totalUtility += contribution;
+    totalWeight += weights.volumeDiscountExpectation;
+  }
+
+  // ============================================
+  // Payment Terms Parameters
+  // ============================================
+
+  // Payment Terms Range Utility
+  if (weights.paymentTermsRange > 0 && vendorOffer.payment_terms_days != null) {
+    const termsUtility = calculatePaymentTermsUtility(
+      vendorOffer.payment_terms_days,
+      resolvedConfig.paymentTermsMinDays,
+      resolvedConfig.paymentTermsMaxDays
+    );
+    const contribution = termsUtility * (weights.paymentTermsRange / 100);
+    parameterUtilities['paymentTermsRange'] = {
+      parameterId: 'paymentTermsRange',
+      parameterName: 'Payment Terms',
+      utility: termsUtility,
+      weight: weights.paymentTermsRange,
+      contribution,
+      currentValue: vendorOffer.payment_terms_days,
+      targetValue: resolvedConfig.paymentTermsMaxDays,
+      status: getStatusFromScore(termsUtility),
+      color: getColorFromScore(termsUtility),
+    };
+    totalUtility += contribution;
+    totalWeight += weights.paymentTermsRange;
+  }
+
+  // Advance Payment Utility (lower is better)
+  if (weights.advancePaymentLimit > 0 && vendorOffer.advance_payment_percent != null) {
+    const maxAdvance = resolvedConfig.advancePaymentLimit ?? 50;
+    const advanceUtility = vendorOffer.advance_payment_percent <= maxAdvance
+      ? 1 - (vendorOffer.advance_payment_percent / maxAdvance)
+      : 0;
+    const contribution = advanceUtility * (weights.advancePaymentLimit / 100);
+    parameterUtilities['advancePaymentLimit'] = {
+      parameterId: 'advancePaymentLimit',
+      parameterName: 'Advance Payment',
+      utility: advanceUtility,
+      weight: weights.advancePaymentLimit,
+      contribution,
+      currentValue: vendorOffer.advance_payment_percent,
+      targetValue: 0,
+      maxValue: maxAdvance,
+      status: getStatusFromScore(advanceUtility),
+      color: getColorFromScore(advanceUtility),
+    };
+    totalUtility += contribution;
+    totalWeight += weights.advancePaymentLimit;
+  }
+
+  // ============================================
+  // Delivery Parameters
+  // ============================================
+
+  // Delivery Date Utility
+  if (weights.deliveryDate > 0 && vendorOffer.delivery_days != null && resolvedConfig.deliveryDate) {
+    const targetDays = Math.ceil(
+      (resolvedConfig.deliveryDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24)
+    );
+    const deliveryUtility = vendorOffer.delivery_days <= targetDays
+      ? 1
+      : Math.max(0, 1 - (vendorOffer.delivery_days - targetDays) / 30);
+    const contribution = deliveryUtility * (weights.deliveryDate / 100);
+    parameterUtilities['deliveryDate'] = {
+      parameterId: 'deliveryDate',
+      parameterName: 'Delivery Date',
+      utility: deliveryUtility,
+      weight: weights.deliveryDate,
+      contribution,
+      currentValue: vendorOffer.delivery_days,
+      targetValue: targetDays,
+      status: getStatusFromScore(deliveryUtility),
+      color: getColorFromScore(deliveryUtility),
+    };
+    totalUtility += contribution;
+    totalWeight += weights.deliveryDate;
+  }
+
+  // Partial Delivery Utility
+  if (weights.partialDelivery > 0 && vendorOffer.partial_delivery_allowed != null) {
+    const partialUtility =
+      vendorOffer.partial_delivery_allowed === resolvedConfig.partialDeliveryAllowed ? 1 : 0.5;
+    const contribution = partialUtility * (weights.partialDelivery / 100);
+    parameterUtilities['partialDelivery'] = {
+      parameterId: 'partialDelivery',
+      parameterName: 'Partial Delivery',
+      utility: partialUtility,
+      weight: weights.partialDelivery,
+      contribution,
+      currentValue: vendorOffer.partial_delivery_allowed,
+      targetValue: resolvedConfig.partialDeliveryAllowed,
+      status: getStatusFromScore(partialUtility),
+      color: getColorFromScore(partialUtility),
+    };
+    totalUtility += contribution;
+    totalWeight += weights.partialDelivery;
+  }
+
+  // ============================================
+  // Contract Parameters
+  // ============================================
+
+  // Warranty Period Utility (higher is better)
+  if (weights.warrantyPeriod > 0 && vendorOffer.warranty_months != null) {
+    const warrantyUtility = Math.min(
+      1,
+      vendorOffer.warranty_months / resolvedConfig.warrantyPeriodMonths
+    );
+    const contribution = warrantyUtility * (weights.warrantyPeriod / 100);
+    parameterUtilities['warrantyPeriod'] = {
+      parameterId: 'warrantyPeriod',
+      parameterName: 'Warranty Period',
+      utility: warrantyUtility,
+      weight: weights.warrantyPeriod,
+      contribution,
+      currentValue: vendorOffer.warranty_months,
+      targetValue: resolvedConfig.warrantyPeriodMonths,
+      status: getStatusFromScore(warrantyUtility),
+      color: getColorFromScore(warrantyUtility),
+    };
+    totalUtility += contribution;
+    totalWeight += weights.warrantyPeriod;
+  }
+
+  // Late Delivery Penalty Utility (higher penalty is better for buyer)
+  if (weights.lateDeliveryPenalty > 0 && vendorOffer.late_penalty_percent != null) {
+    const penaltyUtility = Math.min(
+      1,
+      vendorOffer.late_penalty_percent / resolvedConfig.lateDeliveryPenaltyPerDay
+    );
+    const contribution = penaltyUtility * (weights.lateDeliveryPenalty / 100);
+    parameterUtilities['lateDeliveryPenalty'] = {
+      parameterId: 'lateDeliveryPenalty',
+      parameterName: 'Late Delivery Penalty',
+      utility: penaltyUtility,
+      weight: weights.lateDeliveryPenalty,
+      contribution,
+      currentValue: vendorOffer.late_penalty_percent,
+      targetValue: resolvedConfig.lateDeliveryPenaltyPerDay,
+      status: getStatusFromScore(penaltyUtility),
+      color: getColorFromScore(penaltyUtility),
+    };
+    totalUtility += contribution;
+    totalWeight += weights.lateDeliveryPenalty;
+  }
+
+  // Quality Standards Utility
+  if (weights.qualityStandards > 0 && vendorOffer.quality_certifications) {
+    const requiredCerts = resolvedConfig.qualityStandards ?? [];
+    const offeredCerts = vendorOffer.quality_certifications ?? [];
+    const matchCount = requiredCerts.length > 0 && offeredCerts.length > 0
+      ? requiredCerts.filter((c) =>
+          offeredCerts.some((o) => o.toLowerCase().includes(c.toLowerCase()))
+        ).length
+      : 0;
+    const qualityUtility = requiredCerts.length > 0 ? matchCount / requiredCerts.length : 1;
+    const contribution = qualityUtility * (weights.qualityStandards / 100);
+    parameterUtilities['qualityStandards'] = {
+      parameterId: 'qualityStandards',
+      parameterName: 'Quality Standards',
+      utility: qualityUtility,
+      weight: weights.qualityStandards,
+      contribution,
+      currentValue: offeredCerts.join(', '),
+      targetValue: requiredCerts.join(', '),
+      status: getStatusFromScore(qualityUtility),
+      color: getColorFromScore(qualityUtility),
+    };
+    totalUtility += contribution;
+    totalWeight += weights.qualityStandards;
+  }
+
+  // ============================================
+  // Normalize and finalize
+  // ============================================
+
+  // Normalize if weights don't sum to 100
+  if (totalWeight > 0 && totalWeight !== 100) {
+    totalUtility = totalUtility * (100 / totalWeight);
+  }
+
+  // Clamp to [0, 1]
+  totalUtility = Math.max(0, Math.min(1, totalUtility));
+
+  const thresholds: ThresholdConfig = {
+    accept: resolvedConfig.acceptThreshold,
+    escalate: resolvedConfig.escalateThreshold,
+    walkAway: resolvedConfig.walkAwayThreshold,
+  };
+
+  const { action, reason } = getRecommendationFromUtility(totalUtility, thresholds);
+
+  return {
+    totalUtility,
+    totalUtilityPercent: totalUtility * 100,
+    parameterUtilities,
+    thresholds,
+    recommendation: action,
+    recommendationReason: reason,
+  };
+}
+
+// ============================================
+// Helper Functions for Pactum-Style Utility
+// ============================================
+
+/**
+ * Calculate price utility (lower is better)
+ * Returns 1 when at or below target, 0 when at or above max
+ */
+function calculatePriceUtility(
+  price: number,
+  target: number,
+  maxAcceptable: number
+): number {
+  if (price <= target) return 1;
+  if (price >= maxAcceptable) return 0;
+  return 1 - (price - target) / (maxAcceptable - target);
+}
+
+/**
+ * Calculate payment terms utility (longer is better for buyer)
+ * Returns 1 when at or above max days, 0 when at or below min days
+ */
+function calculatePaymentTermsUtility(
+  days: number,
+  minDays: number,
+  maxDays: number
+): number {
+  if (days >= maxDays) return 1;
+  if (days <= minDays) return 0;
+  return (days - minDays) / (maxDays - minDays);
+}
+
+/**
+ * Get status label from utility score
+ */
+function getStatusFromScore(utility: number): 'excellent' | 'good' | 'warning' | 'critical' {
+  if (utility >= 0.80) return 'excellent';
+  if (utility >= 0.60) return 'good';
+  if (utility >= 0.40) return 'warning';
+  return 'critical';
+}
+
+/**
+ * Get color from utility score
+ */
+function getColorFromScore(utility: number): string {
+  if (utility >= 0.80) return '#22c55e'; // green
+  if (utility >= 0.60) return '#3b82f6'; // blue
+  if (utility >= 0.40) return '#eab308'; // yellow
+  return '#ef4444'; // red
 }

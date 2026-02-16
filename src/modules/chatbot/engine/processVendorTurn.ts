@@ -25,11 +25,12 @@
  */
 
 import { parseOfferRegex } from './parseOffer.js';
-import { decideNextMove } from './decide.js';
-import { computeExplainability, type NegotiationConfig } from './utility.js';
-import type { Offer, Decision, Explainability } from './types.js';
+import { decideNextMove, decideWithWeightedUtility, type WeightedDecision } from './decide.js';
+import { computeExplainability, priceUtility, termsUtility, type NegotiationConfig } from './utility.js';
+import type { Offer, Decision, Explainability, WizardConfig, ExtendedOffer } from './types.js';
 import { sequelize } from '../../../config/database.js';
 import logger from '../../../config/logger.js';
+import * as negotiationLogger from './negotiationLogger.js';
 
 // ============================================================================
 // Import Models
@@ -198,6 +199,13 @@ export async function processVendorTurn(
     }
 
     const config = await loadNegotiationConfig(deal);
+    const currentRound = deal.round + 1; // Increment round
+
+    // ============================================================================
+    // ENHANCED LOGGING: Round Start
+    // ============================================================================
+    negotiationLogger.logRoundStart(dealId, currentRound, config.max_rounds);
+    negotiationLogger.logConfigThresholds(config, config.priority || 'MEDIUM');
 
     // ============================================================================
     // 2. Parse Vendor Offer
@@ -205,6 +213,9 @@ export async function processVendorTurn(
 
     logger.info(`Parsing vendor message: "${vendorMessage}"`);
     const extractedOffer = parseOfferRegex(vendorMessage);
+
+    // ENHANCED LOGGING: Vendor Offer
+    negotiationLogger.logVendorOffer(vendorMessage, extractedOffer);
 
     logger.info(`Extracted offer:`, {
       total_price: extractedOffer.total_price,
@@ -216,10 +227,25 @@ export async function processVendorTurn(
     // 3. Run Decision Engine
     // ============================================================================
 
-    const currentRound = deal.round + 1; // Increment round
     logger.info(`Running decision engine (round ${currentRound})`);
 
+    // Calculate individual utilities for logging
+    const pUtility = extractedOffer.total_price !== null
+      ? priceUtility(config, extractedOffer.total_price)
+      : 0;
+    const tUtility = extractedOffer.payment_terms !== null
+      ? termsUtility(config, extractedOffer.payment_terms)
+      : 0;
+    const totalUtil = pUtility * config.parameters.total_price.weight +
+                      tUtility * config.parameters.payment_terms.weight;
+
+    // ENHANCED LOGGING: Utility Calculation
+    negotiationLogger.logUtilityCalculation(pUtility, tUtility, totalUtil, config);
+
     const decision = decideNextMove(config, extractedOffer, currentRound);
+
+    // ENHANCED LOGGING: Decision
+    negotiationLogger.logDecision(decision, currentRound);
 
     logger.info(`Decision:`, {
       action: decision.action,
@@ -316,6 +342,25 @@ export async function processVendorTurn(
       status: newStatus,
       latestDecisionAction: decision.action,
     });
+
+    // ============================================================================
+    // ENHANCED LOGGING: Round Summary
+    // ============================================================================
+    negotiationLogger.logRoundSummary(
+      newRound,
+      extractedOffer.total_price,
+      decision.counterOffer?.total_price ?? null,
+      decision.utilityScore,
+      decision.action,
+      newStatus
+    );
+
+    // Log final status if deal is complete
+    if (newStatus !== 'NEGOTIATING') {
+      negotiationLogger.logDealStatus(newStatus, decision.reasons[0] || 'Deal concluded');
+    }
+
+    negotiationLogger.logSeparator();
 
     // ============================================================================
     // 8. Commit Transaction

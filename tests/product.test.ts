@@ -11,7 +11,7 @@ import {
   updateProductService,
   deleteProductService,
 } from '../src/modules/product/product.service.js';
-import { createMockProduct, createMockProductNonGst, createMockUser, createMockCompany, createMockRole } from '../src/tests/factories.js';
+import { createMockProduct, createMockProductNonGst, createMockUser, createMockCompany, createMockRole } from './factories.js';
 import models from '../src/models/index.js';
 
 describe('Product Validator', () => {

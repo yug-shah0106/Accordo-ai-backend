@@ -233,6 +233,8 @@ export const getPMResponse = async (
         pmMessage: result.pmMessage,
         decision: result.decision,
         deal: result.deal,
+        meso: result.meso, // MESO options for vendor selection
+        explainability: result.explainability,
       },
     });
   } catch (error) {

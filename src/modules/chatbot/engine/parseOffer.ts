@@ -258,6 +258,20 @@ function parsePriceFromText(text: string): {
   // Try multiple price patterns (order matters - most specific first)
   let priceMatch: RegExpMatchArray | null = null;
 
+  // Pattern 0: "Total:" or "Grand Total:" label — prefer this over individual line items
+  // This handles multi-product vendor messages where individual prices appear before the total
+  const totalLabelPattern = new RegExp(
+    '(?:grand\\s+)?total\\s*:?\\s*(?:[$€£₹]|rs\\.?|inr|usd|eur|gbp|aud)?\\s*(' + REGIONAL_NUMBER_PATTERN + ')',
+    'im'
+  );
+  priceMatch = t.match(totalLabelPattern);
+  if (priceMatch) {
+    const price = parseNumber(priceMatch[1]);
+    if (price !== null && price > 0) {
+      return { price, currency, raw_price_text: priceMatch[0] };
+    }
+  }
+
   // Pattern 1: Currency symbol/code + K/M shorthand (e.g., "$29k", "₹1.5M", "USD 500K")
   const kmPatterns = [
     /(?:[$€£₹]|rs\.?|inr|usd|eur|gbp|aud)\s*([0-9]+(?:[.,][0-9]+)?)\s*([kmKM])/gi,

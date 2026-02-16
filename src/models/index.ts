@@ -32,6 +32,8 @@ import { initMessageEmbeddingModel, MessageEmbedding } from './messageEmbedding.
 import { initDealEmbeddingModel, DealEmbedding } from './dealEmbedding.js';
 import { initNegotiationPatternModel, NegotiationPattern } from './negotiationPattern.js';
 import { initVectorMigrationStatusModel, VectorMigrationStatus } from './vectorMigrationStatus.js';
+import { initMesoRoundModel, MesoRound } from './mesoRound.js';
+import { initVendorNegotiationProfileModel, VendorNegotiationProfile } from './vendorNegotiationProfile.js';
 import vendorBidModel, { VendorBid } from './vendorBid.js';
 import bidComparisonModel, { BidComparison } from './bidComparison.js';
 import vendorSelectionModel, { VendorSelection } from './vendorSelection.js';
@@ -74,6 +76,8 @@ export interface Models {
   DealEmbedding: typeof DealEmbedding;
   NegotiationPattern: typeof NegotiationPattern;
   VectorMigrationStatus: typeof VectorMigrationStatus;
+  MesoRound: typeof MesoRound;
+  VendorNegotiationProfile: typeof VendorNegotiationProfile;
   VendorBid: typeof VendorBid;
   BidComparison: typeof BidComparison;
   VendorSelection: typeof VendorSelection;
@@ -120,6 +124,8 @@ const models: Models = {
   DealEmbedding: initDealEmbeddingModel(sequelize),
   NegotiationPattern: initNegotiationPatternModel(sequelize),
   VectorMigrationStatus: initVectorMigrationStatusModel(sequelize),
+  MesoRound: initMesoRoundModel(sequelize),
+  VendorNegotiationProfile: initVendorNegotiationProfileModel(sequelize),
   VendorBid: vendorBidModel(sequelize),
   BidComparison: bidComparisonModel(sequelize),
   VendorSelection: vendorSelectionModel(sequelize),
@@ -178,6 +184,8 @@ export {
   DealEmbedding,
   NegotiationPattern,
   VectorMigrationStatus,
+  MesoRound,
+  VendorNegotiationProfile,
   VendorBid,
   BidComparison,
   VendorSelection,
