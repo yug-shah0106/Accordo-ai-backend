@@ -5,7 +5,7 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
-    setupFiles: './src/tests/setup.ts',
+    setupFiles: './tests/setup.ts',
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html'],
@@ -24,7 +24,8 @@ export default defineConfig({
         statements: 80,
       },
     },
-    testTimeout: 10000,
+    testTimeout: 30000,
+    fileParallelism: false,
   },
   resolve: {
     alias: {

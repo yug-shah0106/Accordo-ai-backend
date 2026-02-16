@@ -16,7 +16,7 @@ import {
   createMockRole,
   createMockProduct,
   createMockVendor,
-} from '../../../tests/factories.js';
+} from '../../../../tests/factories.js';
 import jwt from 'jsonwebtoken';
 
 // Test JWT secret

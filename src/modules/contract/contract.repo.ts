@@ -13,6 +13,7 @@ export interface ContractData {
   status?: string;
   uniqueToken?: string | null;
   chatbotDealId?: string | null;
+  previousContractId?: number | null;
   createdBy?: number | null;
   updatedBy?: number | null;
   openedAt?: Date | null;

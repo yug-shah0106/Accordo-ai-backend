@@ -14,7 +14,7 @@ import { createEmptyNegotiationState } from './engine/types.js';
 import { analyzeBehavior, computeAdaptiveStrategy } from './engine/behavioralAnalyzer.js';
 import { getHistoricalInsights, adjustAnchorFromHistory } from './engine/historicalAnalyzer.js';
 import { mergeOffers, shouldResetAccumulation, createAccumulatedOffer, isOfferComplete, getMissingComponents, getProvidedComponents } from './engine/offerAccumulator.js';
-import { updateNegotiationState, getLastPmCounter } from './engine/preferenceDetector.js';
+import { updateNegotiationState, getLastPmCounter, detectMesoSelectionFromMessage, recordMesoSelection, isInPreferenceExploration, getPreferenceExplorationRoundsRemaining, recordUtilityScore } from './engine/preferenceDetector.js';
 import type { DeliveryConfig } from './engine/deliveryUtility.js';
 import { calculateWeightedUtility, convertLegacyConfig, getUtilitySummary, extractValueFromOffer } from './engine/weightedUtility.js';
 import { DEFAULT_THRESHOLDS } from './engine/types.js';
@@ -24,6 +24,9 @@ import { chatCompletion } from '../../services/llm.service.js';
 import { captureVendorBid, checkAndTriggerComparison } from '../bidComparison/bidComparison.service.js';
 import { sendDealCreatedEmail, sendContinuedNegotiationEmail, sendPmDealStatusNotificationEmail, sendDealSummaryPDFEmail } from '../../services/email.service.js';
 import { generateDealSummaryPDF, generatePDFFilename, type DealSummaryPDFInput } from './pdf/dealSummaryPdfGenerator.js';
+import { updateProfileAfterDeal, type DealOutcome } from './engine/vendorProfileService.js';
+import { generateMesoOptions, shouldUseMeso, type MesoResult, type MesoOption } from './engine/meso.js';
+import { resolveNegotiationConfig } from './engine/weightedUtility.js';
 
 // ============================================================================
 // Contract-Deal Status Sync
@@ -50,7 +53,7 @@ const dealToContractStatusMap: Record<DealStatusForSync, ContractStatus> = {
  * - WALKED_AWAY → Rejected
  * - ESCALATED → Escalated
  */
-async function syncContractStatus(
+export async function syncContractStatus(
   dealId: string,
   dealStatus: DealStatusForSync,
   contractId: number | null
@@ -66,6 +69,117 @@ async function syncContractStatus(
   );
 
   logger.info(`[ContractSync] Contract ${contractId} status updated to ${newContractStatus} (deal: ${dealId}, dealStatus: ${dealStatus})`);
+}
+
+// ============================================================================
+// Vendor Profile Learning
+// ============================================================================
+
+/**
+ * Update vendor negotiation profile after deal completion
+ * Extracts deal outcome data and updates persistent profile
+ */
+async function updateVendorProfileOnDealCompletion(
+  dealId: string,
+  finalStatus: 'ACCEPTED' | 'WALKED_AWAY' | 'ESCALATED',
+  vendorId: number | null
+): Promise<void> {
+  if (!vendorId) {
+    logger.debug(`[VendorProfile] No vendor ID for deal ${dealId}, skipping profile update`);
+    return;
+  }
+
+  try {
+    // Get deal with messages
+    const deal = await models.ChatbotDeal.findByPk(dealId, {
+      include: [
+        {
+          model: models.ChatbotMessage,
+          as: 'messages',
+          order: [['createdAt', 'ASC']],
+        },
+      ],
+    });
+
+    if (!deal) {
+      logger.error(`[VendorProfile] Deal ${dealId} not found`);
+      return;
+    }
+
+    // Extract concession history from messages
+    const concessionHistory: DealOutcome['concessionHistory'] = [];
+    let previousPrice: number | null = null;
+
+    const messages = (deal as any).messages || [];
+    for (const msg of messages) {
+      if (msg.role === 'VENDOR' && msg.extractedOffer) {
+        const offer = msg.extractedOffer as any;
+        const currentPrice = offer.total_price || offer.price;
+        if (currentPrice && previousPrice) {
+          const priceChange = ((previousPrice - currentPrice) / previousPrice) * 100;
+          concessionHistory.push({
+            round: msg.round || concessionHistory.length + 1,
+            priceChange,
+            timestamp: new Date(msg.createdAt),
+          });
+        }
+        previousPrice = currentPrice;
+      }
+    }
+
+    // Extract final terms from latest offer
+    const latestOffer = deal.latestVendorOffer as any;
+    const finalTerms: DealOutcome['finalTerms'] = {};
+
+    if (latestOffer) {
+      // Parse payment terms days
+      if (latestOffer.payment_terms) {
+        const match = latestOffer.payment_terms.match(/Net\s*(\d+)/i);
+        if (match) finalTerms.paymentTermsDays = parseInt(match[1], 10);
+      }
+      if (latestOffer.payment_terms_days) {
+        finalTerms.paymentTermsDays = latestOffer.payment_terms_days;
+      }
+      if (latestOffer.advance_payment_percent !== undefined) {
+        finalTerms.advancePaymentPercent = latestOffer.advance_payment_percent;
+      }
+      if (latestOffer.delivery_days !== undefined) {
+        finalTerms.deliveryDays = latestOffer.delivery_days;
+      }
+      if (latestOffer.warranty_months !== undefined) {
+        finalTerms.warrantyMonths = latestOffer.warranty_months;
+      }
+    }
+
+    // Calculate final price reduction
+    let finalPriceReduction: number | null = null;
+    const config = deal.negotiationConfigJson as any;
+    if (config?.targetUnitPrice && latestOffer?.total_price) {
+      const targetPrice = config.targetUnitPrice;
+      const finalPrice = latestOffer.total_price;
+      finalPriceReduction = ((targetPrice - finalPrice) / targetPrice) * 100;
+    }
+
+    // Build deal outcome
+    const outcome: DealOutcome = {
+      dealId,
+      vendorId,
+      finalStatus,
+      totalRounds: deal.round || 1,
+      finalPriceReduction,
+      finalUtility: deal.latestUtility || null,
+      concessionHistory,
+      finalTerms,
+      // MESO selections would be extracted from MesoRound table if available
+      mesoSelections: undefined,
+    };
+
+    // Update profile
+    await updateProfileAfterDeal(outcome);
+    logger.info(`[VendorProfile] Updated profile for vendor ${vendorId} after deal ${dealId} (${finalStatus})`);
+  } catch (error) {
+    logger.error(`[VendorProfile] Failed to update profile for vendor ${vendorId}: ${(error as Error).message}`);
+  }
 }
 
 // ============================================================================
@@ -100,6 +214,10 @@ export interface CreateDealWithConfigInput {
   // When not provided, always create a new contract (1:1 with deal)
   contractId?: number;
 
+  // Optional: When re-negotiating an escalated contract, reference the old contract
+  // A new contract will be created with a fresh uniqueToken, linked to this previous one
+  previousContractId?: number;
+
   // Price & Quantity
   priceQuantity: {
     targetUnitPrice: number;
@@ -132,7 +250,8 @@ export interface CreateDealWithConfigInput {
 
   // Contract & SLA
   contractSla: {
-    warrantyPeriod: '6_MONTHS' | '1_YEAR' | '2_YEARS' | '3_YEARS';
+    warrantyPeriod: '0_MONTHS' | '6_MONTHS' | '1_YEAR' | '2_YEARS' | '3_YEARS' | '5_YEARS' | 'CUSTOM';
+    customWarrantyMonths?: number;
     defectLiabilityMonths?: number;
     lateDeliveryPenaltyPerDay: number;
     maxPenaltyCap?: {
@@ -535,22 +654,68 @@ export const createDealWithConfigService = async (
       contractUniqueToken = existingContract.uniqueToken;
       isExistingContract = true;
       logger.info(`Using provided existing contract ${contractId} (status: ${existingContract.status}) for vendor ${input.vendorId} on requisition ${input.requisitionId}`);
-    } else {
-      // Always create a NEW contract for each deal (1:1 relationship)
-      // This ensures each deal has its own unique portal link
+    } else if (input.previousContractId) {
+      // RE-NEGOTIATION: Create NEW contract referencing the old escalated one
+      const previousContract = await models.Contract.findByPk(input.previousContractId);
+      if (!previousContract) {
+        throw new CustomError('Previous contract not found', 404);
+      }
+      if (previousContract.requisitionId !== input.requisitionId || previousContract.vendorId !== input.vendorId) {
+        throw new CustomError('Previous contract does not match requisition/vendor', 400);
+      }
+      if (previousContract.status !== 'Escalated') {
+        throw new CustomError('Previous contract must be in Escalated status for re-negotiation', 400);
+      }
+
       const uniqueToken = crypto.randomBytes(16).toString('hex');
       const newContract = await models.Contract.create({
         requisitionId: input.requisitionId,
         vendorId: input.vendorId,
         status: 'Created',
         uniqueToken,
-        chatbotDealId: dealId,  // Link to the deal we're about to create (1:1)
+        previousContractId: input.previousContractId,
+        contractDetails: previousContract.contractDetails,
+        chatbotDealId: dealId,
         createdBy: input.userId,
       });
       contractId = newContract.id;
       contractUniqueToken = uniqueToken;
       isExistingContract = false;
-      logger.info(`Created new contract ${contractId} for vendor ${input.vendorId} on requisition ${input.requisitionId}`);
+      logger.info(`Created re-negotiation contract ${contractId} (prev: ${input.previousContractId}) for vendor ${input.vendorId} on requisition ${input.requisitionId}`);
+    } else {
+      // Check if there's an existing unlinked "Created" contract for this vendor+requisition
+      // This prevents duplicates when the "New" button is used on a vendor that already has a pending contract
+      const existingPendingContract = await models.Contract.findOne({
+        where: {
+          requisitionId: input.requisitionId,
+          vendorId: input.vendorId,
+          status: 'Created',
+          chatbotDealId: null,
+        },
+      });
+
+      if (existingPendingContract) {
+        // Reuse the existing pending contract
+        contractId = existingPendingContract.id;
+        contractUniqueToken = existingPendingContract.uniqueToken;
+        isExistingContract = true;
+        logger.info(`Reusing existing pending contract ${contractId} for vendor ${input.vendorId} on requisition ${input.requisitionId}`);
+      } else {
+        // Create a NEW contract for this deal (1:1 relationship)
+        const uniqueToken = crypto.randomBytes(16).toString('hex');
+        const newContract = await models.Contract.create({
+          requisitionId: input.requisitionId,
+          vendorId: input.vendorId,
+          status: 'Created',
+          uniqueToken,
+          chatbotDealId: dealId,  // Link to the deal we're about to create (1:1)
+          createdBy: input.userId,
+        });
+        contractId = newContract.id;
+        contractUniqueToken = uniqueToken;
+        isExistingContract = false;
+        logger.info(`Created new contract ${contractId} for vendor ${input.vendorId} on requisition ${input.requisitionId}`);
+      }
     }
 
     // Check if this vendor has existing deals on this requisition (for email type determination)
@@ -587,8 +752,20 @@ export const createDealWithConfigService = async (
 
     logger.info(`Created deal with config ${dealId}: ${input.title} (priority: ${input.priority})`);
 
+    // Link existing contract to this deal (set chatbotDealId)
+    if (isExistingContract && contractId) {
+      await models.Contract.update(
+        { chatbotDealId: dealId },
+        { where: { id: contractId } }
+      );
+      logger.info(`[ContractLink] Set chatbotDealId=${dealId} on existing contract ${contractId}`);
+    }
+
     // Update contract status to Active (negotiation started)
-    if (contractId) {
+    // Skip for existing contracts: keep in 'Created' so vendor can still fill out the quote form
+    // Skip for re-negotiation: keep new contract in 'Created' so vendor sees the quote form
+    // Only sync status for brand-new contracts created in this function (Path C, no existing pending found)
+    if (contractId && !input.previousContractId && !isExistingContract) {
       await syncContractStatus(dealId, 'NEGOTIATING', contractId);
     }
 
@@ -631,8 +808,79 @@ export const createDealWithConfigService = async (
         // First deal: send portal link (/vendor-contract/{token})
         // Subsequent deals: send chatbot link (/vendor-chat/{token}) with "Continue Negotiation" tone
 
-        if (isFirstDealForVendor) {
-          // First deal for this vendor - send standard deal created email with portal link
+        if (input.previousContractId) {
+          // Re-negotiation: send /vendor-contract/ link so vendor can submit a fresh quote
+          const continuedEmailData = {
+            dealId: dealId,
+            dealTitle: input.title,
+            requisitionId: input.requisitionId,
+            rfqNumber: (requisitionWithDetails as any).rfqNumber || `RFQ-${input.requisitionId}`,
+            requisitionTitle: (requisitionWithDetails as any).title || input.title,
+            projectName: (requisitionWithDetails as any).Project?.projectName || 'Unknown Project',
+            vendorId: input.vendorId,
+            vendorName: vendor.name || vendor.email,
+            vendorEmail: vendor.email,
+            contractUniqueToken: contractUniqueToken!,
+            negotiationDeadline: negotiationControl?.deadline ? new Date(negotiationControl.deadline) : (requisitionWithDetails as any).negotiationClosureDate || undefined,
+            previousDealsCount: existingDealsCount,
+            products: products.length > 0 ? products : [{
+              name: 'Products as per RFQ',
+              quantity: 1,
+              targetPrice: priceQuantity.targetUnitPrice,
+            }],
+            paymentTerms: paymentTerms ? {
+              minDays: paymentTerms.minDays || 30,
+              maxDays: paymentTerms.maxDays || 90,
+            } : undefined,
+            deliveryDate: delivery?.requiredDate || undefined,
+            useVendorContractLink: true,
+          };
+
+          emailStatus = await sendContinuedNegotiationEmail(continuedEmailData);
+
+          if (emailStatus.success) {
+            logger.info(`Re-negotiation email sent to vendor ${vendor.email} for deal ${dealId} (previous contract: ${input.previousContractId})`);
+          } else {
+            logger.warn(`Failed to send re-negotiation email: ${emailStatus.error}`, { dealId, vendorEmail: vendor.email });
+          }
+        } else if (isFirstDealForVendor && isExistingContract) {
+          // First deal for this vendor using an existing contract - vendor still needs to fill the quote form
+          // Send vendor contract link so they can submit their quotation first
+          const contractEmailData = {
+            dealId: dealId,
+            dealTitle: input.title,
+            requisitionId: input.requisitionId,
+            rfqNumber: (requisitionWithDetails as any).rfqNumber || `RFQ-${input.requisitionId}`,
+            requisitionTitle: (requisitionWithDetails as any).title || input.title,
+            projectName: (requisitionWithDetails as any).Project?.projectName || 'Unknown Project',
+            vendorId: input.vendorId,
+            vendorName: vendor.name || vendor.email,
+            vendorEmail: vendor.email,
+            contractUniqueToken: contractUniqueToken!,
+            negotiationDeadline: negotiationControl?.deadline ? new Date(negotiationControl.deadline) : (requisitionWithDetails as any).negotiationClosureDate || undefined,
+            previousDealsCount: 0,
+            products: products.length > 0 ? products : [{
+              name: 'Products as per RFQ',
+              quantity: 1,
+              targetPrice: priceQuantity.targetUnitPrice,
+            }],
+            paymentTerms: paymentTerms ? {
+              minDays: paymentTerms.minDays || 30,
+              maxDays: paymentTerms.maxDays || 90,
+            } : undefined,
+            deliveryDate: delivery?.requiredDate || undefined,
+            useVendorContractLink: true,
+          };
+
+          emailStatus = await sendContinuedNegotiationEmail(contractEmailData);
+
+          if (emailStatus.success) {
+            logger.info(`Deal created email (first deal, existing contract) sent to vendor ${vendor.email} for deal ${dealId}`);
+          } else {
+            logger.warn(`Failed to send deal created email: ${emailStatus.error}`, { dealId, vendorEmail: vendor.email });
+          }
+        } else if (isFirstDealForVendor) {
+          // First deal for this vendor with a brand-new contract - send standard deal created email
           const emailData = {
             dealId: dealId,
             dealTitle: input.title,
@@ -1015,10 +1263,10 @@ const generateAccordoResponseText = (decision: Decision, config: NegotiationConf
       return `I'm pleased to accept your offer. We have a deal at $${counterOffer?.total_price || 'agreed'} with ${counterOffer?.payment_terms || 'agreed'} payment terms${acceptDelivery}. Thank you for the negotiation.`;
 
     case 'COUNTER':
-      const targetPrice = config.parameters.total_price.target;
+      const targetPriceValue = config.parameters?.total_price?.target ?? ((config.parameters as Record<string, unknown>)?.unit_price as { target?: number } | undefined)?.target ?? 1000;
       const priceText = counterOffer?.total_price
         ? `$${counterOffer.total_price}`
-        : `$${targetPrice}`;
+        : `$${targetPriceValue}`;
       const termsText = counterOffer?.payment_terms || 'Net 60';
       const counterDelivery = deliveryText ? `, delivery by ${deliveryText}` : '';
       return `Thank you for your offer. Based on our analysis, I'd like to counter with ${priceText}, ${termsText} payment terms${counterDelivery}. This would give us a utility score of ${((utilityScore || 0) * 100).toFixed(0)}%.`;
@@ -1199,6 +1447,10 @@ export const processVendorMessageService = async (
       syncContractStatus(deal.id, finalStatus, deal.contractId)
         .catch((err) => logger.error(`Failed to sync contract status: ${(err as Error).message}`));
 
+      // Update vendor negotiation profile (fire-and-forget)
+      updateVendorProfileOnDealCompletion(deal.id, finalStatus as 'ACCEPTED' | 'WALKED_AWAY' | 'ESCALATED', deal.vendorId)
+        .catch((err) => logger.error(`Failed to update vendor profile: ${(err as Error).message}`));
+
       // Fire-and-forget: don't await, just log errors
       captureVendorBid(deal.id)
         .then(() => {
@@ -1267,6 +1519,7 @@ export interface PMResponseResult {
   explainability: Explainability;
   deal: ChatbotDeal;
   generationSource: 'llm' | 'fallback';
+  meso?: MesoResult | null;
 }
 
 /**
@@ -1440,6 +1693,12 @@ export const generatePMResponseAsyncService = async (
     // Get previous PM counter-offer
     const previousPmOffer = negotiationState ? getLastPmCounter(negotiationState) : null;
 
+    // Get price config with fallback defaults
+    const priceConfig = config.parameters?.total_price ?? (config.parameters as Record<string, unknown>)?.unit_price as typeof config.parameters.total_price ?? {
+      target: 1000,
+      max_acceptable: 1500,
+    };
+
     // Update negotiation state with new data
     negotiationState = updateNegotiationState(
       negotiationState,
@@ -1449,18 +1708,43 @@ export const generatePMResponseAsyncService = async (
       null, // PM counter will be added after decision
       deal.round + 1,
       {
-        pmTargetPrice: config.parameters.total_price.target,
-        pmMaxPrice: config.parameters.total_price.max_acceptable,
+        pmTargetPrice: priceConfig.target ?? 1000,
+        pmMaxPrice: priceConfig.max_acceptable ?? 1500,
         pmMinTermsDays: 30,  // Default minimum
         pmMaxTermsDays: 90,  // Default maximum
       }
     );
 
+    // Detect MESO selection from vendor message (February 2026)
+    const mesoSelectionType = detectMesoSelectionFromMessage(vendorMessage.content);
+    if (mesoSelectionType) {
+      // Extract option ID from message if possible, otherwise generate one
+      const optionIdMatch = vendorMessage.content.match(/meso_\d+_(price|terms|balanced)/);
+      const optionId = optionIdMatch ? optionIdMatch[0] : `meso_${deal.round + 1}_${mesoSelectionType}`;
+
+      negotiationState = recordMesoSelection(
+        negotiationState,
+        mesoSelectionType,
+        optionId,
+        deal.round + 1
+      );
+
+      logger.info(`[Phase2] MESO selection detected: ${mesoSelectionType}`, {
+        dealId: input.dealId,
+        round: deal.round + 1,
+        consecutiveBalanced: negotiationState.consecutiveBalancedSelections,
+        inExploration: isInPreferenceExploration(negotiationState),
+        explorationRoundsRemaining: getPreferenceExplorationRoundsRemaining(negotiationState),
+      });
+    }
+
     logger.info(`[Phase2] Negotiation state updated for deal ${input.dealId}`, {
       vendorEmphasis: negotiationState.vendorEmphasis,
       emphasisConfidence: negotiationState.emphasisConfidence,
-      priceConcessions: negotiationState.priceConcessions.length,
-      termsConcessions: negotiationState.termsConcessions.length,
+      priceConcessions: negotiationState.priceConcessions?.length ?? 0,
+      termsConcessions: negotiationState.termsConcessions?.length ?? 0,
+      mesoSelections: negotiationState.mesoSelections?.length ?? 0,
+      consecutiveBalanced: negotiationState.consecutiveBalancedSelections ?? 0,
     });
 
     // Adaptive behavioral analysis (opt-in via adaptiveFeatures.enabled)
@@ -1527,13 +1811,16 @@ export const generatePMResponseAsyncService = async (
         decision.counterOffer,
         deal.round + 1,
         {
-          pmTargetPrice: config.parameters.total_price.target,
-          pmMaxPrice: config.parameters.total_price.max_acceptable,
+          pmTargetPrice: priceConfig.target ?? 1000,
+          pmMaxPrice: priceConfig.max_acceptable ?? 1500,
           pmMinTermsDays: 30,
           pmMaxTermsDays: 90,
         }
       );
     }
+
+    // Record utility score for stall detection (Feb 2026)
+    negotiationState = recordUtilityScore(negotiationState, deal.round, decision.utilityScore);
 
     // Build delivery config from deal's wizard configuration
     const dealConfig = deal.get('configJson') as { delivery?: { requiredDate?: string; preferredDate?: string } } | undefined;
@@ -1544,6 +1831,81 @@ export const generatePMResponseAsyncService = async (
           maxLateDays: 14, // Default 2 weeks grace period
         }
       : undefined;
+
+    // ========================================================================
+    // MESO Generation (Multiple Equivalent Simultaneous Offers)
+    // ========================================================================
+    // Generate MESO options when:
+    // 1. Decision is COUNTER (we're making a counter-offer)
+    // 2. Round is appropriate for MESO (typically rounds 2-4)
+    // 3. MESO is enabled in deal config (default: true)
+    // ========================================================================
+    let mesoResult: MesoResult | null = null;
+    const currentRoundForMeso = deal.round + 1;
+    const mesoEnabled = (deal.negotiationConfigJson as any)?.mesoEnabled !== false; // Default to enabled
+
+    // Check previous MESO rounds to avoid overusing
+    const previousMesoRounds = await models.MesoRound.count({
+      where: { dealId: deal.id },
+    });
+
+    const mesoShouldApply = shouldUseMeso(currentRoundForMeso, config.max_rounds, previousMesoRounds);
+
+    // MESO should trigger on:
+    // 1. COUNTER decisions (normal case), OR
+    // 2. First PM response (round 1) regardless of decision - for initial engagement
+    const isFirstPmResponse = currentRoundForMeso === 1;
+    const mesoDecisionOk = decision.action === 'COUNTER' || isFirstPmResponse;
+
+    logger.info(`[MESO] Check: action=${decision.action}, enabled=${mesoEnabled}, round=${currentRoundForMeso}, maxRounds=${config.max_rounds}, prevMesoRounds=${previousMesoRounds}, shouldApply=${mesoShouldApply}, isFirstPm=${isFirstPmResponse}, decisionOk=${mesoDecisionOk}`);
+
+    if (mesoDecisionOk && mesoEnabled && mesoShouldApply) {
+      try {
+        // Build resolved config for MESO generation
+        const wizardConfig = (deal.negotiationConfigJson as any)?.wizardConfig;
+        const resolvedConfig = resolveNegotiationConfig(wizardConfig || {});
+
+        // Generate MESO options with target utility from decision
+        mesoResult = generateMesoOptions(
+          resolvedConfig,
+          extractedOffer as any,
+          currentRoundForMeso,
+          decision.utilityScore + 0.05 // Target slightly higher utility than current
+        );
+
+        if (mesoResult.success && mesoResult.options.length > 0) {
+          // Store MESO round in database
+          await models.MesoRound.create({
+            id: uuidv4(),
+            dealId: deal.id,
+            round: currentRoundForMeso,
+            options: mesoResult.options as any,
+            targetUtility: mesoResult.targetUtility,
+            variance: mesoResult.variance,
+            vendorSelection: null,
+            selectedOptionId: null,
+            inferredPreferences: null,
+            preferenceConfidence: null,
+            metadata: {
+              vendorOfferId: vendorMessage.id,
+              generatedAt: new Date().toISOString(),
+            },
+          });
+
+          logger.info(`[MESO] Generated ${mesoResult.options.length} options for deal ${deal.id} round ${currentRoundForMeso}`, {
+            targetUtility: mesoResult.targetUtility,
+            variance: mesoResult.variance,
+            options: mesoResult.options.map(o => ({ id: o.id, label: o.label, utility: o.utility })),
+          });
+        } else {
+          logger.info(`[MESO] Generation not successful for deal ${deal.id}: ${mesoResult.reason || 'unknown'}`);
+          mesoResult = null; // Reset to null if not successful
+        }
+      } catch (mesoError) {
+        logger.warn(`[MESO] Failed to generate options for deal ${deal.id}:`, mesoError);
+        mesoResult = null;
+      }
+    }
 
     // Generate human-like response using LLM with fallback
     const conversationHistory = allMessages.map(m => ({
@@ -1615,6 +1977,10 @@ export const generatePMResponseAsyncService = async (
       syncContractStatus(deal.id, finalStatus, deal.contractId)
         .catch((err) => logger.error(`[Phase2] Failed to sync contract status: ${(err as Error).message}`));
 
+      // Update vendor negotiation profile (fire-and-forget)
+      updateVendorProfileOnDealCompletion(deal.id, finalStatus as 'ACCEPTED' | 'WALKED_AWAY' | 'ESCALATED', deal.vendorId)
+        .catch((err) => logger.error(`[Phase2] Failed to update vendor profile: ${(err as Error).message}`));
+
       // Fire-and-forget: don't await, just log errors
       captureVendorBid(deal.id)
         .then(() => {
@@ -1628,12 +1994,23 @@ export const generatePMResponseAsyncService = async (
         });
     }
 
+    // Add MESO data to explainability for frontend display
+    if (mesoResult && mesoResult.success) {
+      (explainability as any).meso = {
+        enabled: true,
+        options: mesoResult.options,
+        targetUtility: mesoResult.targetUtility,
+        variance: mesoResult.variance,
+      };
+    }
+
     return {
       message: accordoMessage,
       decision,
       explainability,
       deal,
       generationSource: responseResult.source,
+      meso: mesoResult, // Include MESO result for frontend
     };
   } catch (error) {
     if (error instanceof CustomError) throw error;
@@ -1766,6 +2143,10 @@ export const generatePMFallbackResponseService = async (
       // Sync contract status (fire-and-forget)
       syncContractStatus(deal.id, finalStatus, deal.contractId)
         .catch((err) => logger.error(`[Fallback] Failed to sync contract status: ${(err as Error).message}`));
+
+      // Update vendor negotiation profile (fire-and-forget)
+      updateVendorProfileOnDealCompletion(deal.id, finalStatus as 'ACCEPTED' | 'WALKED_AWAY' | 'ESCALATED', deal.vendorId)
+        .catch((err) => logger.error(`[Fallback] Failed to update vendor profile: ${(err as Error).message}`));
 
       // Fire-and-forget: don't await, just log errors
       captureVendorBid(deal.id)
@@ -2109,6 +2490,7 @@ export interface ExtendedNegotiationConfig extends NegotiationConfig {
     };
     contractSla: {
       warrantyPeriod: string;
+      customWarrantyMonths?: number;
       defectLiabilityMonths?: number;
       lateDeliveryPenaltyPerDay: number;
       maxPenaltyCap?: {
@@ -4815,6 +5197,10 @@ export const vendorSendMessageService = async (
           error: emailError instanceof Error ? emailError.message : String(emailError),
         });
       }
+
+      // Update vendor negotiation profile (fire-and-forget)
+      updateVendorProfileOnDealCompletion(deal.id, finalStatus as 'ACCEPTED' | 'WALKED_AWAY' | 'ESCALATED', deal.vendorId)
+        .catch((err) => logger.error(`[VendorSendMessage] Failed to update vendor profile: ${(err as Error).message}`));
     }
 
     return {

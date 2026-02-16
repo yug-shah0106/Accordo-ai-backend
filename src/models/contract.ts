@@ -48,6 +48,7 @@ export class Contract extends Model<
   declare benchmarkRating: number | null;
   declare finalRating: number | null;
   declare chatbotDealId: string | null;
+  declare previousContractId: CreationOptional<number | null>;
   declare createdAt: CreationOptional<Date>;
 
   // Associations
@@ -67,6 +68,8 @@ export class Contract extends Model<
       as: 'Company',
     });
     this.hasMany(models.Po as ModelStatic<Model>, { foreignKey: 'contractId', as: 'PurchaseOrders' });
+    this.belongsTo(Contract as unknown as ModelStatic<Model>, { foreignKey: 'previousContractId', as: 'PreviousContract', constraints: false });
+    this.hasMany(Contract as unknown as ModelStatic<Model>, { foreignKey: 'previousContractId', as: 'FollowUpContracts', constraints: false });
   }
 }
 
@@ -102,6 +105,11 @@ export default function contractModel(sequelize: Sequelize): typeof Contract {
         type: DataTypes.UUID,
         allowNull: true,
         comment: 'Reference to the deal ID in the chatbot system',
+      },
+      previousContractId: {
+        type: DataTypes.INTEGER,
+        allowNull: true,
+        defaultValue: null,
       },
       createdAt: DataTypes.DATE,
     },

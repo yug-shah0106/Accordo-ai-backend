@@ -1377,6 +1377,7 @@ interface ContinuedNegotiationEmailData {
     maxDays: number;
   };
   deliveryDate?: string;
+  useVendorContractLink?: boolean;  // When true, use /vendor-contract/ link instead of /vendor-chat/
 }
 
 /**
@@ -1587,8 +1588,11 @@ export const sendContinuedNegotiationEmail = async (
   data: ContinuedNegotiationEmailData
 ): Promise<{ success: boolean; messageId?: string; error?: string }> => {
   try {
-    // Build the vendor chat link using the contract's unique token
-    const vendorChatLink = `${env.chatbotFrontendUrl}/vendor-chat/${data.contractUniqueToken}`;
+    // Build the vendor link using the contract's unique token
+    // For re-negotiation, use /vendor-contract/ so vendor can submit a fresh quote
+    const vendorChatLink = data.useVendorContractLink
+      ? `${env.chatbotFrontendUrl}/vendor-contract/${data.contractUniqueToken}`
+      : `${env.chatbotFrontendUrl}/vendor-chat/${data.contractUniqueToken}`;
 
     const mailOptions: EmailOptions = {
       from: smtp.from || 'noreply@accordo.ai',

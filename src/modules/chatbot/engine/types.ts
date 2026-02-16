@@ -119,6 +119,32 @@ export interface DetectedKeywords {
 }
 
 /**
+ * MESO selection record
+ */
+export interface MesoSelectionRecord {
+  /** Round when selection was made */
+  round: number;
+  /** Which option was selected */
+  selectedOptionId: string;
+  /** Type of option selected */
+  selectedType: 'price' | 'terms' | 'balanced';
+  /** When selection was made */
+  timestamp: Date;
+}
+
+/**
+ * Utility score history record for tracking negotiation progress
+ */
+export interface UtilityHistoryRecord {
+  /** Round number */
+  round: number;
+  /** Utility score at this round (0-1) */
+  utility: number;
+  /** When this was recorded */
+  timestamp: Date;
+}
+
+/**
  * Complete negotiation state tracking across rounds
  * Stored in deal.convoStateJson for persistence
  */
@@ -137,6 +163,16 @@ export interface NegotiationState {
   detectedKeywords: DetectedKeywords;
   /** When this state was last updated */
   lastUpdatedAt: Date;
+  /** History of MESO selections by vendor (February 2026) */
+  mesoSelections?: MesoSelectionRecord[];
+  /** Count of consecutive 'balanced' MESO selections */
+  consecutiveBalancedSelections?: number;
+  /** Round when preference exploration started (after first balanced selection) */
+  preferenceExplorationStartRound?: number;
+  /** History of utility scores per round (February 2026) */
+  utilityHistory?: UtilityHistoryRecord[];
+  /** Count of consecutive rounds with no utility improvement */
+  consecutiveNoImprovementRounds?: number;
 }
 
 /**
@@ -154,6 +190,11 @@ export function createEmptyNegotiationState(): NegotiationState {
       termsKeywords: [],
     },
     lastUpdatedAt: new Date(),
+    mesoSelections: [],
+    consecutiveBalancedSelections: 0,
+    preferenceExplorationStartRound: undefined,
+    utilityHistory: [],
+    consecutiveNoImprovementRounds: 0,
   };
 }
 
@@ -497,5 +538,209 @@ export interface AdaptiveFeaturesConfig {
   dynamicRounds?: DynamicRoundConfig;
   /** Original anchor before historical adjustment (for transparency) */
   originalAnchor?: number;
+}
+
+// ============================================
+// PACTUM-STYLE EXTENDED TYPES (February 2026)
+// ============================================
+
+/**
+ * Accordo default VALUES from the wizard
+ * Used when user doesn't modify values in the Deal Wizard
+ */
+export const ACCORDO_DEFAULTS = {
+  targetUnitPrice: null as number | null,
+  maxAcceptablePrice: null as number | null,
+  volumeDiscountExpectation: null as number | null,
+  paymentTermsMinDays: 30,        // Net 30
+  paymentTermsMaxDays: 60,        // Net 60
+  advancePaymentLimit: null as number | null,
+  warrantyPeriodMonths: 12,       // 1 year
+  lateDeliveryPenaltyPerDay: 1,   // 1%
+  qualityStandards: [] as string[],
+  maxRounds: 50,                  // Feb 2026: Increased from 10 to 50 for extended negotiations
+  walkawayThreshold: 20,          // 20%
+  priority: 'MEDIUM' as 'HIGH' | 'MEDIUM' | 'LOW',
+  mode: 'CONVERSATION' as 'INSIGHTS' | 'CONVERSATION',
+} as const;
+
+/**
+ * Accordo default WEIGHTS from Step 4 of the Deal Wizard
+ * Used when user keeps AI-suggested weights (aiSuggested = true)
+ */
+export const DEFAULT_WEIGHTS = {
+  targetUnitPrice: 25,
+  maxAcceptablePrice: 15,
+  volumeDiscountExpectation: 5,
+  paymentTermsRange: 15,
+  advancePaymentLimit: 5,
+  deliveryDate: 10,
+  partialDelivery: 3,
+  warrantyPeriod: 7,
+  lateDeliveryPenalty: 5,
+  qualityStandards: 5,
+  maxRounds: 2,
+  walkawayThreshold: 3,
+} as const;
+
+/**
+ * Extended offer type with all Pactum-style parameters
+ * Supports full multi-parameter negotiation
+ */
+export interface ExtendedOffer {
+  // Price
+  total_price: number | null;
+  unit_price?: number | null;
+  volume_discount?: number | null;
+
+  // Payment
+  payment_terms: string | null;           // "Net 30", "Net 60", etc.
+  payment_terms_days?: number | null;     // Parsed: 30, 60, 90
+  advance_payment_percent?: number | null;
+
+  // Delivery
+  delivery_date?: string | null;
+  delivery_days?: number | null;
+  partial_delivery_allowed?: boolean | null;
+
+  // Contract
+  warranty_months?: number | null;
+  late_penalty_percent?: number | null;
+  quality_certifications?: string[] | null;
+
+  // Custom/Marketing
+  marketing_allowance?: number | null;
+
+  // Metadata
+  meta?: {
+    raw_terms_days?: number;
+    non_standard_terms?: boolean;
+    delivery_source?: 'explicit_date' | 'relative_days' | 'timeframe' | 'asap';
+    raw_delivery_text?: string;
+    raw_price_text?: string;
+    raw_terms_text?: string;
+    currency_detected?: 'USD' | 'INR' | 'EUR' | 'GBP' | 'AUD';
+    currency_converted?: boolean;
+    original_currency?: 'USD' | 'INR' | 'EUR' | 'GBP' | 'AUD';
+    original_price?: number;
+  };
+}
+
+/**
+ * Wizard configuration from Deal Wizard Steps 1-4
+ * Stored in negotiationConfigJson.wizardConfig
+ */
+export interface WizardConfig {
+  priority: 'HIGH' | 'MEDIUM' | 'LOW';
+  priceQuantity: {
+    targetUnitPrice: number | null;
+    maxAcceptablePrice: number | null;
+    minOrderQuantity: number | null;
+    preferredQuantity?: number | null;
+    volumeDiscountExpectation?: number | null;
+  };
+  paymentTerms: {
+    minDays: number | null;
+    maxDays: number | null;
+    advancePaymentLimit?: number | null;
+    acceptedMethods?: ('BANK_TRANSFER' | 'CREDIT' | 'LC')[];
+  };
+  delivery: {
+    requiredDate: string | null;
+    preferredDate?: string | null;
+    locationId?: number | null;
+    locationAddress?: string | null;
+    partialDelivery: {
+      allowed: boolean;
+      type?: 'QUANTITY' | 'PERCENTAGE' | null;
+      minValue?: number | null;
+    };
+  };
+  contractSla: {
+    warrantyPeriod: '0_MONTHS' | '6_MONTHS' | '1_YEAR' | '2_YEARS' | '3_YEARS' | '5_YEARS' | 'CUSTOM';
+    customWarrantyMonths?: number;
+    defectLiabilityMonths?: number;
+    lateDeliveryPenaltyPerDay: number;
+    maxPenaltyCap?: {
+      type: 'PERCENTAGE' | 'FIXED';
+      value?: number;
+    };
+    qualityStandards?: string[];
+  };
+  negotiationControl: {
+    deadline?: string | null;
+    maxRounds: number;
+    walkawayThreshold: number;
+  };
+  customParameters?: Array<{
+    id?: string;
+    name: string;
+    type: 'BOOLEAN' | 'NUMBER' | 'TEXT' | 'DATE';
+    targetValue: boolean | number | string;
+    flexibility: 'FIXED' | 'FLEXIBLE' | 'NICE_TO_HAVE';
+    includeInNegotiation: boolean;
+  }>;
+  /** Step 4 weights - record of parameterId -> weight (0-100) */
+  parameterWeights?: Record<string, number>;
+  /** Whether weights are AI-suggested (true) or user-modified (false) */
+  aiSuggested?: boolean;
+}
+
+/**
+ * Resolved configuration with user values taking priority over defaults
+ * Used internally by the negotiation engine
+ */
+export interface ResolvedNegotiationConfig {
+  // Resolved VALUES (user if provided, else default)
+  targetPrice: number;
+  maxAcceptablePrice: number;
+  volumeDiscountExpectation: number | null;
+  paymentTermsMinDays: number;
+  paymentTermsMaxDays: number;
+  advancePaymentLimit: number | null;
+  deliveryDate: Date | null;
+  preferredDeliveryDate: Date | null;
+  partialDeliveryAllowed: boolean;
+  warrantyPeriodMonths: number;
+  lateDeliveryPenaltyPerDay: number;
+  qualityStandards: string[];
+  maxRounds: number;
+  walkawayThreshold: number;
+  priority: 'HIGH' | 'MEDIUM' | 'LOW';
+
+  // Resolved WEIGHTS (user-modified or AI-suggested defaults)
+  weights: Record<string, number>;
+  weightsAreUserModified: boolean;
+
+  // Thresholds
+  acceptThreshold: number;
+  escalateThreshold: number;
+  walkAwayThreshold: number;
+
+  // Calculated values
+  anchorPrice: number;
+  priceRange: number;
+  concessionStep: number;
+
+  // Source tracking for explainability
+  sources: Record<string, 'user' | 'default' | 'calculated'>;
+}
+
+/**
+ * Parse warranty period string to months
+ */
+export function parseWarrantyPeriodToMonths(period: string | null | undefined): number {
+  if (!period) return ACCORDO_DEFAULTS.warrantyPeriodMonths;
+
+  const mapping: Record<string, number> = {
+    '0_MONTHS': 0,
+    '6_MONTHS': 6,
+    '1_YEAR': 12,
+    '2_YEARS': 24,
+    '3_YEARS': 36,
+    '5_YEARS': 60,
+  };
+
+  return mapping[period] ?? ACCORDO_DEFAULTS.warrantyPeriodMonths;
 }
 

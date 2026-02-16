@@ -130,8 +130,8 @@ export function mergeKeywords(
   newKeywords: DetectedKeywords
 ): DetectedKeywords {
   return {
-    priceKeywords: [...new Set([...existing.priceKeywords, ...newKeywords.priceKeywords])],
-    termsKeywords: [...new Set([...existing.termsKeywords, ...newKeywords.termsKeywords])],
+    priceKeywords: [...new Set([...(existing?.priceKeywords ?? []), ...(newKeywords?.priceKeywords ?? [])])],
+    termsKeywords: [...new Set([...(existing?.termsKeywords ?? []), ...(newKeywords?.termsKeywords ?? [])])],
   };
 }
 
@@ -234,11 +234,14 @@ export function detectVendorEmphasis(state: NegotiationState): {
   emphasis: VendorEmphasis;
   confidence: number;
 } {
-  const { priceConcessions, termsConcessions, detectedKeywords } = state;
+  // Defensive: ensure arrays exist
+  const priceConcessions = state.priceConcessions ?? [];
+  const termsConcessions = state.termsConcessions ?? [];
+  const detectedKeywords = state.detectedKeywords ?? { priceKeywords: [], termsKeywords: [] };
 
   // Calculate keyword score
-  const priceKeywordCount = detectedKeywords.priceKeywords.length;
-  const termsKeywordCount = detectedKeywords.termsKeywords.length;
+  const priceKeywordCount = detectedKeywords.priceKeywords?.length ?? 0;
+  const termsKeywordCount = detectedKeywords.termsKeywords?.length ?? 0;
   const keywordDiff = priceKeywordCount - termsKeywordCount;
   const keywordScore = keywordDiff * 0.3; // Positive = price-focused
 
@@ -323,11 +326,21 @@ export function updateNegotiationState(
   }
 ): NegotiationState {
   // Start from existing state or create new
-  const current = state ? { ...state } : createEmptyNegotiationState();
+  // Always merge with empty state to ensure all arrays are initialized
+  const emptyState = createEmptyNegotiationState();
+  const current: NegotiationState = state ? {
+    ...emptyState,
+    ...state,
+    // Ensure arrays are always defined (in case state from DB is missing them)
+    priceConcessions: state.priceConcessions ?? [],
+    termsConcessions: state.termsConcessions ?? [],
+    pmCounterHistory: state.pmCounterHistory ?? [],
+    detectedKeywords: state.detectedKeywords ?? emptyState.detectedKeywords,
+  } : emptyState;
 
   // Update keywords from message
   const newKeywords = analyzeMessageKeywords(vendorMessage);
-  current.detectedKeywords = mergeKeywords(current.detectedKeywords, newKeywords);
+  current.detectedKeywords = mergeKeywords(current.detectedKeywords ?? emptyState.detectedKeywords, newKeywords);
 
   // Calculate price concession if we have previous offer
   if (
@@ -393,7 +406,7 @@ export function updateNegotiationState(
  * Get the last PM counter-offer from state
  */
 export function getLastPmCounter(state: NegotiationState | null): PmCounterRecord | null {
-  if (!state || state.pmCounterHistory.length === 0) return null;
+  if (!state || !state.pmCounterHistory || state.pmCounterHistory.length === 0) return null;
   return state.pmCounterHistory[state.pmCounterHistory.length - 1];
 }
 
@@ -401,6 +414,7 @@ export function getLastPmCounter(state: NegotiationState | null): PmCounterRecor
  * Get total vendor price concession percentage
  */
 export function getTotalPriceConcession(state: NegotiationState): number {
+  if (!state.priceConcessions) return 0;
   return state.priceConcessions.reduce((sum, c) => sum + c.changePercent, 0);
 }
 
@@ -408,7 +422,234 @@ export function getTotalPriceConcession(state: NegotiationState): number {
  * Get total vendor terms concession percentage
  */
 export function getTotalTermsConcession(state: NegotiationState): number {
+  if (!state.termsConcessions) return 0;
   return state.termsConcessions.reduce((sum, c) => sum + c.changePercent, 0);
+}
+
+// ============================================
+// MESO SELECTION TRACKING (February 2026)
+// ============================================
+
+/**
+ * Detect MESO selection type from vendor message content
+ * Looks for keywords like "Best Price", "Best Terms", "Balanced"
+ */
+export function detectMesoSelectionFromMessage(content: string): 'price' | 'terms' | 'balanced' | null {
+  const lowerContent = content.toLowerCase();
+
+  // Check for price-focused selection
+  if (
+    lowerContent.includes('best price') ||
+    lowerContent.includes('price-focused') ||
+    lowerContent.includes('"best price"')
+  ) {
+    return 'price';
+  }
+
+  // Check for terms-focused selection
+  if (
+    lowerContent.includes('best terms') ||
+    lowerContent.includes('terms-focused') ||
+    lowerContent.includes('"best terms"')
+  ) {
+    return 'terms';
+  }
+
+  // Check for balanced selection
+  if (
+    lowerContent.includes('balanced') ||
+    lowerContent.includes('"balanced"')
+  ) {
+    return 'balanced';
+  }
+
+  return null;
+}
+
+/**
+ * Record a MESO selection and update negotiation state
+ */
+export function recordMesoSelection(
+  state: NegotiationState,
+  selectionType: 'price' | 'terms' | 'balanced',
+  selectedOptionId: string,
+  round: number
+): NegotiationState {
+  const mesoSelections = state.mesoSelections ?? [];
+  const newSelection = {
+    round,
+    selectedOptionId,
+    selectedType: selectionType,
+    timestamp: new Date(),
+  };
+
+  // Update consecutive balanced count
+  let consecutiveBalanced = state.consecutiveBalancedSelections ?? 0;
+  let explorationStartRound = state.preferenceExplorationStartRound;
+
+  if (selectionType === 'balanced') {
+    consecutiveBalanced++;
+    // Start preference exploration on first balanced selection
+    if (!explorationStartRound) {
+      explorationStartRound = round;
+    }
+  } else {
+    // Reset consecutive count when non-balanced is selected
+    consecutiveBalanced = 0;
+    explorationStartRound = undefined;
+  }
+
+  return {
+    ...state,
+    mesoSelections: [...mesoSelections, newSelection],
+    consecutiveBalancedSelections: consecutiveBalanced,
+    preferenceExplorationStartRound: explorationStartRound,
+    lastUpdatedAt: new Date(),
+  };
+}
+
+/**
+ * Check if we're in preference exploration mode
+ * (vendor has selected balanced and we need more rounds to detect preference)
+ */
+export function isInPreferenceExploration(state: NegotiationState | null): boolean {
+  if (!state) return false;
+  const consecutiveBalanced = state.consecutiveBalancedSelections ?? 0;
+  // In exploration mode if 1-2 balanced selections (not yet reached 3)
+  return consecutiveBalanced > 0 && consecutiveBalanced < 3;
+}
+
+/**
+ * Get the number of additional rounds needed for preference exploration
+ * Returns 0 if not in exploration mode or already explored enough
+ */
+export function getPreferenceExplorationRoundsRemaining(state: NegotiationState | null): number {
+  if (!state) return 0;
+  const consecutiveBalanced = state.consecutiveBalancedSelections ?? 0;
+  if (consecutiveBalanced === 0) return 0;
+  // After 3 balanced selections, no more extra rounds needed
+  if (consecutiveBalanced >= 3) return 0;
+  // Return remaining rounds (3 - current count)
+  return 3 - consecutiveBalanced;
+}
+
+/**
+ * Check if preference exploration is complete
+ * (either vendor made a clear choice or selected balanced 3 times)
+ */
+export function isPreferenceExplorationComplete(state: NegotiationState | null): boolean {
+  if (!state) return true;
+  const consecutiveBalanced = state.consecutiveBalancedSelections ?? 0;
+  // Complete if: no balanced selections, or 3+ balanced selections
+  return consecutiveBalanced === 0 || consecutiveBalanced >= 3;
+}
+
+// ============================================
+// UTILITY HISTORY & STALL DETECTION (February 2026)
+// ============================================
+
+/**
+ * Record utility score for a round and track improvement
+ * Returns updated state with utility history and stall detection
+ */
+export function recordUtilityScore(
+  state: NegotiationState,
+  round: number,
+  utility: number
+): NegotiationState {
+  const utilityHistory = state.utilityHistory ?? [];
+  const newRecord = {
+    round,
+    utility,
+    timestamp: new Date(),
+  };
+
+  // Get previous utility to check for improvement
+  const previousUtility = utilityHistory.length > 0
+    ? utilityHistory[utilityHistory.length - 1].utility
+    : 0;
+
+  // Check if utility improved (even small improvement counts)
+  const improved = utility > previousUtility + 0.01; // 1% improvement threshold
+
+  // Update consecutive no-improvement counter
+  let consecutiveNoImprovement = state.consecutiveNoImprovementRounds ?? 0;
+  if (improved) {
+    consecutiveNoImprovement = 0;
+  } else {
+    consecutiveNoImprovement++;
+  }
+
+  return {
+    ...state,
+    utilityHistory: [...utilityHistory, newRecord],
+    consecutiveNoImprovementRounds: consecutiveNoImprovement,
+    lastUpdatedAt: new Date(),
+  };
+}
+
+/**
+ * Check if negotiation is stalled (no utility improvement for N rounds)
+ * @param state - Current negotiation state
+ * @param threshold - Number of rounds with no improvement to consider stalled (default 3)
+ */
+export function isNegotiationStalled(
+  state: NegotiationState | null,
+  threshold: number = 3
+): boolean {
+  if (!state) return false;
+  const noImprovementRounds = state.consecutiveNoImprovementRounds ?? 0;
+  return noImprovementRounds >= threshold;
+}
+
+/**
+ * Check if vendor is rigid (no concessions made across multiple rounds)
+ * @param state - Current negotiation state
+ * @param minRounds - Minimum rounds to consider (default 10)
+ */
+export function isVendorRigid(
+  state: NegotiationState | null,
+  minRounds: number = 10
+): boolean {
+  if (!state) return false;
+
+  const priceConcessions = state.priceConcessions ?? [];
+  const termsConcessions = state.termsConcessions ?? [];
+  const pmCounterHistory = state.pmCounterHistory ?? [];
+
+  // Not enough rounds to determine rigidity
+  if (pmCounterHistory.length < minRounds) return false;
+
+  // Vendor is rigid if they made NO concessions in the last minRounds rounds
+  const totalConcessions = priceConcessions.length + termsConcessions.length;
+  return totalConcessions === 0;
+}
+
+/**
+ * Get the utility trend over the last N rounds
+ * Returns 'improving', 'declining', or 'flat'
+ */
+export function getUtilityTrend(
+  state: NegotiationState | null,
+  lookbackRounds: number = 5
+): 'improving' | 'declining' | 'flat' {
+  if (!state || !state.utilityHistory || state.utilityHistory.length < 2) {
+    return 'flat';
+  }
+
+  const history = state.utilityHistory;
+  const recentHistory = history.slice(-lookbackRounds);
+
+  if (recentHistory.length < 2) return 'flat';
+
+  const firstUtility = recentHistory[0].utility;
+  const lastUtility = recentHistory[recentHistory.length - 1].utility;
+  const change = lastUtility - firstUtility;
+
+  // 2% threshold for determining trend
+  if (change > 0.02) return 'improving';
+  if (change < -0.02) return 'declining';
+  return 'flat';
 }
 
 export default {
@@ -421,4 +662,13 @@ export default {
   getLastPmCounter,
   getTotalPriceConcession,
   getTotalTermsConcession,
+  detectMesoSelectionFromMessage,
+  recordMesoSelection,
+  isInPreferenceExploration,
+  getPreferenceExplorationRoundsRemaining,
+  isPreferenceExplorationComplete,
+  recordUtilityScore,
+  isNegotiationStalled,
+  isVendorRigid,
+  getUtilityTrend,
 };
