@@ -25,8 +25,22 @@ import { captureVendorBid, checkAndTriggerComparison } from '../bidComparison/bi
 import { sendDealCreatedEmail, sendContinuedNegotiationEmail, sendPmDealStatusNotificationEmail, sendDealSummaryPDFEmail } from '../../services/email.service.js';
 import { generateDealSummaryPDF, generatePDFFilename, type DealSummaryPDFInput } from './pdf/dealSummaryPdfGenerator.js';
 import { updateProfileAfterDeal, type DealOutcome } from './engine/vendorProfileService.js';
-import { generateMesoOptions, shouldUseMeso, type MesoResult, type MesoOption } from './engine/meso.js';
+import {
+  generateMesoOptions,
+  generateDynamicMesoOptions,
+  generateFinalMesoOptions,
+  shouldUseMeso,
+  shouldTriggerFinalMeso,
+  type MesoResult,
+  type MesoOption,
+  type PreviousMesoRound,
+} from './engine/meso.js';
 import { resolveNegotiationConfig } from './engine/weightedUtility.js';
+import {
+  shouldAskFinalOffer,
+  trackOffer,
+  type ParameterHistory,
+} from './engine/stallDetector.js';
 
 // ============================================================================
 // Contract-Deal Status Sync
@@ -1835,21 +1849,73 @@ export const generatePMResponseAsyncService = async (
     // ========================================================================
     // MESO Generation (Multiple Equivalent Simultaneous Offers)
     // ========================================================================
-    // Generate MESO options when:
-    // 1. Decision is COUNTER (we're making a counter-offer)
-    // 2. Round is appropriate for MESO (typically rounds 2-4)
-    // 3. MESO is enabled in deal config (default: true)
+    // Enhanced MESO with:
+    // 1. Stall detection - "Is this your final offer?" prompt
+    // 2. Dynamic MESO - Learning-based offer generation
+    // 3. Final MESO - Deal closure at 75%+ utility
     // ========================================================================
     let mesoResult: MesoResult | null = null;
+    let stallPrompt: string | null = null;
     const currentRoundForMeso = deal.round + 1;
     const mesoEnabled = (deal.negotiationConfigJson as any)?.mesoEnabled !== false; // Default to enabled
 
-    // Check previous MESO rounds to avoid overusing
-    const previousMesoRounds = await models.MesoRound.count({
+    // Build resolved config for MESO generation (needed for multiple checks)
+    const wizardConfig = (deal.negotiationConfigJson as any)?.wizardConfig;
+    const resolvedConfig = resolveNegotiationConfig(wizardConfig || {});
+
+    // ========================================================================
+    // STALL DETECTION (February 2026)
+    // Track vendor parameter history and detect stall patterns
+    // ========================================================================
+    let parameterHistories: ParameterHistory[] = (deal.convoStateJson as any)?.parameterHistories || [];
+
+    // Track current vendor offer in parameter history
+    if (extractedOffer) {
+      parameterHistories = trackOffer(
+        parameterHistories,
+        extractedOffer as any,
+        currentRoundForMeso
+      );
+
+      // Check for stall pattern (vendor repeating same value 3+ rounds)
+      stallPrompt = shouldAskFinalOffer(parameterHistories, currentRoundForMeso, 3);
+
+      if (stallPrompt) {
+        logger.info(`[STALL] Detected stall pattern for deal ${deal.id} round ${currentRoundForMeso}`, {
+          prompt: stallPrompt.substring(0, 100) + '...',
+        });
+      }
+    }
+
+    // Store updated parameter histories in negotiation state
+    if (negotiationState) {
+      (negotiationState as any).parameterHistories = parameterHistories;
+    }
+
+    // ========================================================================
+    // FINAL MESO CHECK (75%+ utility trigger)
+    // ========================================================================
+    const isFinalMesoTrigger = shouldTriggerFinalMeso(
+      decision.utilityScore,
+      currentRoundForMeso,
+      0.75 // 75% utility threshold
+    );
+
+    if (isFinalMesoTrigger) {
+      logger.info(`[MESO] Final MESO triggered for deal ${deal.id} - utility ${(decision.utilityScore * 100).toFixed(1)}% >= 75%`);
+    }
+
+    // Check previous MESO rounds to get the last one for dynamic generation
+    const previousMesoRounds = await models.MesoRound.findAll({
+      where: { dealId: deal.id },
+      order: [['round', 'DESC']],
+      limit: 1,
+    });
+    const previousMesoRoundsCount = await models.MesoRound.count({
       where: { dealId: deal.id },
     });
 
-    const mesoShouldApply = shouldUseMeso(currentRoundForMeso, config.max_rounds, previousMesoRounds);
+    const mesoShouldApply = shouldUseMeso(currentRoundForMeso, config.max_rounds, previousMesoRoundsCount);
 
     // MESO should trigger on:
     // 1. COUNTER decisions (normal case), OR
@@ -1857,23 +1923,75 @@ export const generatePMResponseAsyncService = async (
     const isFirstPmResponse = currentRoundForMeso === 1;
     const mesoDecisionOk = decision.action === 'COUNTER' || isFirstPmResponse;
 
-    logger.info(`[MESO] Check: action=${decision.action}, enabled=${mesoEnabled}, round=${currentRoundForMeso}, maxRounds=${config.max_rounds}, prevMesoRounds=${previousMesoRounds}, shouldApply=${mesoShouldApply}, isFirstPm=${isFirstPmResponse}, decisionOk=${mesoDecisionOk}`);
+    logger.info(`[MESO] Check: action=${decision.action}, enabled=${mesoEnabled}, round=${currentRoundForMeso}, maxRounds=${config.max_rounds}, prevMesoRounds=${previousMesoRoundsCount}, shouldApply=${mesoShouldApply}, isFirstPm=${isFirstPmResponse}, decisionOk=${mesoDecisionOk}, isFinal=${isFinalMesoTrigger}`);
 
     if (mesoDecisionOk && mesoEnabled && mesoShouldApply) {
       try {
-        // Build resolved config for MESO generation
-        const wizardConfig = (deal.negotiationConfigJson as any)?.wizardConfig;
-        const resolvedConfig = resolveNegotiationConfig(wizardConfig || {});
+        // Determine which MESO generation strategy to use
+        if (isFinalMesoTrigger) {
+          // ========================================================================
+          // FINAL MESO - Generate final 3 offers for deal closure
+          // ========================================================================
+          mesoResult = generateFinalMesoOptions(
+            resolvedConfig,
+            extractedOffer as any,
+            currentRoundForMeso,
+            decision.utilityScore
+          );
 
-        // Generate MESO options with target utility from decision
-        mesoResult = generateMesoOptions(
-          resolvedConfig,
-          extractedOffer as any,
-          currentRoundForMeso,
-          decision.utilityScore + 0.05 // Target slightly higher utility than current
-        );
+          if (mesoResult.success) {
+            logger.info(`[MESO] Generated FINAL MESO options for deal ${deal.id}`, {
+              targetUtility: mesoResult.targetUtility,
+              variance: mesoResult.variance,
+            });
+          }
+        } else if (previousMesoRounds.length > 0) {
+          // ========================================================================
+          // DYNAMIC MESO - Learning-based generation with different values
+          // ========================================================================
+          const lastMesoRound = previousMesoRounds[0];
+          const previousMeso: PreviousMesoRound = {
+            round: lastMesoRound.round,
+            options: lastMesoRound.options as MesoOption[],
+            selectedOptionId: lastMesoRound.selectedOptionId ?? undefined,
+          };
 
-        if (mesoResult.success && mesoResult.options.length > 0) {
+          mesoResult = generateDynamicMesoOptions(
+            resolvedConfig,
+            extractedOffer as any,
+            currentRoundForMeso,
+            negotiationState,
+            previousMeso,
+            decision.utilityScore + 0.05 // Target slightly higher utility than current
+          );
+
+          if (mesoResult.success) {
+            logger.info(`[MESO] Generated DYNAMIC MESO options for deal ${deal.id}`, {
+              targetUtility: mesoResult.targetUtility,
+              variance: mesoResult.variance,
+              hasPreviousMeso: true,
+            });
+          }
+        } else {
+          // ========================================================================
+          // STANDARD MESO - First MESO generation (no history yet)
+          // ========================================================================
+          mesoResult = generateMesoOptions(
+            resolvedConfig,
+            extractedOffer as any,
+            currentRoundForMeso,
+            decision.utilityScore + 0.05 // Target slightly higher utility than current
+          );
+
+          if (mesoResult.success) {
+            logger.info(`[MESO] Generated INITIAL MESO options for deal ${deal.id}`, {
+              targetUtility: mesoResult.targetUtility,
+              variance: mesoResult.variance,
+            });
+          }
+        }
+
+        if (mesoResult && mesoResult.success && mesoResult.options.length > 0) {
           // Store MESO round in database
           await models.MesoRound.create({
             id: uuidv4(),
@@ -1889,6 +2007,9 @@ export const generatePMResponseAsyncService = async (
             metadata: {
               vendorOfferId: vendorMessage.id,
               generatedAt: new Date().toISOString(),
+              isFinal: isFinalMesoTrigger,
+              stallPrompt: stallPrompt || undefined,
+              generationType: isFinalMesoTrigger ? 'final' : (previousMesoRounds.length > 0 ? 'dynamic' : 'initial'),
             },
           });
 
@@ -1896,9 +2017,11 @@ export const generatePMResponseAsyncService = async (
             targetUtility: mesoResult.targetUtility,
             variance: mesoResult.variance,
             options: mesoResult.options.map(o => ({ id: o.id, label: o.label, utility: o.utility })),
+            isFinal: isFinalMesoTrigger,
+            hasStallPrompt: !!stallPrompt,
           });
         } else {
-          logger.info(`[MESO] Generation not successful for deal ${deal.id}: ${mesoResult.reason || 'unknown'}`);
+          logger.info(`[MESO] Generation not successful for deal ${deal.id}: ${mesoResult?.reason || 'unknown'}`);
           mesoResult = null; // Reset to null if not successful
         }
       } catch (mesoError) {
@@ -2001,6 +2124,14 @@ export const generatePMResponseAsyncService = async (
         options: mesoResult.options,
         targetUtility: mesoResult.targetUtility,
         variance: mesoResult.variance,
+        isFinal: isFinalMesoTrigger, // Flag for Final MESO presentation
+        stallPrompt: stallPrompt || undefined, // "Is this your final offer?" prompt
+      };
+    } else if (stallPrompt) {
+      // Even if no MESO, include stall prompt for display
+      (explainability as any).stallDetection = {
+        detected: true,
+        prompt: stallPrompt,
       };
     }
 

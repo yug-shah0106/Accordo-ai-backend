@@ -432,12 +432,38 @@ export function getTotalTermsConcession(state: NegotiationState): number {
 
 /**
  * Detect MESO selection type from vendor message content
- * Looks for keywords like "Best Price", "Best Terms", "Balanced"
+ * Looks for keywords like "Offer 1", "Offer 2", "Offer 3" (new)
+ * Also supports legacy: "Best Price", "Best Terms", "Balanced"
  */
-export function detectMesoSelectionFromMessage(content: string): 'price' | 'terms' | 'balanced' | null {
+export function detectMesoSelectionFromMessage(content: string): 'offer_1' | 'offer_2' | 'offer_3' | 'price' | 'terms' | 'balanced' | null {
   const lowerContent = content.toLowerCase();
 
-  // Check for price-focused selection
+  // Check for new naming convention: Offer 1, Offer 2, Offer 3
+  if (
+    lowerContent.includes('offer 1') ||
+    lowerContent.includes('offer one') ||
+    lowerContent.includes('"offer 1"')
+  ) {
+    return 'offer_1';
+  }
+
+  if (
+    lowerContent.includes('offer 2') ||
+    lowerContent.includes('offer two') ||
+    lowerContent.includes('"offer 2"')
+  ) {
+    return 'offer_2';
+  }
+
+  if (
+    lowerContent.includes('offer 3') ||
+    lowerContent.includes('offer three') ||
+    lowerContent.includes('"offer 3"')
+  ) {
+    return 'offer_3';
+  }
+
+  // Legacy support: Check for price-focused selection
   if (
     lowerContent.includes('best price') ||
     lowerContent.includes('price-focused') ||
@@ -446,7 +472,7 @@ export function detectMesoSelectionFromMessage(content: string): 'price' | 'term
     return 'price';
   }
 
-  // Check for terms-focused selection
+  // Legacy support: Check for terms-focused selection
   if (
     lowerContent.includes('best terms') ||
     lowerContent.includes('terms-focused') ||
@@ -455,7 +481,7 @@ export function detectMesoSelectionFromMessage(content: string): 'price' | 'term
     return 'terms';
   }
 
-  // Check for balanced selection
+  // Legacy support: Check for balanced selection
   if (
     lowerContent.includes('balanced') ||
     lowerContent.includes('"balanced"')
@@ -468,10 +494,11 @@ export function detectMesoSelectionFromMessage(content: string): 'price' | 'term
 
 /**
  * Record a MESO selection and update negotiation state
+ * Supports both new naming (offer_1/2/3) and legacy (price/terms/balanced)
  */
 export function recordMesoSelection(
   state: NegotiationState,
-  selectionType: 'price' | 'terms' | 'balanced',
+  selectionType: 'offer_1' | 'offer_2' | 'offer_3' | 'price' | 'terms' | 'balanced',
   selectedOptionId: string,
   round: number
 ): NegotiationState {
@@ -484,10 +511,12 @@ export function recordMesoSelection(
   };
 
   // Update consecutive balanced count
+  // Offer 3 is equivalent to "balanced" in the new naming
   let consecutiveBalanced = state.consecutiveBalancedSelections ?? 0;
   let explorationStartRound = state.preferenceExplorationStartRound;
 
-  if (selectionType === 'balanced') {
+  // Offer 3 or legacy "balanced" triggers preference exploration
+  if (selectionType === 'balanced' || selectionType === 'offer_3') {
     consecutiveBalanced++;
     // Start preference exploration on first balanced selection
     if (!explorationStartRound) {
