@@ -47,6 +47,9 @@ docker-compose*.yml
 scripts
 *.sh
 
+# Embedding service (has its own Dockerfile; not part of backend build)
+embedding-service
+
 # TypeScript build info
 *.tsbuildinfo
 
