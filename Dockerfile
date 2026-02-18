@@ -45,8 +45,9 @@ COPY . .
 # Build TypeScript to JavaScript
 RUN npm run build
 
-# Prune devDependencies for production
-RUN npm prune --production
+# Prune devDependencies for production, then re-install sequelize-cli
+# (needed at runtime for the migration step in start.sh)
+RUN npm prune --production && npm install sequelize-cli
 
 # ---------------------------------------------
 # Stage 3: Production Runtime
@@ -79,6 +80,9 @@ COPY --from=builder /app/package*.json ./
 COPY --from=builder /app/migrations ./migrations
 COPY --from=builder /app/sequelize.config.cjs ./sequelize.config.cjs
 
+# Create runtime directories (logs for winston, uploads for multer/PDFs)
+RUN mkdir -p /app/logs/combined /app/logs/error /app/uploads/pdfs
+
 # Create production-safe .sequelizerc (without ts-node dependency)
 RUN echo 'const path = require("path");' > /app/.sequelizerc && \
     echo 'module.exports = {' >> /app/.sequelizerc && \
@@ -87,11 +91,12 @@ RUN echo 'const path = require("path");' > /app/.sequelizerc && \
     echo '};' >> /app/.sequelizerc
 
 # Create startup script for migrations + server
+# Migrations must succeed — fail loudly if the DB schema is not up to date
 RUN echo '#!/bin/sh' > /app/start.sh && \
     echo 'set -e' >> /app/start.sh && \
     echo 'echo "Running database migrations..."' >> /app/start.sh && \
-    echo 'npm run migrate || echo "Migration failed or already up to date"' >> /app/start.sh && \
-    echo 'echo "Starting server..."' >> /app/start.sh && \
+    echo 'npx sequelize-cli db:migrate' >> /app/start.sh && \
+    echo 'echo "Migrations complete. Starting server..."' >> /app/start.sh && \
     echo 'exec node dist/index.js' >> /app/start.sh && \
     chmod +x /app/start.sh
 

@@ -56,11 +56,17 @@ services:
       SMTP_USER: ${SMTP_USER:-}
       SMTP_PASS: ${SMTP_PASS:-}
       SMTP_FROM_EMAIL: ${SMTP_FROM_EMAIL:-}
-      # LLM (optional)
+      # LLM (optional — defaults to Ollama on the host)
       LLM_BASE_URL: ${LLM_BASE_URL:-http://host.docker.internal:11434}
       LLM_MODEL: ${LLM_MODEL:-qwen3}
+      LLM_TIMEOUT: ${LLM_TIMEOUT:-60000}
+      # Embedding (optional — local by default, no external service needed)
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-local}
     ports:
       - "${PORT:-5002}:5002"
+    volumes:
+      - uploads_data:/app/uploads
+      - logs_data:/app/logs
     depends_on:
       postgres:
         condition: service_healthy
@@ -74,6 +80,8 @@ services:
 
 volumes:
   postgres_data:
+  uploads_data:
+  logs_data:
 
 # Usage:
 # ------
