@@ -18,8 +18,103 @@ import type {
   ExtendedOffer,
   ResolvedNegotiationConfig,
   WizardConfig,
+  NegotiationState,
+  MesoSelectionRecord,
 } from './types.js';
 import { calculateWeightedUtilityFromResolved } from './weightedUtility.js';
+
+// ============================================
+// VENDOR PREFERENCE PROFILE (Learning-Based MESO)
+// ============================================
+
+/**
+ * Vendor preference profile learned from MESO selections
+ */
+export interface VendorPreferenceProfile {
+  /** Inferred weight for price (0-1, higher = vendor prefers price-focused offers) */
+  priceWeight: number;
+  /** Inferred weight for payment terms (0-1) */
+  termsWeight: number;
+  /** Inferred weight for delivery (0-1) */
+  deliveryWeight: number;
+  /** Inferred weight for warranty (0-1) */
+  warrantyWeight: number;
+  /** Last selected offer type */
+  lastSelectedOfferType: 'offer_1' | 'offer_2' | 'offer_3' | 'price' | 'terms' | 'balanced' | null;
+  /** History of selections with offer details */
+  selectionHistory: MesoSelectionRecord[];
+  /** Number of times vendor selected price-focused */
+  priceSelectionCount: number;
+  /** Number of times vendor selected terms-focused */
+  termsSelectionCount: number;
+  /** Number of times vendor selected balanced */
+  balancedSelectionCount: number;
+}
+
+/**
+ * Create empty vendor preference profile
+ */
+export function createEmptyPreferenceProfile(): VendorPreferenceProfile {
+  return {
+    priceWeight: 0.5,
+    termsWeight: 0.5,
+    deliveryWeight: 0.5,
+    warrantyWeight: 0.5,
+    lastSelectedOfferType: null,
+    selectionHistory: [],
+    priceSelectionCount: 0,
+    termsSelectionCount: 0,
+    balancedSelectionCount: 0,
+  };
+}
+
+/**
+ * Build vendor preference profile from negotiation state
+ */
+export function buildPreferenceProfile(state: NegotiationState | null): VendorPreferenceProfile {
+  const profile = createEmptyPreferenceProfile();
+
+  if (!state || !state.mesoSelections || state.mesoSelections.length === 0) {
+    return profile;
+  }
+
+  profile.selectionHistory = state.mesoSelections;
+
+  // Count selections by type
+  for (const selection of state.mesoSelections) {
+    const type = selection.selectedType;
+    if (type === 'offer_1' || type === 'price') {
+      profile.priceSelectionCount++;
+    } else if (type === 'offer_2' || type === 'terms') {
+      profile.termsSelectionCount++;
+    } else if (type === 'offer_3' || type === 'balanced') {
+      profile.balancedSelectionCount++;
+    }
+  }
+
+  // Calculate weights based on selection frequency
+  const totalSelections = state.mesoSelections.length;
+  if (totalSelections > 0) {
+    profile.priceWeight = 0.5 + (profile.priceSelectionCount / totalSelections) * 0.3;
+    profile.termsWeight = 0.5 + (profile.termsSelectionCount / totalSelections) * 0.3;
+    // Balanced selections indicate no strong preference, keep at 0.5
+  }
+
+  // Set last selected type
+  const lastSelection = state.mesoSelections[state.mesoSelections.length - 1];
+  profile.lastSelectedOfferType = lastSelection.selectedType;
+
+  return profile;
+}
+
+/**
+ * Previous MESO round data for ensuring dynamic offers
+ */
+export interface PreviousMesoRound {
+  round: number;
+  options: MesoOption[];
+  selectedOptionId?: string;
+}
 
 // ============================================
 // MESO Types
@@ -122,63 +217,58 @@ export function generateMesoOptions(
 
   try {
     // ============================================
-    // Option 1: Price-Focused
-    // Lower price, standard terms
+    // Option 1: Best Price + Best Delivery + Medium Terms + Min Warranty
+    // "Value-focused" - lowest price, fastest delivery, shorter warranty
     // ============================================
 
-    const priceFocusedOffer = generatePriceFocusedOffer(config, vendorOffer, round, targetUtility);
-    const priceFocusedUtility = calculateWeightedUtilityFromResolved(priceFocusedOffer, config);
+    const offer1 = generatePriceFocusedOffer(config, vendorOffer, round, targetUtility);
+    const offer1Utility = calculateWeightedUtilityFromResolved(offer1, config);
 
     options.push({
-      id: `meso_${round}_price`,
-      offer: priceFocusedOffer,
-      utility: priceFocusedUtility.totalUtility,
-      label: 'Best Price',
-      description: 'Lower price with standard payment terms',
-      emphasis: ['price'],
-      tradeoffs: ['Prioritizes price reduction over payment flexibility'],
+      id: `meso_${round}_offer1`,
+      offer: offer1,
+      utility: offer1Utility.totalUtility,
+      label: 'Offer 1',
+      description: `Best price ($${offer1.total_price?.toLocaleString()}) with fast ${offer1.delivery_days}-day delivery`,
+      emphasis: ['price', 'delivery'],
+      tradeoffs: [`${offer1.warranty_months || 0} months warranty`, `Net ${offer1.payment_terms_days} payment`],
     });
 
     // ============================================
-    // Option 2: Terms-Focused
-    // Higher price, longer payment terms
+    // Option 2: Medium Price + Best Terms + Medium Delivery + Standard Warranty
+    // "Cash flow friendly" - longest payment terms
     // ============================================
 
-    const termsFocusedOffer = generateTermsFocusedOffer(config, vendorOffer, round, targetUtility);
-    const termsFocusedUtility = calculateWeightedUtilityFromResolved(termsFocusedOffer, config);
+    const offer2 = generateTermsFocusedOffer(config, vendorOffer, round, targetUtility);
+    const offer2Utility = calculateWeightedUtilityFromResolved(offer2, config);
 
     options.push({
-      id: `meso_${round}_terms`,
-      offer: termsFocusedOffer,
-      utility: termsFocusedUtility.totalUtility,
-      label: 'Best Terms',
-      description: 'Extended payment terms with moderate price',
+      id: `meso_${round}_offer2`,
+      offer: offer2,
+      utility: offer2Utility.totalUtility,
+      label: 'Offer 2',
+      description: `Extended Net ${offer2.payment_terms_days} payment terms with ${offer2.warranty_months} months warranty`,
       emphasis: ['payment_terms'],
-      tradeoffs: ['Prioritizes payment flexibility over price'],
+      tradeoffs: [`$${offer2.total_price?.toLocaleString()} price`, `${offer2.delivery_days}-day delivery`],
     });
 
     // ============================================
-    // Option 3: Balanced (only if config supports delivery/warranty)
-    // Moderate price, moderate terms, better delivery/warranty
+    // Option 3: Medium Price + Medium Terms + Best Delivery + Extended Warranty
+    // "Full service" - best delivery + extended warranty
     // ============================================
 
-    const hasDeliveryWeight = (config.weights.deliveryDate ?? 0) > 3;
-    const hasWarrantyWeight = (config.weights.warrantyPeriod ?? 0) > 3;
+    const offer3 = generateBalancedOffer(config, vendorOffer, round, targetUtility);
+    const offer3Utility = calculateWeightedUtilityFromResolved(offer3, config);
 
-    if (hasDeliveryWeight || hasWarrantyWeight) {
-      const balancedOffer = generateBalancedOffer(config, vendorOffer, round, targetUtility);
-      const balancedUtility = calculateWeightedUtilityFromResolved(balancedOffer, config);
-
-      options.push({
-        id: `meso_${round}_balanced`,
-        offer: balancedOffer,
-        utility: balancedUtility.totalUtility,
-        label: 'Balanced',
-        description: 'Balanced approach with delivery/warranty focus',
-        emphasis: hasDeliveryWeight ? ['delivery', 'warranty'] : ['warranty'],
-        tradeoffs: ['Balances price and terms for better delivery/warranty'],
-      });
-    }
+    options.push({
+      id: `meso_${round}_offer3`,
+      offer: offer3,
+      utility: offer3Utility.totalUtility,
+      label: 'Offer 3',
+      description: `Fast ${offer3.delivery_days}-day delivery with extended ${offer3.warranty_months} months warranty`,
+      emphasis: ['delivery', 'warranty'],
+      tradeoffs: [`$${offer3.total_price?.toLocaleString()} price`, `Net ${offer3.payment_terms_days} payment`],
+    });
 
     // ============================================
     // Normalize utilities to minimize variance
@@ -216,9 +306,88 @@ export function generateMesoOptions(
   }
 }
 
+// ============================================
+// MESO OFFER GENERATION HELPERS
+// ============================================
+
 /**
- * Generate a price-focused counter-offer
- * Prioritizes lower price, accepts standard payment terms
+ * Calculate base counter-offer price based on round and priority
+ */
+function calculateBasePrice(
+  config: ResolvedNegotiationConfig,
+  vendorOffer: ExtendedOffer,
+  round: number
+): number {
+  const { targetPrice, maxAcceptablePrice, priceRange, priority } = config;
+
+  // Base aggressiveness by priority
+  const aggressiveness = priority === 'HIGH' ? 0.25 : priority === 'LOW' ? 0.45 : 0.35;
+  const roundAdjustment = Math.min(0.10, round * 0.02);
+
+  let basePrice = targetPrice + priceRange * (aggressiveness + roundAdjustment);
+
+  // Never exceed vendor's offer or max acceptable
+  if (vendorOffer.total_price != null) {
+    basePrice = Math.min(basePrice, vendorOffer.total_price);
+  }
+  basePrice = Math.min(basePrice, maxAcceptablePrice);
+
+  return Math.round(basePrice * 100) / 100;
+}
+
+/**
+ * Calculate medium (midpoint) payment terms in days
+ */
+function getMediumPaymentDays(config: ResolvedNegotiationConfig): number {
+  return Math.round((config.paymentTermsMinDays + config.paymentTermsMaxDays) / 2);
+}
+
+/**
+ * Calculate best (fastest) delivery days
+ * Uses preferred date if available, otherwise improves on vendor's offer
+ */
+function getBestDeliveryDays(
+  config: ResolvedNegotiationConfig,
+  vendorOffer: ExtendedOffer
+): number {
+  const vendorDelivery = vendorOffer.delivery_days ?? 30;
+
+  // If we have a preferred delivery date, calculate days from now
+  if (config.preferredDeliveryDate) {
+    const preferredDays = Math.ceil(
+      (config.preferredDeliveryDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24)
+    );
+    return Math.max(1, Math.min(preferredDays, vendorDelivery));
+  }
+
+  // Otherwise, aim for 10-20% faster than vendor's offer
+  const improvement = Math.max(2, Math.floor(vendorDelivery * 0.15));
+  return Math.max(7, vendorDelivery - improvement);
+}
+
+/**
+ * Calculate medium delivery days (vendor's offer or required date)
+ */
+function getMediumDeliveryDays(
+  config: ResolvedNegotiationConfig,
+  vendorOffer: ExtendedOffer
+): number {
+  const vendorDelivery = vendorOffer.delivery_days ?? 30;
+
+  // If we have a required delivery date, use it as ceiling
+  if (config.deliveryDate) {
+    const requiredDays = Math.ceil(
+      (config.deliveryDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24)
+    );
+    return Math.min(vendorDelivery, requiredDays);
+  }
+
+  return vendorDelivery;
+}
+
+/**
+ * Generate Offer 1: BEST Price + BEST Delivery + MEDIUM Terms + MINIMUM Warranty
+ * This is the "value-focused" option - lowest price, fastest delivery, shorter warranty
  */
 function generatePriceFocusedOffer(
   config: ResolvedNegotiationConfig,
@@ -226,38 +395,37 @@ function generatePriceFocusedOffer(
   round: number,
   targetUtility: number
 ): ExtendedOffer {
-  const { targetPrice, maxAcceptablePrice, priceRange, priority } = config;
+  const basePrice = calculateBasePrice(config, vendorOffer, round);
 
-  // More aggressive price (closer to target)
-  const aggressiveness = priority === 'HIGH' ? 0.20 : priority === 'LOW' ? 0.40 : 0.30;
-  const roundAdjustment = Math.min(0.10, round * 0.02);
+  // BEST price: 2.5% lower than base (within strict boundaries)
+  const priceDiscount = 0.025; // 2.5%
+  let bestPrice = basePrice * (1 - priceDiscount);
+  bestPrice = Math.max(config.targetPrice, bestPrice); // Don't go below target
+  bestPrice = Math.round(bestPrice * 100) / 100;
 
-  let counterPrice = targetPrice + priceRange * (aggressiveness + roundAdjustment);
+  // MEDIUM payment terms
+  const mediumPaymentDays = getMediumPaymentDays(config);
 
-  // Never exceed vendor's offer
-  if (vendorOffer.total_price != null) {
-    counterPrice = Math.min(counterPrice, vendorOffer.total_price);
-  }
-  counterPrice = Math.min(counterPrice, maxAcceptablePrice);
-  counterPrice = Math.round(counterPrice * 100) / 100;
+  // BEST delivery (fastest)
+  const bestDeliveryDays = getBestDeliveryDays(config, vendorOffer);
 
-  // Standard payment terms (min days)
-  const paymentDays = config.paymentTermsMinDays;
+  // MINIMUM warranty: config - 6 months (floor at 0)
+  const minWarranty = Math.max(0, config.warrantyPeriodMonths - 6);
 
   return {
-    total_price: counterPrice,
-    payment_terms: `Net ${paymentDays}`,
-    payment_terms_days: paymentDays,
-    delivery_days: vendorOffer.delivery_days ?? 30,
+    total_price: bestPrice,
+    payment_terms: `Net ${mediumPaymentDays}`,
+    payment_terms_days: mediumPaymentDays,
+    delivery_days: bestDeliveryDays,
     delivery_date: vendorOffer.delivery_date ?? undefined,
-    warranty_months: config.warrantyPeriodMonths,
+    warranty_months: minWarranty,
     partial_delivery_allowed: config.partialDeliveryAllowed,
   };
 }
 
 /**
- * Generate a terms-focused counter-offer
- * Accepts higher price for longer payment terms
+ * Generate Offer 2: MEDIUM Price + BEST Terms + MEDIUM Delivery + STANDARD Warranty
+ * This is the "cash flow friendly" option - longer payment terms, standard everything else
  */
 function generateTermsFocusedOffer(
   config: ResolvedNegotiationConfig,
@@ -265,38 +433,32 @@ function generateTermsFocusedOffer(
   round: number,
   targetUtility: number
 ): ExtendedOffer {
-  const { targetPrice, maxAcceptablePrice, priceRange, priority } = config;
+  // MEDIUM price (base price, no discount)
+  const mediumPrice = calculateBasePrice(config, vendorOffer, round);
 
-  // Less aggressive price (further from target)
-  const aggressiveness = priority === 'HIGH' ? 0.35 : priority === 'LOW' ? 0.55 : 0.45;
-  const roundAdjustment = Math.min(0.10, round * 0.02);
+  // BEST payment terms (longest, using wizard max)
+  const bestPaymentDays = config.paymentTermsMaxDays;
 
-  let counterPrice = targetPrice + priceRange * (aggressiveness + roundAdjustment);
+  // MEDIUM delivery
+  const mediumDeliveryDays = getMediumDeliveryDays(config, vendorOffer);
 
-  // Never exceed vendor's offer
-  if (vendorOffer.total_price != null) {
-    counterPrice = Math.min(counterPrice, vendorOffer.total_price);
-  }
-  counterPrice = Math.min(counterPrice, maxAcceptablePrice);
-  counterPrice = Math.round(counterPrice * 100) / 100;
-
-  // Longer payment terms (max days)
-  const paymentDays = config.paymentTermsMaxDays;
+  // STANDARD warranty (config value)
+  const standardWarranty = config.warrantyPeriodMonths;
 
   return {
-    total_price: counterPrice,
-    payment_terms: `Net ${paymentDays}`,
-    payment_terms_days: paymentDays,
-    delivery_days: vendorOffer.delivery_days ?? 30,
+    total_price: mediumPrice,
+    payment_terms: `Net ${bestPaymentDays}`,
+    payment_terms_days: bestPaymentDays,
+    delivery_days: mediumDeliveryDays,
     delivery_date: vendorOffer.delivery_date ?? undefined,
-    warranty_months: config.warrantyPeriodMonths,
+    warranty_months: standardWarranty,
     partial_delivery_allowed: config.partialDeliveryAllowed,
   };
 }
 
 /**
- * Generate a balanced counter-offer
- * Moderate price and terms, focuses on delivery/warranty
+ * Generate Offer 3: MEDIUM Price + MEDIUM Terms + BEST Delivery + EXTENDED Warranty
+ * This is the "full service" option - best delivery, best warranty, fair price/terms
  */
 function generateBalancedOffer(
   config: ResolvedNegotiationConfig,
@@ -304,45 +466,25 @@ function generateBalancedOffer(
   round: number,
   targetUtility: number
 ): ExtendedOffer {
-  const { targetPrice, maxAcceptablePrice, priceRange, priority } = config;
+  // MEDIUM price (base price, no discount)
+  const mediumPrice = calculateBasePrice(config, vendorOffer, round);
 
-  // Moderate aggressiveness
-  const aggressiveness = priority === 'HIGH' ? 0.28 : priority === 'LOW' ? 0.48 : 0.38;
-  const roundAdjustment = Math.min(0.10, round * 0.02);
+  // MEDIUM payment terms
+  const mediumPaymentDays = getMediumPaymentDays(config);
 
-  let counterPrice = targetPrice + priceRange * (aggressiveness + roundAdjustment);
+  // BEST delivery (fastest)
+  const bestDeliveryDays = getBestDeliveryDays(config, vendorOffer);
 
-  if (vendorOffer.total_price != null) {
-    counterPrice = Math.min(counterPrice, vendorOffer.total_price);
-  }
-  counterPrice = Math.min(counterPrice, maxAcceptablePrice);
-  counterPrice = Math.round(counterPrice * 100) / 100;
-
-  // Moderate payment terms
-  const paymentDays = Math.round((config.paymentTermsMinDays + config.paymentTermsMaxDays) / 2);
-
-  // Request better delivery/warranty
-  let deliveryDays = vendorOffer.delivery_days ?? 30;
-  if (config.deliveryDate) {
-    const targetDays = Math.ceil(
-      (config.deliveryDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24)
-    );
-    deliveryDays = Math.min(deliveryDays, targetDays);
-  }
-
-  // Request more warranty
-  const warrantyMonths = Math.max(
-    config.warrantyPeriodMonths,
-    (vendorOffer.warranty_months ?? config.warrantyPeriodMonths) + 3
-  );
+  // EXTENDED warranty: config + 6 months
+  const extendedWarranty = config.warrantyPeriodMonths + 6;
 
   return {
-    total_price: counterPrice,
-    payment_terms: `Net ${paymentDays}`,
-    payment_terms_days: paymentDays,
-    delivery_days: deliveryDays,
-    warranty_months: warrantyMonths,
-    partial_delivery_allowed: true, // Request flexibility
+    total_price: mediumPrice,
+    payment_terms: `Net ${mediumPaymentDays}`,
+    payment_terms_days: mediumPaymentDays,
+    delivery_days: bestDeliveryDays,
+    warranty_months: extendedWarranty,
+    partial_delivery_allowed: true, // Request flexibility for full service
   };
 }
 
@@ -446,23 +588,515 @@ export function mesoOptionToOffer(option: MesoOption): Offer {
 /**
  * Check if MESO should be enabled for this round
  * MESO starts from round 1 (PM's first response to vendor's quotation)
- * and continues until near the end of negotiation
+ * and continues throughout the entire negotiation until conclusion
+ *
+ * UPDATED February 2026: MESO now continues for ALL rounds
+ * - Removed 3-round limit
+ * - Only disabled for final offers (handled separately)
  */
 export function shouldUseMeso(
   round: number,
-  maxRounds: number,
-  previousMesoRounds: number = 0
+  _maxRounds: number,
+  _previousMesoRounds: number = 0
 ): boolean {
   // MESO starts from round 1 (PM's first counter-offer after vendor's quotation)
   // Round 0 would be before any vendor message, which shouldn't happen
   if (round < 1) return false;
 
-  // Don't use MESO in final rounds (need to close the deal)
-  if (round >= maxRounds - 1) return false;
-
-  // Limit MESO to 3 rounds per negotiation to avoid fatigue
-  if (previousMesoRounds >= 3) return false;
-
-  // Use MESO in rounds 1 through maxRounds-2
+  // MESO continues for all rounds until conclusion
+  // Final offers are handled separately by generateFinalMesoOptions
   return true;
+}
+
+// ============================================
+// DYNAMIC MESO GENERATION (Learning-Based)
+// ============================================
+
+/**
+ * Concession rates based on round number
+ * Early rounds: larger concessions
+ * Later rounds: smaller concessions
+ */
+function getConcessionRate(round: number, isPrimary: boolean): number {
+  if (round <= 5) {
+    return isPrimary ? 0.025 : 0.015; // 2.5% primary, 1.5% secondary
+  } else if (round <= 10) {
+    return isPrimary ? 0.015 : 0.01;  // 1.5% primary, 1% secondary
+  } else {
+    return isPrimary ? 0.01 : 0.005;  // 1% primary, 0.5% secondary
+  }
+}
+
+/**
+ * Generate MESO options with learning-based dynamic adjustments
+ *
+ * This function generates offers that:
+ * 1. Differ from previous round offers (no identical MESOs)
+ * 2. Adjust based on vendor's selection history (learning)
+ * 3. Apply progressive concessions (larger early, smaller later)
+ *
+ * @param config - Resolved negotiation configuration
+ * @param vendorOffer - Current vendor offer
+ * @param round - Current negotiation round
+ * @param negotiationState - Negotiation state with MESO selection history
+ * @param previousMeso - Previous round's MESO options (to ensure different values)
+ * @param targetUtility - Target utility for counter-offers (0-1)
+ */
+export function generateDynamicMesoOptions(
+  config: ResolvedNegotiationConfig,
+  vendorOffer: ExtendedOffer,
+  round: number,
+  negotiationState: NegotiationState | null,
+  previousMeso: PreviousMesoRound | null = null,
+  targetUtility: number = 0.65
+): MesoResult {
+  const options: MesoOption[] = [];
+  const variance_target = 0.03; // 3% variance for dynamic MESO
+
+  try {
+    // Build vendor preference profile from history
+    const preferenceProfile = buildPreferenceProfile(negotiationState);
+
+    // Calculate base concession rate for this round
+    const primaryConcession = getConcessionRate(round, true);
+    const secondaryConcession = getConcessionRate(round, false);
+
+    // Determine emphasis adjustments based on vendor preferences
+    const priceEmphasis = preferenceProfile.priceWeight;
+    const termsEmphasis = preferenceProfile.termsWeight;
+
+    // Get previous round prices to ensure we generate different values
+    const prevOffer1Price = previousMeso?.options.find(o => o.id.includes('offer1'))?.offer.total_price;
+    const prevOffer2Price = previousMeso?.options.find(o => o.id.includes('offer2'))?.offer.total_price;
+    const prevOffer3Price = previousMeso?.options.find(o => o.id.includes('offer3'))?.offer.total_price;
+
+    // ============================================
+    // Option 1: Price-Focused (with dynamic adjustment)
+    // ============================================
+
+    const offer1 = generateDynamicPriceFocusedOffer(
+      config,
+      vendorOffer,
+      round,
+      primaryConcession,
+      priceEmphasis,
+      prevOffer1Price
+    );
+    const offer1Utility = calculateWeightedUtilityFromResolved(offer1, config);
+
+    options.push({
+      id: `meso_${round}_offer1`,
+      offer: offer1,
+      utility: offer1Utility.totalUtility,
+      label: 'Offer 1',
+      description: '',
+      emphasis: ['price'],
+      tradeoffs: [],
+    });
+
+    // ============================================
+    // Option 2: Terms-Focused (with dynamic adjustment)
+    // ============================================
+
+    const offer2 = generateDynamicTermsFocusedOffer(
+      config,
+      vendorOffer,
+      round,
+      primaryConcession,
+      termsEmphasis,
+      prevOffer2Price
+    );
+    const offer2Utility = calculateWeightedUtilityFromResolved(offer2, config);
+
+    options.push({
+      id: `meso_${round}_offer2`,
+      offer: offer2,
+      utility: offer2Utility.totalUtility,
+      label: 'Offer 2',
+      description: '',
+      emphasis: ['payment_terms'],
+      tradeoffs: [],
+    });
+
+    // ============================================
+    // Option 3: Balanced (always include for variety)
+    // ============================================
+
+    const offer3 = generateDynamicBalancedOffer(
+      config,
+      vendorOffer,
+      round,
+      secondaryConcession,
+      prevOffer3Price
+    );
+    const offer3Utility = calculateWeightedUtilityFromResolved(offer3, config);
+
+    options.push({
+      id: `meso_${round}_offer3`,
+      offer: offer3,
+      utility: offer3Utility.totalUtility,
+      label: 'Offer 3',
+      description: '',
+      emphasis: ['delivery', 'warranty'],
+      tradeoffs: [],
+    });
+
+    // ============================================
+    // Normalize utilities to minimize variance
+    // ============================================
+
+    const utilities = options.map((o) => o.utility);
+    const avgUtility = utilities.reduce((a, b) => a + b, 0) / utilities.length;
+    const maxVariance = Math.max(...utilities.map((u) => Math.abs(u - avgUtility)));
+
+    if (maxVariance > variance_target) {
+      adjustOffersForVariance(options, config, avgUtility, variance_target);
+    }
+
+    // Recalculate final variance
+    const finalUtilities = options.map((o) => o.utility);
+    const finalAvg = finalUtilities.reduce((a, b) => a + b, 0) / finalUtilities.length;
+    const finalVariance = Math.max(...finalUtilities.map((u) => Math.abs(u - finalAvg)));
+
+    return {
+      options,
+      targetUtility: finalAvg,
+      variance: finalVariance,
+      success: true,
+    };
+  } catch (error) {
+    return {
+      options: [],
+      targetUtility,
+      variance: 0,
+      success: false,
+      reason: error instanceof Error ? error.message : 'Unknown error generating dynamic MESO options',
+    };
+  }
+}
+
+/**
+ * Generate dynamic Offer 1: Best Price + Best Delivery + Medium Terms + Min Warranty
+ * Applies round-based concessions and ensures different from previous round
+ */
+function generateDynamicPriceFocusedOffer(
+  config: ResolvedNegotiationConfig,
+  vendorOffer: ExtendedOffer,
+  round: number,
+  concessionRate: number,
+  priceEmphasis: number,
+  previousPrice: number | null | undefined
+): ExtendedOffer {
+  const { targetPrice, maxAcceptablePrice, priceRange, priority } = config;
+
+  // Base aggressiveness adjusted by vendor preference
+  const baseAggressiveness = priority === 'HIGH' ? 0.20 : priority === 'LOW' ? 0.40 : 0.30;
+  const emphasisAdjustment = (priceEmphasis - 0.5) * 0.1;
+
+  // Round-based concession: move toward vendor each round
+  const roundConcession = round * concessionRate;
+
+  let basePrice = targetPrice + priceRange * (baseAggressiveness + emphasisAdjustment + roundConcession);
+
+  // Ensure different from previous round (at least $50 or 0.5% different)
+  if (previousPrice != null) {
+    const minDiff = Math.max(50, previousPrice * 0.005);
+    if (Math.abs(basePrice - previousPrice) < minDiff) {
+      basePrice = previousPrice + minDiff;
+    }
+  }
+
+  // Never exceed vendor's offer
+  if (vendorOffer.total_price != null) {
+    basePrice = Math.min(basePrice, vendorOffer.total_price);
+  }
+  basePrice = Math.min(basePrice, maxAcceptablePrice);
+
+  // BEST price: 2.5% discount from base
+  let bestPrice = basePrice * 0.975;
+  bestPrice = Math.max(config.targetPrice, bestPrice);
+  bestPrice = Math.round(bestPrice * 100) / 100;
+
+  // MEDIUM payment terms
+  const mediumPaymentDays = getMediumPaymentDays(config);
+
+  // BEST delivery
+  const bestDeliveryDays = getBestDeliveryDays(config, vendorOffer);
+
+  // MINIMUM warranty
+  const minWarranty = Math.max(0, config.warrantyPeriodMonths - 6);
+
+  return {
+    total_price: bestPrice,
+    payment_terms: `Net ${mediumPaymentDays}`,
+    payment_terms_days: mediumPaymentDays,
+    delivery_days: bestDeliveryDays,
+    delivery_date: vendorOffer.delivery_date ?? undefined,
+    warranty_months: minWarranty,
+    partial_delivery_allowed: config.partialDeliveryAllowed,
+  };
+}
+
+/**
+ * Generate dynamic Offer 2: Medium Price + Best Terms + Medium Delivery + Standard Warranty
+ * Applies round-based concessions and ensures different from previous round
+ */
+function generateDynamicTermsFocusedOffer(
+  config: ResolvedNegotiationConfig,
+  vendorOffer: ExtendedOffer,
+  round: number,
+  concessionRate: number,
+  termsEmphasis: number,
+  previousPrice: number | null | undefined
+): ExtendedOffer {
+  const { targetPrice, maxAcceptablePrice, priceRange, priority } = config;
+
+  // Base aggressiveness for medium price
+  const baseAggressiveness = priority === 'HIGH' ? 0.30 : priority === 'LOW' ? 0.50 : 0.40;
+  const emphasisAdjustment = (termsEmphasis - 0.5) * 0.1;
+
+  // Round-based concession
+  const roundConcession = round * concessionRate;
+
+  let mediumPrice = targetPrice + priceRange * (baseAggressiveness + emphasisAdjustment + roundConcession);
+
+  // Ensure different from previous round
+  if (previousPrice != null) {
+    const minDiff = Math.max(50, previousPrice * 0.005);
+    if (Math.abs(mediumPrice - previousPrice) < minDiff) {
+      mediumPrice = previousPrice + minDiff;
+    }
+  }
+
+  if (vendorOffer.total_price != null) {
+    mediumPrice = Math.min(mediumPrice, vendorOffer.total_price);
+  }
+  mediumPrice = Math.min(mediumPrice, maxAcceptablePrice);
+  mediumPrice = Math.round(mediumPrice * 100) / 100;
+
+  // BEST payment terms (longest)
+  const bestPaymentDays = config.paymentTermsMaxDays;
+
+  // MEDIUM delivery
+  const mediumDeliveryDays = getMediumDeliveryDays(config, vendorOffer);
+
+  // STANDARD warranty
+  const standardWarranty = config.warrantyPeriodMonths;
+
+  return {
+    total_price: mediumPrice,
+    payment_terms: `Net ${bestPaymentDays}`,
+    payment_terms_days: bestPaymentDays,
+    delivery_days: mediumDeliveryDays,
+    delivery_date: vendorOffer.delivery_date ?? undefined,
+    warranty_months: standardWarranty,
+    partial_delivery_allowed: config.partialDeliveryAllowed,
+  };
+}
+
+/**
+ * Generate dynamic Offer 3: Medium Price + Medium Terms + Best Delivery + Extended Warranty
+ * Applies round-based concessions and ensures different from previous round
+ */
+function generateDynamicBalancedOffer(
+  config: ResolvedNegotiationConfig,
+  vendorOffer: ExtendedOffer,
+  round: number,
+  concessionRate: number,
+  previousPrice: number | null | undefined
+): ExtendedOffer {
+  const { targetPrice, maxAcceptablePrice, priceRange, priority } = config;
+
+  // Base aggressiveness for medium price
+  const baseAggressiveness = priority === 'HIGH' ? 0.30 : priority === 'LOW' ? 0.50 : 0.40;
+
+  // Round-based concession
+  const roundConcession = round * concessionRate;
+
+  let mediumPrice = targetPrice + priceRange * (baseAggressiveness + roundConcession);
+
+  // Ensure different from previous round
+  if (previousPrice != null) {
+    const minDiff = Math.max(50, previousPrice * 0.005);
+    if (Math.abs(mediumPrice - previousPrice) < minDiff) {
+      mediumPrice = previousPrice + minDiff;
+    }
+  }
+
+  if (vendorOffer.total_price != null) {
+    mediumPrice = Math.min(mediumPrice, vendorOffer.total_price);
+  }
+  mediumPrice = Math.min(mediumPrice, maxAcceptablePrice);
+  mediumPrice = Math.round(mediumPrice * 100) / 100;
+
+  // MEDIUM payment terms
+  const mediumPaymentDays = getMediumPaymentDays(config);
+
+  // BEST delivery
+  const bestDeliveryDays = getBestDeliveryDays(config, vendorOffer);
+
+  // EXTENDED warranty
+  const extendedWarranty = config.warrantyPeriodMonths + 6;
+
+  return {
+    total_price: mediumPrice,
+    payment_terms: `Net ${mediumPaymentDays}`,
+    payment_terms_days: mediumPaymentDays,
+    delivery_days: bestDeliveryDays,
+    warranty_months: extendedWarranty,
+    partial_delivery_allowed: true,
+  };
+}
+
+
+// ============================================
+// FINAL MESO (75%+ Utility Trigger)
+// ============================================
+
+/**
+ * Check if we should trigger final MESO offers
+ * @param utilityScore - Current utility score (0-1)
+ * @param round - Current round
+ * @param threshold - Utility threshold for final offers (default 0.75)
+ */
+export function shouldTriggerFinalMeso(
+  utilityScore: number,
+  round: number,
+  threshold: number = 0.75
+): boolean {
+  // Only trigger after round 2 (give some negotiation time)
+  if (round < 2) return false;
+
+  // Trigger when utility reaches threshold
+  return utilityScore >= threshold;
+}
+
+/**
+ * Generate final MESO options for deal closure
+ * All three offers should be acceptable (>= 75% utility)
+ * Uses the same parameter priority pattern as regular MESO
+ */
+export function generateFinalMesoOptions(
+  config: ResolvedNegotiationConfig,
+  vendorOffer: ExtendedOffer,
+  round: number,
+  currentUtility: number
+): MesoResult {
+  const options: MesoOption[] = [];
+
+  try {
+    const { targetPrice, priceRange } = config;
+
+    // Final offers are closer to vendor's position (we're ready to close)
+    // Use small price variation (2-3%) for final closure
+
+    // Base price for finals: closer to vendor's price
+    const vendorPrice = vendorOffer.total_price ?? (targetPrice + priceRange * 0.7);
+
+    // ============================================
+    // Final Offer 1: Best Price + Best Delivery + Medium Terms + Min Warranty
+    // Slight discount from vendor price, fastest delivery
+    // ============================================
+
+    const finalPrice1 = Math.round((vendorPrice * 0.97) * 100) / 100; // 3% off vendor
+    const mediumTerms = getMediumPaymentDays(config);
+    const bestDelivery = getBestDeliveryDays(config, vendorOffer);
+    const minWarranty = Math.max(0, config.warrantyPeriodMonths - 6);
+
+    const finalOffer1: ExtendedOffer = {
+      total_price: Math.max(targetPrice, finalPrice1),
+      payment_terms: `Net ${mediumTerms}`,
+      payment_terms_days: mediumTerms,
+      delivery_days: bestDelivery,
+      warranty_months: minWarranty,
+      partial_delivery_allowed: config.partialDeliveryAllowed,
+    };
+    const finalUtility1 = calculateWeightedUtilityFromResolved(finalOffer1, config);
+
+    options.push({
+      id: `meso_${round}_final1`,
+      offer: finalOffer1,
+      utility: finalUtility1.totalUtility,
+      label: 'Offer 1',
+      description: `Best price ($${finalOffer1.total_price?.toLocaleString()}) with ${bestDelivery}-day delivery`,
+      emphasis: ['price', 'delivery'],
+      tradeoffs: [`${minWarranty} months warranty`, `Net ${mediumTerms} payment`],
+    });
+
+    // ============================================
+    // Final Offer 2: Medium Price + Best Terms + Medium Delivery + Standard Warranty
+    // Vendor price, longest payment terms
+    // ============================================
+
+    const mediumDelivery = getMediumDeliveryDays(config, vendorOffer);
+    const bestTerms = config.paymentTermsMaxDays;
+    const standardWarranty = config.warrantyPeriodMonths;
+
+    const finalOffer2: ExtendedOffer = {
+      total_price: Math.round(vendorPrice * 100) / 100,
+      payment_terms: `Net ${bestTerms}`,
+      payment_terms_days: bestTerms,
+      delivery_days: mediumDelivery,
+      warranty_months: standardWarranty,
+      partial_delivery_allowed: config.partialDeliveryAllowed,
+    };
+    const finalUtility2 = calculateWeightedUtilityFromResolved(finalOffer2, config);
+
+    options.push({
+      id: `meso_${round}_final2`,
+      offer: finalOffer2,
+      utility: finalUtility2.totalUtility,
+      label: 'Offer 2',
+      description: `Extended Net ${bestTerms} payment terms with ${standardWarranty} months warranty`,
+      emphasis: ['payment_terms'],
+      tradeoffs: [`$${finalOffer2.total_price?.toLocaleString()} price`, `${mediumDelivery}-day delivery`],
+    });
+
+    // ============================================
+    // Final Offer 3: Medium Price + Medium Terms + Best Delivery + Extended Warranty
+    // Vendor price, fast delivery, bonus warranty
+    // ============================================
+
+    const extendedWarranty = config.warrantyPeriodMonths + 6;
+
+    const finalOffer3: ExtendedOffer = {
+      total_price: Math.round(vendorPrice * 100) / 100,
+      payment_terms: `Net ${mediumTerms}`,
+      payment_terms_days: mediumTerms,
+      delivery_days: bestDelivery,
+      warranty_months: extendedWarranty,
+      partial_delivery_allowed: true,
+    };
+    const finalUtility3 = calculateWeightedUtilityFromResolved(finalOffer3, config);
+
+    options.push({
+      id: `meso_${round}_final3`,
+      offer: finalOffer3,
+      utility: finalUtility3.totalUtility,
+      label: 'Offer 3',
+      description: `Fast ${bestDelivery}-day delivery with extended ${extendedWarranty} months warranty`,
+      emphasis: ['delivery', 'warranty'],
+      tradeoffs: [`$${finalOffer3.total_price?.toLocaleString()} price`, `Net ${mediumTerms} payment`],
+    });
+
+    // Calculate final variance
+    const utilities = options.map((o) => o.utility);
+    const avgUtility = utilities.reduce((a, b) => a + b, 0) / utilities.length;
+    const finalVariance = Math.max(...utilities.map((u) => Math.abs(u - avgUtility)));
+
+    return {
+      options,
+      targetUtility: avgUtility,
+      variance: finalVariance,
+      success: true,
+    };
+  } catch (error) {
+    return {
+      options: [],
+      targetUtility: currentUtility,
+      variance: 0,
+      success: false,
+      reason: error instanceof Error ? error.message : 'Unknown error generating final MESO options',
+    };
+  }
 }

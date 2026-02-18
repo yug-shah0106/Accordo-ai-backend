@@ -126,8 +126,8 @@ export interface MesoSelectionRecord {
   round: number;
   /** Which option was selected */
   selectedOptionId: string;
-  /** Type of option selected */
-  selectedType: 'price' | 'terms' | 'balanced';
+  /** Type of option selected (legacy: price/terms/balanced, new: offer_1/offer_2/offer_3) */
+  selectedType: 'price' | 'terms' | 'balanced' | 'offer_1' | 'offer_2' | 'offer_3';
   /** When selection was made */
   timestamp: Date;
 }
@@ -567,20 +567,17 @@ export const ACCORDO_DEFAULTS = {
 /**
  * Accordo default WEIGHTS from Step 4 of the Deal Wizard
  * Used when user keeps AI-suggested weights (aiSuggested = true)
+ * Updated Feb 2026: Simplified to 7 core utility parameters
+ * Removed: paymentTermsRange, partialDelivery, lateDeliveryPenalty, maxRounds, walkawayThreshold
  */
 export const DEFAULT_WEIGHTS = {
-  targetUnitPrice: 25,
-  maxAcceptablePrice: 15,
-  volumeDiscountExpectation: 5,
-  paymentTermsRange: 15,
+  targetUnitPrice: 35,
+  maxAcceptablePrice: 20,
+  volumeDiscountExpectation: 10,
   advancePaymentLimit: 5,
-  deliveryDate: 10,
-  partialDelivery: 3,
-  warrantyPeriod: 7,
-  lateDeliveryPenalty: 5,
+  deliveryDate: 15,
+  warrantyPeriod: 10,
   qualityStandards: 5,
-  maxRounds: 2,
-  walkawayThreshold: 3,
 } as const;
 
 /**

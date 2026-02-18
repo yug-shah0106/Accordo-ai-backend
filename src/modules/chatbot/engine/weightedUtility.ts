@@ -893,31 +893,8 @@ export function calculateWeightedUtilityFromResolved(
   }
 
   // ============================================
-  // Payment Terms Parameters
+  // Payment Parameters
   // ============================================
-
-  // Payment Terms Range Utility
-  if (weights.paymentTermsRange > 0 && vendorOffer.payment_terms_days != null) {
-    const termsUtility = calculatePaymentTermsUtility(
-      vendorOffer.payment_terms_days,
-      resolvedConfig.paymentTermsMinDays,
-      resolvedConfig.paymentTermsMaxDays
-    );
-    const contribution = termsUtility * (weights.paymentTermsRange / 100);
-    parameterUtilities['paymentTermsRange'] = {
-      parameterId: 'paymentTermsRange',
-      parameterName: 'Payment Terms',
-      utility: termsUtility,
-      weight: weights.paymentTermsRange,
-      contribution,
-      currentValue: vendorOffer.payment_terms_days,
-      targetValue: resolvedConfig.paymentTermsMaxDays,
-      status: getStatusFromScore(termsUtility),
-      color: getColorFromScore(termsUtility),
-    };
-    totalUtility += contribution;
-    totalWeight += weights.paymentTermsRange;
-  }
 
   // Advance Payment Utility (lower is better)
   if (weights.advancePaymentLimit > 0 && vendorOffer.advance_payment_percent != null) {
@@ -970,26 +947,6 @@ export function calculateWeightedUtilityFromResolved(
     totalWeight += weights.deliveryDate;
   }
 
-  // Partial Delivery Utility
-  if (weights.partialDelivery > 0 && vendorOffer.partial_delivery_allowed != null) {
-    const partialUtility =
-      vendorOffer.partial_delivery_allowed === resolvedConfig.partialDeliveryAllowed ? 1 : 0.5;
-    const contribution = partialUtility * (weights.partialDelivery / 100);
-    parameterUtilities['partialDelivery'] = {
-      parameterId: 'partialDelivery',
-      parameterName: 'Partial Delivery',
-      utility: partialUtility,
-      weight: weights.partialDelivery,
-      contribution,
-      currentValue: vendorOffer.partial_delivery_allowed,
-      targetValue: resolvedConfig.partialDeliveryAllowed,
-      status: getStatusFromScore(partialUtility),
-      color: getColorFromScore(partialUtility),
-    };
-    totalUtility += contribution;
-    totalWeight += weights.partialDelivery;
-  }
-
   // ============================================
   // Contract Parameters
   // ============================================
@@ -1014,28 +971,6 @@ export function calculateWeightedUtilityFromResolved(
     };
     totalUtility += contribution;
     totalWeight += weights.warrantyPeriod;
-  }
-
-  // Late Delivery Penalty Utility (higher penalty is better for buyer)
-  if (weights.lateDeliveryPenalty > 0 && vendorOffer.late_penalty_percent != null) {
-    const penaltyUtility = Math.min(
-      1,
-      vendorOffer.late_penalty_percent / resolvedConfig.lateDeliveryPenaltyPerDay
-    );
-    const contribution = penaltyUtility * (weights.lateDeliveryPenalty / 100);
-    parameterUtilities['lateDeliveryPenalty'] = {
-      parameterId: 'lateDeliveryPenalty',
-      parameterName: 'Late Delivery Penalty',
-      utility: penaltyUtility,
-      weight: weights.lateDeliveryPenalty,
-      contribution,
-      currentValue: vendorOffer.late_penalty_percent,
-      targetValue: resolvedConfig.lateDeliveryPenaltyPerDay,
-      status: getStatusFromScore(penaltyUtility),
-      color: getColorFromScore(penaltyUtility),
-    };
-    totalUtility += contribution;
-    totalWeight += weights.lateDeliveryPenalty;
   }
 
   // Quality Standards Utility
