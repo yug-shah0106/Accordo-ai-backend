@@ -258,6 +258,45 @@ export const listDealsQuerySchema = Joi.object({
   limit: Joi.number().integer().positive().max(100).default(10).optional(),
 });
 
+// ==================== MESO Selection Schemas (February 2026) ====================
+
+/**
+ * Schema for MESO option selection
+ * POST /api/chatbot/requisitions/:rfqId/vendors/:vendorId/deals/:dealId/meso/select
+ */
+export const mesoSelectSchema = Joi.object({
+  selectedOptionId: Joi.string().required().messages({
+    'string.empty': 'Selected option ID is required',
+    'any.required': 'Selected option ID is required',
+  }),
+});
+
+/**
+ * Schema for "Others" form submission
+ * POST /api/chatbot/requisitions/:rfqId/vendors/:vendorId/deals/:dealId/meso/others
+ */
+export const mesoOthersSchema = Joi.object({
+  totalPrice: Joi.number().positive().required().messages({
+    'number.positive': 'Total price must be a positive number',
+    'any.required': 'Total price is required',
+  }),
+  paymentTermsDays: Joi.number().integer().min(1).max(180).required().messages({
+    'number.min': 'Payment terms must be at least 1 day',
+    'number.max': 'Payment terms cannot exceed 180 days',
+    'any.required': 'Payment terms (days) is required',
+  }),
+});
+
+/**
+ * Schema for final offer confirmation
+ * POST /api/chatbot/requisitions/:rfqId/vendors/:vendorId/deals/:dealId/final-offer/confirm
+ */
+export const finalOfferConfirmSchema = Joi.object({
+  isConfirmedFinal: Joi.boolean().required().messages({
+    'any.required': 'isConfirmedFinal (true/false) is required',
+  }),
+});
+
 /**
  * Middleware function to validate request body
  */

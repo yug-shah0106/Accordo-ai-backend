@@ -17,6 +17,8 @@ import type {
   ACTION_LABELS,
   BidStatus,
   DealStatus,
+  VendorNegotiationSummary,
+  DealNegotiationMessage,
 } from './bidAnalysis.types.js';
 import type { BidActionType, ActionDetails } from '../../models/bidActionHistory.js';
 
@@ -29,7 +31,22 @@ const {
   Contract,
   VendorSelection,
   ChatbotDeal,
+  ChatbotMessage,
 } = models;
+
+export function extractPrice(offer: any): number {
+  if (!offer) return 0;
+  return Number(offer.total_price || offer.unit_price || offer.unitPrice || offer.price || offer.totalPrice || offer.finalPrice || 0);
+}
+
+async function getLastVendorOffer(dealId: string): Promise<any> {
+  const msg = await ChatbotMessage.findOne({
+    where: { dealId, role: 'VENDOR' },
+    attributes: ['extractedOffer'],
+    order: [['round', 'DESC'], ['createdAt', 'DESC']],
+  });
+  return msg?.extractedOffer || null;
+}
 
 /**
  * Get requisitions available for bid analysis with filters
@@ -140,16 +157,13 @@ export async function getRequisitionsForBidAnalysis(
       const pendingDeals = deals.filter((d: any) => d.status === 'NEGOTIATING');
       const excludedDeals: any[] = []; // No excluded concept in deals
 
-      // Extract prices from latestVendorOffer JSONB field
-      // The structure typically has unit_price (snake_case) in the offer object
-      const prices = completedDeals
-        .map((d: any) => {
-          const offer = d.latestVendorOffer;
-          if (!offer) return 0;
-          // Try different price field names that might be in the offer (both snake_case and camelCase)
-          return Number(offer.unit_price || offer.unitPrice || offer.price || offer.totalPrice || offer.finalPrice || 0);
+      // Extract prices from latestVendorOffer JSONB field, falling back to message offers
+      const prices = (await Promise.all(
+        completedDeals.map(async (d: any) => {
+          const offer = d.latestVendorOffer || await getLastVendorOffer(d.id);
+          return extractPrice(offer);
         })
-        .filter(p => p > 0);
+      )).filter(p => p > 0);
 
       const lowestPrice = prices.length > 0 ? Math.min(...prices) : null;
       const highestPrice = prices.length > 0 ? Math.max(...prices) : null;
@@ -283,14 +297,14 @@ export async function getRequisitionBidDetail(
   });
 
   // Build bid details from deals
-  const allBids: BidWithDetails[] = deals.map((deal: any, index: number) => {
+  const allBids: BidWithDetails[] = await Promise.all(deals.map(async (deal: any, index: number) => {
     const rejection = rejectionMap.get(deal.id);
     // Check if this deal was rejected in the action history
     const isRejected = !!rejection;
 
-    // Extract price from latestVendorOffer JSONB (supports both snake_case and camelCase)
-    const offer = deal.latestVendorOffer || {};
-    const finalPrice = Number(offer.unit_price || offer.unitPrice || offer.price || offer.totalPrice || offer.finalPrice || 0);
+    // Extract price from latestVendorOffer JSONB, falling back to message offers
+    const offer = deal.latestVendorOffer || await getLastVendorOffer(deal.id) || {};
+    const finalPrice = extractPrice(offer);
 
     // Map deal status to bid status
     let bidStatus: BidStatus = 'PENDING';
@@ -307,7 +321,7 @@ export async function getRequisitionBidDetail(
       vendorName: deal.Vendor?.name || deal.counterparty || 'Unknown',
       vendorEmail: deal.Vendor?.email || '',
       finalPrice,
-      unitPrice: offer.unit_price ? Number(offer.unit_price) : (offer.unitPrice ? Number(offer.unitPrice) : null),
+      unitPrice: offer.total_price ? Number(offer.total_price) : (offer.unit_price ? Number(offer.unit_price) : (offer.unitPrice ? Number(offer.unitPrice) : null)),
       paymentTerms: offer.payment_terms || offer.paymentTerms || null,
       deliveryDate: offer.delivery_date || offer.deliveryDate || null,
       utilityScore: deal.latestUtility ? Number(deal.latestUtility) : null,
@@ -326,7 +340,7 @@ export async function getRequisitionBidDetail(
       rejectedBy: isRejected && rejection ? (rejection as any).User?.name : null,
       rejectedRemarks: isRejected && rejection ? rejection.remarks : null,
     };
-  });
+  }));
 
   // Sort by price (lowest first) for ranking, then re-rank
   const sortedBids = [...allBids]
@@ -436,7 +450,7 @@ export async function getActionHistory(
   return history.map(h => {
     const deal = h.bidId ? dealMap.get(h.bidId) : null;
     const offer = (deal as any)?.latestVendorOffer || {};
-    const bidPrice = Number(offer.price || offer.totalPrice || offer.finalPrice || 0);
+    const bidPrice = extractPrice(offer);
 
     return {
       id: h.id,
@@ -535,9 +549,9 @@ export async function rejectBid(
 
   const previousStatus = deal.status || 'UNKNOWN';
 
-  // Safely extract price from latestVendorOffer (supports both snake_case and camelCase)
-  const offer = (deal as any).latestVendorOffer || {};
-  const bidPrice = Number(offer.unit_price || offer.unitPrice || offer.price || offer.totalPrice || offer.finalPrice || 0);
+  // Safely extract price from latestVendorOffer, falling back to message offers
+  const offer = (deal as any).latestVendorOffer || await getLastVendorOffer(bidId) || {};
+  const bidPrice = extractPrice(offer);
 
   // Get vendor name safely
   const vendorName = (deal as any).Vendor?.name || 'Unknown Vendor';
@@ -613,9 +627,9 @@ export async function restoreBid(
   // Get VendorBid if it exists
   const vendorBid = await VendorBid.findOne({ where: { dealId: bidId } });
 
-  // Extract price from latestVendorOffer
-  const offer = (deal as any).latestVendorOffer || {};
-  const bidPrice = Number(offer.price || offer.totalPrice || offer.finalPrice || 0);
+  // Extract price from latestVendorOffer, falling back to message offers
+  const offer = (deal as any).latestVendorOffer || await getLastVendorOffer(bidId) || {};
+  const bidPrice = extractPrice(offer);
 
   // Log restoration action with both IDs
   const historyEntry = await logAction(
@@ -673,10 +687,10 @@ export async function selectBidForAnalysis(
     throw new CustomError('Deal does not belong to this requisition', 400);
   }
 
-  // Extract price from latestVendorOffer (supports both snake_case and camelCase)
-  const offer = (deal as any).latestVendorOffer || {};
-  const finalPrice = Number(offer.unit_price || offer.unitPrice || offer.price || offer.totalPrice || offer.finalPrice || 0);
-  const unitPrice = Number(offer.unit_price || offer.unitPrice || 0);
+  // Extract price from latestVendorOffer, falling back to message offers
+  const offer = (deal as any).latestVendorOffer || await getLastVendorOffer(bidId) || {};
+  const finalPrice = extractPrice(offer);
+  const unitPrice = Number(offer.total_price || offer.unit_price || offer.unitPrice || 0);
 
   // Find or create VendorBid from ChatbotDeal
   // selectVendor expects a VendorBid ID, not a ChatbotDeal ID
@@ -787,4 +801,92 @@ export async function logExportAction(
   pdfUrl?: string
 ): Promise<void> {
   await logAction(requisitionId, 'EXPORTED', userId, null, null, { pdfUrl });
+}
+
+/**
+ * Get negotiation history for all deals in a requisition.
+ * Returns per-vendor summaries with round-by-round messages for PDF pages.
+ */
+export async function getNegotiationHistory(
+  requisitionId: number
+): Promise<VendorNegotiationSummary[]> {
+  const deals = await ChatbotDeal.findAll({
+    where: { requisitionId },
+    include: [
+      { model: User, as: 'Vendor', attributes: ['id', 'name', 'email'] },
+    ],
+    order: [['latestUtility', 'DESC']],
+  });
+
+  const summaries: VendorNegotiationSummary[] = [];
+
+  for (const deal of deals) {
+    const d = deal as any;
+    const vendorName = d.Vendor?.name || d.counterparty || 'Unknown';
+    const vendorEmail = d.Vendor?.email || '';
+
+    // Fetch VENDOR + ACCORDO messages ordered by round/time
+    const messages = await ChatbotMessage.findAll({
+      where: {
+        dealId: d.id,
+        role: { [Op.in]: ['VENDOR', 'ACCORDO'] },
+      },
+      attributes: ['role', 'extractedOffer', 'decisionAction', 'utilityScore', 'round', 'createdAt'],
+      order: [['round', 'ASC'], ['createdAt', 'ASC']],
+    });
+
+    // Build per-message snapshots
+    const msgSnapshots: DealNegotiationMessage[] = messages.map((m: any) => ({
+      round: m.round ?? 0,
+      role: m.role,
+      price: extractPrice(m.extractedOffer),
+      decisionAction: m.decisionAction || null,
+      utilityScore: m.utilityScore != null ? Number(m.utilityScore) : null,
+      createdAt: m.createdAt,
+    }));
+
+    // Starting price = first vendor message price (or 0)
+    const firstVendorMsg = msgSnapshots.find(m => m.role === 'VENDOR' && m.price > 0);
+    const startingPrice = firstVendorMsg?.price ?? 0;
+
+    // Final price from latestVendorOffer, falling back to last vendor message
+    const offer = d.latestVendorOffer || await getLastVendorOffer(d.id);
+    let finalPrice = extractPrice(offer);
+    if (finalPrice === 0) {
+      const lastVendorMsg = [...msgSnapshots].reverse().find(m => m.role === 'VENDOR' && m.price > 0);
+      finalPrice = lastVendorMsg?.price ?? 0;
+    }
+
+    // % reduction
+    const priceReductionPercent =
+      startingPrice > 0 && finalPrice > 0
+        ? Number((((startingPrice - finalPrice) / startingPrice) * 100).toFixed(1))
+        : 0;
+
+    // Max rounds from negotiation config, default 6
+    const config = d.negotiationConfigJson as any;
+    const maxRounds = config?.maxRounds ?? config?.max_rounds ?? 6;
+
+    // Payment terms from latest offer
+    const latestOffer = d.latestVendorOffer || offer || {};
+    const paymentTerms = (latestOffer as any).payment_terms || (latestOffer as any).paymentTerms || null;
+
+    summaries.push({
+      dealId: d.id,
+      vendorName,
+      vendorEmail,
+      dealStatus: d.status,
+      mode: d.mode || 'CONVERSATION',
+      startingPrice,
+      finalPrice,
+      priceReductionPercent,
+      roundsTaken: d.round ?? 0,
+      maxRounds,
+      utilityScore: d.latestUtility != null ? Number(d.latestUtility) : null,
+      paymentTerms,
+      messages: msgSnapshots,
+    });
+  }
+
+  return summaries;
 }

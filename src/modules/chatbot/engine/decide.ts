@@ -315,10 +315,12 @@ export function calculateDynamicCounter(
   // Calculate final counter price
   const totalOffset = baseAggressiveness + roundAdjustment + concessionBonus + emphasisAdjustment;
   let counterPrice = target + priceRange * totalOffset;
+  let priceCapped = false;
 
   // Never counter above vendor's offer
-  if (vendorOffer.total_price !== null) {
-    counterPrice = Math.min(counterPrice, vendorOffer.total_price);
+  if (vendorOffer.total_price !== null && counterPrice > vendorOffer.total_price) {
+    counterPrice = vendorOffer.total_price;
+    priceCapped = true;
   }
 
   // Never exceed max acceptable
@@ -326,6 +328,27 @@ export function calculateDynamicCounter(
 
   // Round to 2 decimal places
   counterPrice = Math.round(counterPrice * 100) / 100;
+
+  // FIX: When price is capped at vendor's offer, push harder on terms
+  // This prevents the confusing "same offer" counter when price matches
+  if (priceCapped && vendorOffer.payment_terms) {
+    const vendorDays = extractPaymentDays(vendorOffer.payment_terms);
+    if (vendorDays !== null && vendorDays > 30) {
+      // Push for shorter payment terms (better for buyer)
+      // If vendor offered Net 90, counter with Net 60
+      // If vendor offered Net 60, counter with Net 30
+      if (vendorDays >= 90) {
+        chosenTerms = 'Net 60';
+        strategy = `Price matched vendor's offer; pushing for shorter payment terms (Net 60 vs vendor's Net 90)`;
+      } else if (vendorDays >= 60) {
+        chosenTerms = 'Net 45';
+        strategy = `Price matched vendor's offer; pushing for shorter payment terms (Net 45 vs vendor's Net ${vendorDays})`;
+      } else if (vendorDays > 30) {
+        chosenTerms = 'Net 30';
+        strategy = `Price matched vendor's offer; pushing for shortest payment terms (Net 30)`;
+      }
+    }
+  }
 
   // ENHANCED LOGGING: Dynamic Counter Calculation
   negotiationLogger.logDynamicCounter({
@@ -340,6 +363,7 @@ export function calculateDynamicCounter(
     strategy,
     vendorEmphasis: negotiationState?.vendorEmphasis,
     emphasisConfidence: negotiationState?.emphasisConfidence,
+    priceCapped,
   });
 
   return { price: counterPrice, terms: chosenTerms, strategy };

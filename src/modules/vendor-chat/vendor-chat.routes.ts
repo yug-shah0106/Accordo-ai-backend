@@ -7,6 +7,9 @@ import {
   enterChat,
   sendMessage,
   getPMResponse,
+  selectMesoOption,
+  submitOthers,
+  confirmFinalOffer,
 } from './vendor-chat.controller.js';
 
 /**
@@ -28,5 +31,18 @@ vendorChatRouter.post('/enter', enterChat);
 // Messaging (two-phase pattern)
 vendorChatRouter.post('/message', sendMessage);
 vendorChatRouter.post('/pm-response', getPMResponse);
+
+// ============================================================================
+// MESO + Others Flow Routes (February 2026)
+// ============================================================================
+
+// Select a MESO option (auto-accepts deal)
+vendorChatRouter.post('/meso/select', selectMesoOption);
+
+// Submit "Others" form with custom price/terms
+vendorChatRouter.post('/meso/others', submitOthers);
+
+// Confirm or deny final offer (stall detection response)
+vendorChatRouter.post('/final-offer/confirm', confirmFinalOffer);
 
 export default vendorChatRouter;

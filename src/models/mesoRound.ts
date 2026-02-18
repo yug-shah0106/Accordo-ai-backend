@@ -37,7 +37,9 @@ export interface MesoOptionJson {
 export interface VendorSelectionJson {
   selectedOptionId: string;
   selectedOffer: MesoOptionJson['offer'];
-  inferredPreferences: {
+  /** ISO date string when selection was made (February 2026) */
+  selectedAt?: string;
+  inferredPreferences?: {
     primaryPreference: string;
     confidence: number;
     preferenceAdjustments: Record<string, number>;

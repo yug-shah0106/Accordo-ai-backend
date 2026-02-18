@@ -1334,6 +1334,128 @@ export const generatePMResponseFallback = async (
   }
 };
 
+// ============================================================================
+// MESO Selection Controllers (February 2026)
+// ============================================================================
+
+/**
+ * Process MESO option selection (Offer 1, 2, or 3)
+ * POST /api/chatbot/requisitions/:rfqId/vendors/:vendorId/deals/:dealId/meso/select
+ *
+ * When vendor selects a MESO offer:
+ * - Deal status changes to ACCEPTED
+ * - Returns "under review" confirmation message
+ */
+export const processMesoSelection = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const dealId = getParam(req.params.dealId);
+    const { selectedOptionId } = req.body;
+
+    const result = await chatbotService.processMesoSelectionService({
+      dealId,
+      selectedOptionId,
+      userId: req.context.userId,
+    });
+
+    logger.info(`MESO selection processed for deal ${dealId}: option ${selectedOptionId}`);
+    res.status(200).json({
+      message: 'Deal accepted successfully',
+      data: {
+        deal: result.deal,
+        message: result.message,
+        selectedOption: result.selectedOption,
+        phase: 'DEAL_ACCEPTED',
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Process "Others" selection with counter-offer form data
+ * POST /api/chatbot/requisitions/:rfqId/vendors/:vendorId/deals/:dealId/meso/others
+ *
+ * When vendor submits Others form:
+ * - Creates vendor message with offer
+ * - Triggers PM response generation
+ * - Starts post-Others negotiation phase (4 rounds)
+ */
+export const processOthersSelection = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const dealId = getParam(req.params.dealId);
+    const { totalPrice, paymentTermsDays } = req.body;
+
+    const result = await chatbotService.processOthersSelectionService({
+      dealId,
+      totalPrice,
+      paymentTermsDays,
+      userId: req.context.userId,
+    });
+
+    logger.info(`Others selection processed for deal ${dealId}: $${totalPrice}, Net ${paymentTermsDays}`);
+    res.status(200).json({
+      message: 'Counter-offer submitted successfully',
+      data: {
+        pmMessage: result.message,
+        decision: result.decision,
+        explainability: result.explainability,
+        deal: result.deal,
+        meso: result.meso,
+        generationSource: result.generationSource,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Process "Is this your final offer?" confirmation
+ * POST /api/chatbot/requisitions/:rfqId/vendors/:vendorId/deals/:dealId/final-offer/confirm
+ *
+ * If Yes: Generate final MESO based on vendor's price (no Others option)
+ * If No: Continue normal negotiation
+ */
+export const processFinalOfferConfirmation = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const dealId = getParam(req.params.dealId);
+    const { isConfirmedFinal } = req.body;
+
+    const result = await chatbotService.processFinalOfferConfirmationService({
+      dealId,
+      isConfirmedFinal,
+      userId: req.context.userId,
+    });
+
+    logger.info(`Final offer confirmation for deal ${dealId}: confirmed=${isConfirmedFinal}`);
+    res.status(200).json({
+      message: isConfirmedFinal ? 'Final offers generated' : 'Continuing negotiation',
+      data: {
+        deal: result.deal,
+        message: result.message,
+        meso: result.meso,
+        continueNegotiation: result.continueNegotiation,
+        phase: result.continueNegotiation ? 'NORMAL_NEGOTIATION' : 'FINAL_MESO',
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 /**
  * Archive a requisition (cascades to all deals)
  * POST /api/chatbot/requisitions/:rfqId/archive

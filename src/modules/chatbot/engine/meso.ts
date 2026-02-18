@@ -20,6 +20,9 @@ import type {
   WizardConfig,
   NegotiationState,
   MesoSelectionRecord,
+  MesoCycleState,
+  FinalOfferState,
+  NegotiationPhase,
 } from './types.js';
 import { calculateWeightedUtilityFromResolved } from './weightedUtility.js';
 
@@ -154,6 +157,20 @@ export interface MesoResult {
   success: boolean;
   /** Reason for failure if not successful */
   reason?: string;
+
+  // Flow control flags (February 2026 - MESO + Others flow)
+  /** Whether to show "Others" button (false for final MESO) */
+  showOthers: boolean;
+  /** Whether this is the final MESO (no more cycles) */
+  isFinal: boolean;
+  /** Whether text input should be disabled when MESO is shown */
+  inputDisabled: boolean;
+  /** Message to show when input is disabled */
+  disabledMessage?: string;
+  /** Current negotiation phase */
+  phase: NegotiationPhase;
+  /** Stall prompt if detected ("Is this your final offer?") */
+  stallPrompt?: string;
 }
 
 /**
@@ -294,6 +311,12 @@ export function generateMesoOptions(
       targetUtility: finalAvg,
       variance: finalVariance,
       success: true,
+      // Flow control flags for phased negotiation
+      showOthers: true,
+      isFinal: false,
+      inputDisabled: true,
+      disabledMessage: 'Select an offer above or click "Others" to enter your counter-offer',
+      phase: 'MESO_PRESENTATION' as NegotiationPhase,
     };
   } catch (error) {
     return {
@@ -302,6 +325,11 @@ export function generateMesoOptions(
       variance: 0,
       success: false,
       reason: error instanceof Error ? error.message : 'Unknown error generating MESO options',
+      // Default flow control flags for failed generation
+      showOthers: false,
+      isFinal: false,
+      inputDisabled: false,
+      phase: 'NORMAL_NEGOTIATION' as NegotiationPhase,
     };
   }
 }
@@ -585,27 +613,128 @@ export function mesoOptionToOffer(option: MesoOption): Offer {
   };
 }
 
+// ============================================
+// PHASED MESO NEGOTIATION (February 2026)
+// ============================================
+
+/** Configuration for phased MESO negotiation */
+export const MESO_PHASE_CONFIG = {
+  /** Initial normal rounds before first MESO (rounds 1-5) */
+  INITIAL_NORMAL_ROUNDS: 5,
+  /** Normal rounds after "Others" selection before next MESO */
+  POST_OTHERS_ROUNDS: 4,
+  /** Maximum MESO presentation cycles */
+  MAX_MESO_CYCLES: 5,
+  /** Stall detection threshold (consecutive identical offers) */
+  STALL_THRESHOLD: 3,
+} as const;
+
+/** Parameters for shouldUseMeso function */
+export interface ShouldUseMesoParams {
+  round: number;
+  mesoCycleState?: MesoCycleState;
+  finalOfferState?: FinalOfferState;
+}
+
+/** Result of shouldUseMeso function with flow control */
+export interface ShouldUseMesoResult {
+  shouldShow: boolean;
+  showOthers: boolean;
+  isFinal: boolean;
+  phase: NegotiationPhase;
+  inputDisabled: boolean;
+  disabledMessage?: string;
+}
+
 /**
- * Check if MESO should be enabled for this round
- * MESO starts from round 1 (PM's first response to vendor's quotation)
- * and continues throughout the entire negotiation until conclusion
+ * Check if MESO should be shown for this round with phased negotiation logic
  *
- * UPDATED February 2026: MESO now continues for ALL rounds
- * - Removed 3-round limit
- * - Only disabled for final offers (handled separately)
+ * PHASED APPROACH (February 2026):
+ * 1. Rounds 1-5: Normal text-based negotiation (NO MESO)
+ * 2. After Round 5: Show MESO offers + "Others" option
+ * 3. MESO Selection: Auto-accept deal
+ * 4. Others Selection: 4 more normal rounds, then MESO again
+ * 5. Repeat cycle (max 5 cycles)
+ * 6. Final MESO: If vendor confirms final offer, show MESO without "Others"
+ *
+ * @param params - Parameters including round, mesoCycleState, and finalOfferState
+ * @returns ShouldUseMesoResult with flow control flags
  */
-export function shouldUseMeso(
+export function shouldUseMeso(params: ShouldUseMesoParams): ShouldUseMesoResult {
+  const { round, mesoCycleState, finalOfferState } = params;
+
+  // Phase 1: Normal Negotiation (Rounds 1-5) - NO MESO
+  if (round <= MESO_PHASE_CONFIG.INITIAL_NORMAL_ROUNDS) {
+    return {
+      shouldShow: false,
+      showOthers: false,
+      isFinal: false,
+      phase: 'NORMAL_NEGOTIATION',
+      inputDisabled: false,
+    };
+  }
+
+  // Check for final MESO (stall confirmed)
+  if (finalOfferState?.vendorConfirmedFinal && !finalOfferState.finalMesoShown) {
+    return {
+      shouldShow: true,
+      showOthers: false, // Hide Others for final MESO
+      isFinal: true,
+      phase: 'FINAL_MESO',
+      inputDisabled: true,
+      disabledMessage: 'Select one of the final offers above to close the deal',
+    };
+  }
+
+  // Check if in post-Others negotiation phase (4 rounds after Others)
+  if (mesoCycleState?.inPostOthersPhase) {
+    if (mesoCycleState.roundsInCurrentCycle < MESO_PHASE_CONFIG.POST_OTHERS_ROUNDS) {
+      return {
+        shouldShow: false,
+        showOthers: false,
+        isFinal: false,
+        phase: 'POST_OTHERS',
+        inputDisabled: false,
+      };
+    }
+    // 4 rounds completed in post-Others phase, show MESO again
+  }
+
+  // Check max MESO cycles (5 max)
+  const cycleNumber = mesoCycleState?.mesoCycleNumber ?? 1;
+  if (cycleNumber > MESO_PHASE_CONFIG.MAX_MESO_CYCLES) {
+    return {
+      shouldShow: false,
+      showOthers: false,
+      isFinal: false,
+      phase: 'ESCALATED',
+      inputDisabled: true,
+      disabledMessage: 'This negotiation has been escalated to a human PM',
+    };
+  }
+
+  // Show MESO with Others option
+  return {
+    shouldShow: true,
+    showOthers: true,
+    isFinal: false,
+    phase: 'MESO_PRESENTATION',
+    inputDisabled: true,
+    disabledMessage: 'Select an offer above or click "Others" to enter your counter-offer',
+  };
+}
+
+/**
+ * Legacy shouldUseMeso function for backwards compatibility
+ * @deprecated Use shouldUseMeso(params) instead
+ */
+export function shouldUseMesoLegacy(
   round: number,
   _maxRounds: number,
   _previousMesoRounds: number = 0
 ): boolean {
-  // MESO starts from round 1 (PM's first counter-offer after vendor's quotation)
-  // Round 0 would be before any vendor message, which shouldn't happen
-  if (round < 1) return false;
-
-  // MESO continues for all rounds until conclusion
-  // Final offers are handled separately by generateFinalMesoOptions
-  return true;
+  // For backwards compatibility, use simple round check
+  return round > MESO_PHASE_CONFIG.INITIAL_NORMAL_ROUNDS;
 }
 
 // ============================================
@@ -763,6 +892,12 @@ export function generateDynamicMesoOptions(
       targetUtility: finalAvg,
       variance: finalVariance,
       success: true,
+      // Flow control flags for phased negotiation
+      showOthers: true,
+      isFinal: false,
+      inputDisabled: true,
+      disabledMessage: 'Select an offer above or click "Others" to enter your counter-offer',
+      phase: 'MESO_PRESENTATION' as NegotiationPhase,
     };
   } catch (error) {
     return {
@@ -771,6 +906,11 @@ export function generateDynamicMesoOptions(
       variance: 0,
       success: false,
       reason: error instanceof Error ? error.message : 'Unknown error generating dynamic MESO options',
+      // Default flow control flags for failed generation
+      showOthers: false,
+      isFinal: false,
+      inputDisabled: false,
+      phase: 'NORMAL_NEGOTIATION' as NegotiationPhase,
     };
   }
 }
@@ -1089,6 +1229,12 @@ export function generateFinalMesoOptions(
       targetUtility: avgUtility,
       variance: finalVariance,
       success: true,
+      // Flow control flags for FINAL MESO (no Others option)
+      showOthers: false,
+      isFinal: true,
+      inputDisabled: true,
+      disabledMessage: 'Select one of the final offers above to close the deal',
+      phase: 'FINAL_MESO' as NegotiationPhase,
     };
   } catch (error) {
     return {
@@ -1097,6 +1243,236 @@ export function generateFinalMesoOptions(
       variance: 0,
       success: false,
       reason: error instanceof Error ? error.message : 'Unknown error generating final MESO options',
+      // Default flow control flags for failed generation
+      showOthers: false,
+      isFinal: false,
+      inputDisabled: false,
+      phase: 'NORMAL_NEGOTIATION' as NegotiationPhase,
     };
   }
+}
+
+// ============================================
+// MESO CYCLE STATE MANAGEMENT (February 2026)
+// ============================================
+
+/**
+ * Update MESO cycle state when MESO is shown
+ */
+export function updateMesoCycleStateOnShow(
+  state: MesoCycleState | undefined,
+  round: number
+): MesoCycleState {
+  const currentState = state || {
+    mesoCycleNumber: 0,
+    lastMesoShownAtRound: 0,
+    roundsInCurrentCycle: 0,
+    othersSelectedCount: 0,
+    inPostOthersPhase: false,
+  };
+
+  return {
+    ...currentState,
+    mesoCycleNumber: currentState.mesoCycleNumber + 1,
+    lastMesoShownAtRound: round,
+    inPostOthersPhase: false,
+    roundsInCurrentCycle: 0,
+  };
+}
+
+/**
+ * Update MESO cycle state when "Others" is selected
+ */
+export function updateMesoCycleStateOnOthersSelection(
+  state: MesoCycleState | undefined,
+  round: number
+): MesoCycleState {
+  const currentState = state || {
+    mesoCycleNumber: 1,
+    lastMesoShownAtRound: round,
+    roundsInCurrentCycle: 0,
+    othersSelectedCount: 0,
+    inPostOthersPhase: false,
+  };
+
+  return {
+    ...currentState,
+    othersSelectedCount: currentState.othersSelectedCount + 1,
+    inPostOthersPhase: true,
+    roundsInCurrentCycle: 0,
+  };
+}
+
+/**
+ * Increment round counter in current post-Others cycle
+ */
+export function incrementPostOthersRound(
+  state: MesoCycleState | undefined
+): MesoCycleState {
+  if (!state || !state.inPostOthersPhase) {
+    return state || {
+      mesoCycleNumber: 0,
+      lastMesoShownAtRound: 0,
+      roundsInCurrentCycle: 0,
+      othersSelectedCount: 0,
+      inPostOthersPhase: false,
+    };
+  }
+
+  return {
+    ...state,
+    roundsInCurrentCycle: state.roundsInCurrentCycle + 1,
+  };
+}
+
+/**
+ * Update final offer state when vendor confirms final
+ */
+export function updateFinalOfferStateOnConfirm(
+  state: FinalOfferState | undefined,
+  stalledPrice: number
+): FinalOfferState {
+  return {
+    vendorConfirmedFinal: true,
+    stalledPrice,
+    finalMesoShown: false,
+  };
+}
+
+/**
+ * Update final offer state when final MESO is shown
+ */
+export function updateFinalOfferStateOnMesoShown(
+  state: FinalOfferState | undefined
+): FinalOfferState {
+  const currentState = state || {
+    vendorConfirmedFinal: false,
+    stalledPrice: undefined,
+    finalMesoShown: false,
+  };
+
+  return {
+    ...currentState,
+    finalMesoShown: true,
+  };
+}
+
+/**
+ * Check if escalation should be triggered
+ */
+export function checkEscalationTriggers(
+  mesoCycleState: MesoCycleState | undefined,
+  finalOfferState: FinalOfferState | undefined,
+  lastOthersPrice?: number
+): { shouldEscalate: boolean; reason: string } {
+  // Trigger 1: 5 MESO cycles exhausted
+  if (mesoCycleState && mesoCycleState.mesoCycleNumber > MESO_PHASE_CONFIG.MAX_MESO_CYCLES) {
+    return { shouldEscalate: true, reason: 'Max MESO cycles reached' };
+  }
+
+  // Trigger 2: Final MESO shown but vendor still selecting Others at same price
+  if (finalOfferState?.finalMesoShown && lastOthersPrice !== undefined) {
+    if (finalOfferState.stalledPrice !== undefined && lastOthersPrice === finalOfferState.stalledPrice) {
+      return { shouldEscalate: true, reason: 'Vendor persists at stalled price after final MESO' };
+    }
+  }
+
+  return { shouldEscalate: false, reason: '' };
+}
+
+/**
+ * Generate MESO based on vendor's confirmed final price
+ * Used when vendor confirms "Yes, this is my final offer"
+ */
+export function generateMesoFromVendorPrice(
+  config: ResolvedNegotiationConfig,
+  vendorPrice: number,
+  round: number
+): MesoResult {
+  const { maxAcceptablePrice, targetPrice } = config;
+
+  // Check if vendor's price is within acceptable range
+  let basePrice = vendorPrice;
+  let priceAdjusted = false;
+
+  if (vendorPrice > maxAcceptablePrice) {
+    // Vendor's price exceeds our max - adjust MESO offers to acceptable range
+    basePrice = maxAcceptablePrice;
+    priceAdjusted = true;
+  }
+
+  // Generate 3 offers based on the base price
+  const offer1Price = Math.round(basePrice * 0.97 * 100) / 100; // 3% below
+  const offer2Price = Math.round(basePrice * 100) / 100;
+  const offer3Price = Math.round(basePrice * 1.02 * 100) / 100; // 2% above (up to max)
+
+  const mediumTerms = Math.round((config.paymentTermsMinDays + config.paymentTermsMaxDays) / 2);
+  const bestTerms = config.paymentTermsMaxDays;
+  const bestDelivery = 14; // Fast delivery
+  const mediumDelivery = 21;
+  const minWarranty = Math.max(0, config.warrantyPeriodMonths - 6);
+  const standardWarranty = config.warrantyPeriodMonths;
+  const extendedWarranty = config.warrantyPeriodMonths + 6;
+
+  const options: MesoOption[] = [
+    {
+      id: `meso_${round}_vendorprice1`,
+      offer: {
+        total_price: Math.max(targetPrice, offer1Price),
+        payment_terms: `Net ${mediumTerms}`,
+        payment_terms_days: mediumTerms,
+        delivery_days: bestDelivery,
+        warranty_months: minWarranty,
+      },
+      utility: 0.8,
+      label: 'Offer 1',
+      description: `Best price ($${Math.max(targetPrice, offer1Price).toLocaleString()}) with ${bestDelivery}-day delivery`,
+      emphasis: ['price', 'delivery'],
+      tradeoffs: [`${minWarranty} months warranty`, `Net ${mediumTerms} payment`],
+    },
+    {
+      id: `meso_${round}_vendorprice2`,
+      offer: {
+        total_price: offer2Price,
+        payment_terms: `Net ${bestTerms}`,
+        payment_terms_days: bestTerms,
+        delivery_days: mediumDelivery,
+        warranty_months: standardWarranty,
+      },
+      utility: 0.8,
+      label: 'Offer 2',
+      description: `Extended Net ${bestTerms} payment terms with ${standardWarranty} months warranty`,
+      emphasis: ['payment_terms'],
+      tradeoffs: [`$${offer2Price.toLocaleString()} price`, `${mediumDelivery}-day delivery`],
+    },
+    {
+      id: `meso_${round}_vendorprice3`,
+      offer: {
+        total_price: Math.min(offer3Price, maxAcceptablePrice),
+        payment_terms: `Net ${mediumTerms}`,
+        payment_terms_days: mediumTerms,
+        delivery_days: bestDelivery,
+        warranty_months: extendedWarranty,
+      },
+      utility: 0.8,
+      label: 'Offer 3',
+      description: `Fast ${bestDelivery}-day delivery with extended ${extendedWarranty} months warranty`,
+      emphasis: ['delivery', 'warranty'],
+      tradeoffs: [`$${Math.min(offer3Price, maxAcceptablePrice).toLocaleString()} price`, `Net ${mediumTerms} payment`],
+    },
+  ];
+
+  return {
+    options,
+    targetUtility: 0.8,
+    variance: 0.02,
+    success: true,
+    showOthers: false, // Final MESO - no Others option
+    isFinal: true,
+    inputDisabled: true,
+    disabledMessage: priceAdjusted
+      ? 'Your price was above our maximum. Please select from the adjusted offers below.'
+      : 'Select one of the final offers above to close the deal',
+    phase: 'FINAL_MESO' as NegotiationPhase,
+  };
 }
