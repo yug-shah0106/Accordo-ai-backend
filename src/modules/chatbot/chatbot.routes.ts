@@ -18,6 +18,9 @@ import {
   rfqVendorSchema,
   nestedDealSchema,
   modeQuerySchema,
+  mesoSelectSchema,
+  mesoOthersSchema,
+  finalOfferConfirmSchema,
 } from './chatbot.validator.js';
 
 const chatbotRouter = Router();
@@ -514,6 +517,60 @@ chatbotRouter.post(
   validateParams(nestedDealSchema),
   validateBody(processMessageSchema),
   controller.vendorSendMessage
+);
+
+// ==================== MESO Selection Endpoints (February 2026) ====================
+
+/**
+ * Handle MESO option selection (Offer 1, 2, or 3)
+ * POST /api/chatbot/requisitions/:rfqId/vendors/:vendorId/deals/:dealId/meso/select
+ *
+ * When vendor selects a MESO offer:
+ * - Deal status changes to ACCEPTED
+ * - Returns "under review" confirmation message
+ */
+chatbotRouter.post(
+  '/requisitions/:rfqId/vendors/:vendorId/deals/:dealId/meso/select',
+  authMiddleware,
+  validateParams(nestedDealSchema),
+  validateBody(mesoSelectSchema),
+  controller.processMesoSelection
+);
+
+/**
+ * Handle "Others" selection with counter-offer form data
+ * POST /api/chatbot/requisitions/:rfqId/vendors/:vendorId/deals/:dealId/meso/others
+ *
+ * Body: { totalPrice: number, paymentTermsDays: number }
+ *
+ * When vendor submits Others form:
+ * - Creates vendor message with offer
+ * - Triggers PM response generation
+ * - Starts post-Others negotiation phase (4 rounds)
+ */
+chatbotRouter.post(
+  '/requisitions/:rfqId/vendors/:vendorId/deals/:dealId/meso/others',
+  authMiddleware,
+  validateParams(nestedDealSchema),
+  validateBody(mesoOthersSchema),
+  controller.processOthersSelection
+);
+
+/**
+ * Handle "Is this your final offer?" response
+ * POST /api/chatbot/requisitions/:rfqId/vendors/:vendorId/deals/:dealId/final-offer/confirm
+ *
+ * Body: { isConfirmedFinal: boolean }
+ *
+ * If Yes: Generate final MESO based on vendor's price (no Others option)
+ * If No: Continue normal negotiation
+ */
+chatbotRouter.post(
+  '/requisitions/:rfqId/vendors/:vendorId/deals/:dealId/final-offer/confirm',
+  authMiddleware,
+  validateParams(nestedDealSchema),
+  validateBody(finalOfferConfirmSchema),
+  controller.processFinalOfferConfirmation
 );
 
 // ==================== Vendor Addresses ====================

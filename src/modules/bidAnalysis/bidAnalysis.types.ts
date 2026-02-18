@@ -197,3 +197,30 @@ export const ACTION_LABELS: Record<BidActionType, string> = {
   EXPORTED: 'Exported PDF',
   COMPARISON_GENERATED: 'Generated comparison',
 };
+
+// Negotiation message snapshot used in price-history tables
+export interface DealNegotiationMessage {
+  round: number;
+  role: 'VENDOR' | 'ACCORDO' | 'SYSTEM';
+  price: number;
+  decisionAction: string | null;
+  utilityScore: number | null;
+  createdAt: Date;
+}
+
+// Per-vendor negotiation summary for PDF pages
+export interface VendorNegotiationSummary {
+  dealId: string;
+  vendorName: string;
+  vendorEmail: string;
+  dealStatus: DealStatus;
+  mode: string;
+  startingPrice: number;
+  finalPrice: number;
+  priceReductionPercent: number;
+  roundsTaken: number;
+  maxRounds: number;
+  utilityScore: number | null;
+  paymentTerms: string | null;
+  messages: DealNegotiationMessage[];
+}

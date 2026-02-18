@@ -263,6 +263,7 @@ export function logDynamicCounter(
     strategy: string;
     vendorEmphasis?: string;
     emphasisConfidence?: number;
+    priceCapped?: boolean;
   }
 ): void {
   const content = [
@@ -280,6 +281,11 @@ export function logDynamicCounter(
     `  Counter Price: ${colorize(formatCurrency(details.counterPrice), colors.brightCyan)}`,
     `  Counter Terms: ${colorize(details.chosenTerms, colors.brightCyan)}`,
   ];
+
+  if (details.priceCapped) {
+    content.push('');
+    content.push(`${colorize('Price Capped:', colors.bold, colors.yellow)} Yes (matched vendor offer, pushing on terms)`);
+  }
 
   if (details.vendorEmphasis && details.vendorEmphasis !== 'unknown') {
     content.push('');

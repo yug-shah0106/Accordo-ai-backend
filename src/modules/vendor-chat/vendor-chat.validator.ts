@@ -91,6 +91,26 @@ export const pmResponseSchema = Joi.object({
   vendorMessageId: Joi.string().required().uuid(),
 });
 
+// ============================================================================
+// MESO + Others Flow Schemas (February 2026)
+// ============================================================================
+
+export const mesoSelectSchema = Joi.object({
+  uniqueToken: Joi.string().required().min(10).max(100),
+  selectedOptionId: Joi.string().required().min(1).max(100),
+});
+
+export const mesoOthersSchema = Joi.object({
+  uniqueToken: Joi.string().required().min(10).max(100),
+  totalPrice: Joi.number().required().positive(),
+  paymentTermsDays: Joi.number().required().integer().min(1).max(180),
+});
+
+export const finalOfferConfirmSchema = Joi.object({
+  uniqueToken: Joi.string().required().min(10).max(100),
+  isConfirmedFinal: Joi.boolean().required(),
+});
+
 export default {
   submitQuoteSchema,
   editQuoteSchema,
@@ -98,4 +118,7 @@ export default {
   enterChatSchema,
   sendMessageSchema,
   pmResponseSchema,
+  mesoSelectSchema,
+  mesoOthersSchema,
+  finalOfferConfirmSchema,
 };

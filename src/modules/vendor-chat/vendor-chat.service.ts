@@ -841,6 +841,316 @@ export const generatePMResponse = async (
   }
 };
 
+// ============================================================================
+// MESO + Others Flow Services (February 2026)
+// ============================================================================
+
+/**
+ * Handle vendor MESO option selection - auto-accepts deal
+ */
+export const selectMesoOptionService = async (
+  uniqueToken: string,
+  selectedOptionId: string
+): Promise<{
+  deal: ChatbotDeal;
+  message: ChatbotMessage;
+  selectedOffer: any;
+}> => {
+  const contract = await findContractByToken(uniqueToken);
+  if (!contract) {
+    throw new CustomError('Contract not found', 404);
+  }
+
+  if (!contract.chatbotDealId) {
+    throw new CustomError('No negotiation deal found', 404);
+  }
+
+  const deal = await models.ChatbotDeal.findByPk(contract.chatbotDealId);
+  if (!deal) {
+    throw new CustomError('Deal not found', 404);
+  }
+
+  if (deal.status !== 'NEGOTIATING') {
+    throw new CustomError(`Cannot select offer - negotiation is ${deal.status}`, 400);
+  }
+
+  // Find the latest MESO round for this deal
+  const mesoRound = await models.MesoRound.findOne({
+    where: { dealId: deal.id },
+    order: [['round', 'DESC']],
+  });
+
+  if (!mesoRound) {
+    throw new CustomError('No MESO options available', 400);
+  }
+
+  const options = mesoRound.options as any[];
+  const selectedOption = options.find((opt: any) => opt.id === selectedOptionId);
+
+  if (!selectedOption) {
+    throw new CustomError('Selected option not found', 400);
+  }
+
+  // Update MESO round with selection
+  await mesoRound.update({
+    selectedOptionId,
+    vendorSelection: {
+      selectedOptionId,
+      selectedOffer: selectedOption.offer,
+      selectedAt: new Date().toISOString(),
+    },
+  });
+
+  // Create system message about selection
+  const confirmationMessage = await models.ChatbotMessage.create({
+    id: uuidv4(),
+    dealId: deal.id,
+    role: 'SYSTEM',
+    content: `Your selection of "${selectedOption.label}" has been accepted. Your deal is now under review and will be processed shortly. Thank you for your business.`,
+    extractedOffer: null,
+    counterOffer: selectedOption.offer,
+    engineDecision: null,
+    decisionAction: 'ACCEPT',
+    utilityScore: selectedOption.utility || null,
+    explainabilityJson: null,
+    round: deal.round,
+  });
+
+  // Update deal to ACCEPTED
+  await deal.update({
+    status: 'ACCEPTED',
+    latestOfferJson: selectedOption.offer,
+    latestDecisionAction: 'ACCEPT',
+    latestUtility: selectedOption.utility || null,
+  });
+
+  await deal.reload();
+
+  // Sync contract status
+  syncContractStatus(deal.id, 'ACCEPTED', deal.contractId)
+    .catch((err) => logger.error(`Failed to sync contract status after MESO selection: ${(err as Error).message}`));
+
+  logger.info(`[MESO Selection] Vendor selected option ${selectedOptionId} for deal ${deal.id}`, {
+    selectedLabel: selectedOption.label,
+    selectedPrice: selectedOption.offer.total_price,
+  });
+
+  return {
+    deal,
+    message: confirmationMessage,
+    selectedOffer: selectedOption.offer,
+  };
+};
+
+/**
+ * Handle vendor "Others" form submission - submit custom price/terms
+ */
+export const submitOthersService = async (
+  uniqueToken: string,
+  totalPrice: number,
+  paymentTermsDays: number
+): Promise<{
+  vendorMessage: ChatbotMessage;
+  pmMessage: ChatbotMessage;
+  decision: any;
+  deal: ChatbotDeal;
+  meso: any | null;
+}> => {
+  const contract = await findContractByToken(uniqueToken);
+  if (!contract) {
+    throw new CustomError('Contract not found', 404);
+  }
+
+  if (!contract.chatbotDealId) {
+    throw new CustomError('No negotiation deal found', 404);
+  }
+
+  const deal = await models.ChatbotDeal.findByPk(contract.chatbotDealId);
+  if (!deal) {
+    throw new CustomError('Deal not found', 404);
+  }
+
+  if (deal.status !== 'NEGOTIATING') {
+    throw new CustomError(`Cannot submit offer - negotiation is ${deal.status}`, 400);
+  }
+
+  // Create vendor message with the Others offer
+  const paymentTermsStr = `Net ${paymentTermsDays}`;
+  const offerContent = `I would like to propose a different offer: $${totalPrice.toLocaleString()} total with ${paymentTermsStr} payment terms.`;
+
+  const extractedOffer = {
+    total_price: totalPrice,
+    payment_terms: paymentTermsStr,
+    payment_terms_days: paymentTermsDays,
+  };
+
+  const vendorMessage = await models.ChatbotMessage.create({
+    id: uuidv4(),
+    dealId: deal.id,
+    role: 'VENDOR',
+    content: offerContent,
+    extractedOffer,
+    counterOffer: null,
+    engineDecision: null,
+    decisionAction: null,
+    utilityScore: null,
+    explainabilityJson: null,
+    round: deal.round + 1,
+  });
+
+  // Update mesoCycleState to enter post-Others phase
+  // This is critical - it tells shouldUseMeso() to NOT show MESO for the next 4 rounds
+  const currentState = (deal.convoStateJson as any) || {};
+  const currentMesoCycleState = currentState.mesoCycleState || {
+    mesoCycleNumber: 1,
+    lastMesoShownAtRound: deal.round,
+    roundsInCurrentCycle: 0,
+    othersSelectedCount: 0,
+    inPostOthersPhase: false,
+  };
+
+  // Update the state for post-Others phase
+  const updatedMesoCycleState = {
+    ...currentMesoCycleState,
+    inPostOthersPhase: true,           // Enter post-Others phase
+    roundsInCurrentCycle: 0,           // Reset round counter for this cycle
+    othersSelectedCount: (currentMesoCycleState.othersSelectedCount || 0) + 1,
+  };
+
+  // Store the Others offer in othersFormState
+  const updatedOthersFormState = {
+    lastOthersOffer: {
+      totalPrice,
+      paymentTermsDays,
+      submittedAt: new Date().toISOString(),
+    },
+  };
+
+  // Update deal with vendor offer AND updated negotiation state
+  await deal.update({
+    latestVendorOffer: extractedOffer as any,
+    lastMessageAt: new Date(),
+    convoStateJson: {
+      ...currentState,
+      mesoCycleState: updatedMesoCycleState,
+      othersFormState: updatedOthersFormState,
+      lastUpdatedAt: new Date().toISOString(),
+    },
+  });
+
+  logger.info(`[Others Submission] Updated mesoCycleState for deal ${deal.id}`, {
+    inPostOthersPhase: true,
+    roundsInCurrentCycle: 0,
+    othersSelectedCount: updatedMesoCycleState.othersSelectedCount,
+  });
+
+  // Generate PM response - now shouldUseMeso() will see inPostOthersPhase=true
+  const pmResult = await generatePMResponseAsyncService({
+    dealId: deal.id,
+    vendorMessageId: vendorMessage.id,
+    userId: 0,
+  });
+
+  await deal.reload();
+
+  logger.info(`[Others Submission] Vendor submitted Others offer for deal ${deal.id}`, {
+    totalPrice,
+    paymentTermsDays,
+    decision: pmResult.decision.action,
+  });
+
+  return {
+    vendorMessage,
+    pmMessage: pmResult.message,
+    decision: pmResult.decision,
+    deal,
+    meso: pmResult.meso || null,
+  };
+};
+
+/**
+ * Handle vendor final offer confirmation response
+ */
+export const confirmFinalOfferService = async (
+  uniqueToken: string,
+  isConfirmedFinal: boolean
+): Promise<{
+  pmMessage: ChatbotMessage;
+  decision: any;
+  deal: ChatbotDeal;
+  meso: any | null;
+}> => {
+  const contract = await findContractByToken(uniqueToken);
+  if (!contract) {
+    throw new CustomError('Contract not found', 404);
+  }
+
+  if (!contract.chatbotDealId) {
+    throw new CustomError('No negotiation deal found', 404);
+  }
+
+  const deal = await models.ChatbotDeal.findByPk(contract.chatbotDealId);
+  if (!deal) {
+    throw new CustomError('Deal not found', 404);
+  }
+
+  if (deal.status !== 'NEGOTIATING') {
+    throw new CustomError(`Cannot respond - negotiation is ${deal.status}`, 400);
+  }
+
+  // Create vendor response message
+  const responseContent = isConfirmedFinal
+    ? "Yes, this is my final offer. I cannot go lower than this price."
+    : "No, I'm willing to continue negotiating and discuss other options.";
+
+  const vendorMessage = await models.ChatbotMessage.create({
+    id: uuidv4(),
+    dealId: deal.id,
+    role: 'VENDOR',
+    content: responseContent,
+    extractedOffer: null,
+    counterOffer: null,
+    engineDecision: null,
+    decisionAction: null,
+    utilityScore: null,
+    explainabilityJson: null,
+    round: deal.round + 1,
+  });
+
+  // Update negotiation state for final offer confirmation
+  const negotiationState = (deal.convoStateJson as any) || {};
+  if (!negotiationState.finalOfferState) {
+    negotiationState.finalOfferState = {};
+  }
+  negotiationState.finalOfferState.vendorConfirmedFinal = isConfirmedFinal;
+
+  await deal.update({
+    convoStateJson: negotiationState,
+    lastMessageAt: new Date(),
+  });
+
+  // Generate PM response
+  const pmResult = await generatePMResponseAsyncService({
+    dealId: deal.id,
+    vendorMessageId: vendorMessage.id,
+    userId: 0,
+  });
+
+  await deal.reload();
+
+  logger.info(`[Final Offer Confirmation] Vendor responded isConfirmedFinal=${isConfirmedFinal} for deal ${deal.id}`, {
+    decision: pmResult.decision.action,
+    hasMeso: !!pmResult.meso,
+  });
+
+  return {
+    pmMessage: pmResult.message,
+    decision: pmResult.decision,
+    deal,
+    meso: pmResult.meso || null,
+  };
+};
+
 export default {
   submitVendorQuote,
   canEditQuote,
@@ -849,4 +1159,7 @@ export default {
   vendorEnterChat,
   vendorSendMessageInstant,
   generatePMResponse,
+  selectMesoOptionService,
+  submitOthersService,
+  confirmFinalOfferService,
 };

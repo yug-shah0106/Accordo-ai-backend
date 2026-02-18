@@ -7,6 +7,9 @@ import {
   vendorEnterChat,
   vendorSendMessageInstant,
   generatePMResponse,
+  selectMesoOptionService,
+  submitOthersService,
+  confirmFinalOfferService,
 } from './vendor-chat.service.js';
 import {
   submitQuoteSchema,
@@ -15,6 +18,9 @@ import {
   enterChatSchema,
   sendMessageSchema,
   pmResponseSchema,
+  mesoSelectSchema,
+  mesoOthersSchema,
+  finalOfferConfirmSchema,
 } from './vendor-chat.validator.js';
 import { CustomError } from '../../utils/custom-error.js';
 
@@ -242,6 +248,109 @@ export const getPMResponse = async (
   }
 };
 
+// ============================================================================
+// MESO + Others Flow Controllers (February 2026)
+// ============================================================================
+
+/**
+ * Select a MESO option (auto-accepts deal)
+ * POST /api/vendor-chat/meso/select
+ */
+export const selectMesoOption = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const { error, value } = mesoSelectSchema.validate(req.body);
+    if (error) {
+      res.status(400).json({ message: error.details[0].message });
+      return;
+    }
+
+    const { uniqueToken, selectedOptionId } = value;
+    const result = await selectMesoOptionService(uniqueToken, selectedOptionId);
+
+    res.status(200).json({
+      message: 'MESO option selected successfully',
+      data: {
+        deal: result.deal,
+        message: result.message,
+        selectedOffer: result.selectedOffer,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Submit "Others" form with custom price/terms
+ * POST /api/vendor-chat/meso/others
+ */
+export const submitOthers = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const { error, value } = mesoOthersSchema.validate(req.body);
+    if (error) {
+      res.status(400).json({ message: error.details[0].message });
+      return;
+    }
+
+    const { uniqueToken, totalPrice, paymentTermsDays } = value;
+    const result = await submitOthersService(uniqueToken, totalPrice, paymentTermsDays);
+
+    res.status(200).json({
+      message: 'Others offer submitted successfully',
+      data: {
+        vendorMessage: result.vendorMessage,
+        pmMessage: result.pmMessage,
+        decision: result.decision,
+        deal: result.deal,
+        meso: result.meso,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Confirm or deny final offer
+ * POST /api/vendor-chat/final-offer/confirm
+ */
+export const confirmFinalOffer = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const { error, value } = finalOfferConfirmSchema.validate(req.body);
+    if (error) {
+      res.status(400).json({ message: error.details[0].message });
+      return;
+    }
+
+    const { uniqueToken, isConfirmedFinal } = value;
+    const result = await confirmFinalOfferService(uniqueToken, isConfirmedFinal);
+
+    res.status(200).json({
+      message: 'Final offer response recorded',
+      data: {
+        pmMessage: result.pmMessage,
+        decision: result.decision,
+        deal: result.deal,
+        meso: result.meso,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 export default {
   submitQuote,
   checkCanEditQuote,
@@ -250,4 +359,7 @@ export default {
   enterChat,
   sendMessage,
   getPMResponse,
+  selectMesoOption,
+  submitOthers,
+  confirmFinalOffer,
 };

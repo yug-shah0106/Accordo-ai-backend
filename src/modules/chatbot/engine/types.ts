@@ -173,7 +173,65 @@ export interface NegotiationState {
   utilityHistory?: UtilityHistoryRecord[];
   /** Count of consecutive rounds with no utility improvement */
   consecutiveNoImprovementRounds?: number;
+
+  /** MESO cycle tracking for phased negotiation (February 2026) */
+  mesoCycleState?: MesoCycleState;
+
+  /** Others form state for structured counter-offers (February 2026) */
+  othersFormState?: OthersFormState;
+
+  /** Final offer confirmation state (February 2026) */
+  finalOfferState?: FinalOfferState;
 }
+
+// ============================================
+// MESO CYCLE STATE TYPES (February 2026)
+// ============================================
+
+/** MESO cycle tracking - controls when MESO is shown */
+export interface MesoCycleState {
+  /** Which MESO presentation cycle (1-5 max) */
+  mesoCycleNumber: number;
+  /** Round number when last MESO was shown */
+  lastMesoShownAtRound: number;
+  /** Rounds completed in current post-Others phase (0-4) */
+  roundsInCurrentCycle: number;
+  /** How many times vendor has selected "Others" total */
+  othersSelectedCount: number;
+  /** Whether we're in post-Others negotiation phase */
+  inPostOthersPhase: boolean;
+}
+
+/** Others form state - tracks vendor's custom counter-offers */
+export interface OthersFormState {
+  /** Last submitted "Others" offer */
+  lastOthersOffer?: {
+    totalPrice: number;
+    paymentTermsDays: number;
+    submittedAt: string; // ISO date
+  };
+}
+
+/** Final offer state - tracks stall detection and confirmation */
+export interface FinalOfferState {
+  /** Whether vendor has confirmed "Yes, this is my final offer" */
+  vendorConfirmedFinal: boolean;
+  /** The stalled price value (used for MESO generation) */
+  stalledPrice?: number;
+  /** Whether we've shown final MESO (no "Others" option) */
+  finalMesoShown: boolean;
+}
+
+/** Negotiation phase for frontend state management */
+export type NegotiationPhase =
+  | 'NORMAL_NEGOTIATION'    // Rounds 1-5, text input enabled
+  | 'MESO_PRESENTATION'     // MESO shown with Others, input disabled
+  | 'OTHERS_FORM'           // Vendor clicked Others, show form
+  | 'POST_OTHERS'           // Rounds after Others, text input enabled
+  | 'FINAL_MESO'            // Final MESO, no Others option
+  | 'STALL_QUESTION'        // "Is this your final offer?" shown
+  | 'DEAL_ACCEPTED'         // Vendor selected MESO, deal closed
+  | 'ESCALATED';            // Human PM takeover
 
 /**
  * Create an empty negotiation state
@@ -195,6 +253,44 @@ export function createEmptyNegotiationState(): NegotiationState {
     preferenceExplorationStartRound: undefined,
     utilityHistory: [],
     consecutiveNoImprovementRounds: 0,
+    // MESO cycle state (February 2026)
+    mesoCycleState: {
+      mesoCycleNumber: 0,
+      lastMesoShownAtRound: 0,
+      roundsInCurrentCycle: 0,
+      othersSelectedCount: 0,
+      inPostOthersPhase: false,
+    },
+    othersFormState: undefined,
+    finalOfferState: {
+      vendorConfirmedFinal: false,
+      stalledPrice: undefined,
+      finalMesoShown: false,
+    },
+  };
+}
+
+/**
+ * Create empty MESO cycle state
+ */
+export function createEmptyMesoCycleState(): MesoCycleState {
+  return {
+    mesoCycleNumber: 0,
+    lastMesoShownAtRound: 0,
+    roundsInCurrentCycle: 0,
+    othersSelectedCount: 0,
+    inPostOthersPhase: false,
+  };
+}
+
+/**
+ * Create empty final offer state
+ */
+export function createEmptyFinalOfferState(): FinalOfferState {
+  return {
+    vendorConfirmedFinal: false,
+    stalledPrice: undefined,
+    finalMesoShown: false,
   };
 }
 
