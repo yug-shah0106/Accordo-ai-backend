@@ -27,7 +27,8 @@ WORKDIR /app
 COPY package*.json ./
 
 # Install ALL dependencies (including devDependencies for build)
-RUN npm ci
+# Using npm install instead of npm ci for better network resilience in Docker
+RUN npm install
 
 # ---------------------------------------------
 # Stage 2: Builder (TypeScript compilation)
