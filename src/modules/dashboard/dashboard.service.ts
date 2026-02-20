@@ -4,6 +4,10 @@ import { CustomError } from '../../utils/custom-error.js';
 import type { Requisition } from '../../models/requisition.js';
 import type { Contract } from '../../models/contract.js';
 
+// ============================================================================
+// Existing service (kept as-is)
+// ============================================================================
+
 const DAYS_IN_YEAR = 365;
 
 const parseNumber = (value: any): number => {
@@ -216,5 +220,510 @@ export const getDashboardService = async (userId: number, dayYear: string | numb
     };
   } catch (error) {
     throw new CustomError(`Service ${error}`, 400);
+  }
+};
+
+// ============================================================================
+// New stats service
+// ============================================================================
+
+type Period = '7d' | '30d' | '90d' | '1y' | 'all';
+
+interface DateRange {
+  from: Date;
+  to: Date;
+}
+
+const PERIOD_DAYS: Record<string, number> = {
+  '7d': 7,
+  '30d': 30,
+  '90d': 90,
+  '1y': 365,
+};
+
+const getPeriodRange = (period: Period): DateRange => {
+  const to = new Date();
+  if (period === 'all') {
+    return { from: new Date(2000, 0, 1), to };
+  }
+  const days = PERIOD_DAYS[period] || 30;
+  const from = new Date();
+  from.setDate(from.getDate() - days);
+  return { from, to };
+};
+
+const getPreviousPeriodRange = (period: Period): DateRange | null => {
+  if (period === 'all') return null;
+  const days = PERIOD_DAYS[period] || 30;
+  const to = new Date();
+  to.setDate(to.getDate() - days);
+  const from = new Date(to);
+  from.setDate(from.getDate() - days);
+  return { from, to };
+};
+
+// ---- KPI helpers ----
+
+const computeSavings = (requisitions: any[]): number => {
+  let total = 0;
+  requisitions.forEach((req) => {
+    const hasAccepted = (req.Contract || []).some((c: any) => c.status === 'Accepted');
+    if (!hasAccepted) return;
+    const budget = parseNumber(req.totalPrice);
+    const actual = calculateActualPrice(req);
+    total += Math.max(0, budget - actual);
+  });
+  return total;
+};
+
+const computeAvgDealImprovement = (requisitions: any[], vendorBids: any[]): number => {
+  // Try from vendor bids first (priceReductionPercent)
+  const reductions: number[] = [];
+  vendorBids.forEach((bid: any) => {
+    const metrics = bid.chatSummaryMetrics;
+    if (metrics && typeof metrics.priceReductionPercent === 'number' && metrics.priceReductionPercent > 0) {
+      reductions.push(metrics.priceReductionPercent);
+    }
+  });
+  if (reductions.length > 0) {
+    return reductions.reduce((a, b) => a + b, 0) / reductions.length;
+  }
+
+  // Fallback: compute from requisitions
+  const improvements: number[] = [];
+  requisitions.forEach((req) => {
+    const hasAccepted = (req.Contract || []).some((c: any) => c.status === 'Accepted');
+    if (!hasAccepted) return;
+    const budget = parseNumber(req.totalPrice);
+    if (budget <= 0) return;
+    const actual = calculateActualPrice(req);
+    const improvement = ((budget - actual) / budget) * 100;
+    if (improvement > 0) improvements.push(improvement);
+  });
+  if (improvements.length === 0) return 0;
+  return improvements.reduce((a, b) => a + b, 0) / improvements.length;
+};
+
+const computeDelta = (current: number, previous: number, mode: 'percent' | 'absolute'): { delta: number; trend: 'up' | 'down' | 'neutral' } => {
+  if (mode === 'absolute') {
+    const delta = current - previous;
+    return { delta, trend: delta > 0 ? 'up' : delta < 0 ? 'down' : 'neutral' };
+  }
+  if (previous === 0) {
+    return { delta: current > 0 ? 100 : 0, trend: current > 0 ? 'up' : 'neutral' };
+  }
+  const delta = ((current - previous) / previous) * 100;
+  return {
+    delta: Math.round(delta * 10) / 10,
+    trend: delta > 0 ? 'up' : delta < 0 ? 'down' : 'neutral',
+  };
+};
+
+// ---- Pipeline ----
+
+const buildPipeline = (deals: any[]) => {
+  const pipeline = { negotiating: 0, accepted: 0, walkedAway: 0, escalated: 0 };
+  deals.forEach((deal: any) => {
+    const status = deal.status || deal.get?.('status');
+    if (status === 'NEGOTIATING') pipeline.negotiating++;
+    else if (status === 'ACCEPTED') pipeline.accepted++;
+    else if (status === 'WALKED_AWAY') pipeline.walkedAway++;
+    else if (status === 'ESCALATED') pipeline.escalated++;
+  });
+  return pipeline;
+};
+
+// ---- Savings timeline ----
+
+/**
+ * Adaptive bucketing strategy:
+ *   7d  → daily   (7 points)
+ *   30d → daily   (30 points)
+ *   90d → weekly  (~13 points)
+ *   1y  → monthly (12 points)
+ *   all → monthly (variable)
+ *
+ * Returns per-bucket savings (bars), cumulative running total (line),
+ * and summary stats for inline callouts.
+ */
+const buildSavingsTimeline = (requisitions: any[], period: Period) => {
+  const days = PERIOD_DAYS[period] || 30;
+  const now = new Date();
+  const start = new Date(now);
+  start.setDate(start.getDate() - days);
+
+  // Generate continuous time buckets with adaptive granularity
+  const allBuckets: { key: string; label: string }[] = [];
+
+  if (days <= 30) {
+    // Daily buckets for 7d and 30d
+    for (let i = 0; i <= days; i++) {
+      const d = new Date(start);
+      d.setDate(start.getDate() + i);
+      allBuckets.push({
+        key: d.toISOString().slice(0, 10),
+        label: days <= 7
+          ? d.toLocaleDateString('en-US', { weekday: 'short', day: 'numeric' })
+          : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+      });
+    }
+  } else if (days <= 90) {
+    // Weekly buckets for 90d
+    const weekStart = new Date(start);
+    weekStart.setDate(weekStart.getDate() - weekStart.getDay());
+    while (weekStart <= now) {
+      allBuckets.push({
+        key: weekStart.toISOString().slice(0, 10),
+        label: weekStart.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+      });
+      weekStart.setDate(weekStart.getDate() + 7);
+    }
+  } else {
+    // Monthly buckets for 1y and all
+    const cursor = new Date(start.getFullYear(), start.getMonth(), 1);
+    while (cursor <= now) {
+      allBuckets.push({
+        key: cursor.toISOString().slice(0, 7),
+        label: cursor.toLocaleDateString('en-US', { month: 'short', year: '2-digit' }),
+      });
+      cursor.setMonth(cursor.getMonth() + 1);
+    }
+  }
+
+  // Initialize all buckets with 0
+  const bucketValues = new Map<string, number>();
+  allBuckets.forEach((b) => bucketValues.set(b.key, 0));
+
+  // Determine which bucket key a date falls into
+  const getBucketKey = (d: Date): string => {
+    if (days <= 30) {
+      return d.toISOString().slice(0, 10);
+    } else if (days <= 90) {
+      const ws = new Date(d);
+      ws.setDate(d.getDate() - d.getDay());
+      return ws.toISOString().slice(0, 10);
+    } else {
+      return d.toISOString().slice(0, 7);
+    }
+  };
+
+  // Fill buckets with actual savings data
+  requisitions.forEach((req) => {
+    const hasAccepted = (req.Contract || []).some((c: any) => c.status === 'Accepted');
+    if (!hasAccepted) return;
+    const savings = parseNumber(req.savingsInPrice) || Math.max(0, parseNumber(req.totalPrice) - calculateActualPrice(req));
+    const date = new Date(req.createdAt);
+    const key = getBucketKey(date);
+    if (bucketValues.has(key)) {
+      bucketValues.set(key, (bucketValues.get(key) || 0) + savings);
+    }
+  });
+
+  const labels = allBuckets.map((b) => b.label);
+  const data = allBuckets.map((b) => Math.round(bucketValues.get(b.key) || 0));
+
+  // Build cumulative running total
+  const cumulative: number[] = [];
+  let runningTotal = 0;
+  for (const val of data) {
+    runningTotal += val;
+    cumulative.push(runningTotal);
+  }
+
+  // Summary stats
+  const total = runningTotal;
+  const nonZeroBuckets = data.filter((v) => v > 0).length;
+  const avgPerBucket = nonZeroBuckets > 0 ? Math.round(total / nonZeroBuckets) : 0;
+  let peakValue = 0;
+  let peakIdx = 0;
+  data.forEach((v, i) => {
+    if (v > peakValue) {
+      peakValue = v;
+      peakIdx = i;
+    }
+  });
+
+  return {
+    labels,
+    data,
+    cumulative,
+    summary: {
+      total,
+      avgPerBucket,
+      peakValue: Math.round(peakValue),
+      peakLabel: labels[peakIdx] || '',
+    },
+  };
+};
+
+// ---- Spend by category ----
+
+const buildSpendByCategory = (requisitions: any[]) => {
+  const totals = new Map<string, number>();
+  let grandTotal = 0;
+
+  requisitions.forEach((req) => {
+    const cat = req.category || 'Unknown';
+    const price = parseNumber(req.totalPrice);
+    totals.set(cat, (totals.get(cat) || 0) + price);
+    grandTotal += price;
+  });
+
+  return Array.from(totals.entries())
+    .map(([category, amount]) => ({
+      category,
+      amount: Math.round(amount),
+      percentage: grandTotal > 0 ? Math.round((amount / grandTotal) * 100) : 0,
+    }))
+    .sort((a, b) => b.amount - a.amount);
+};
+
+// ---- Activity feed ----
+
+const buildActivityFeed = (deals: any[], requisitions: any[]) => {
+  const statusToType: Record<string, string> = {
+    NEGOTIATING: 'deal_started',
+    ACCEPTED: 'deal_accepted',
+    WALKED_AWAY: 'deal_walked_away',
+    ESCALATED: 'deal_escalated',
+  };
+
+  const activities: any[] = [];
+
+  deals.forEach((deal: any) => {
+    const d = deal.get ? deal.get({ plain: true }) : deal;
+    const type = statusToType[d.status] || 'deal_started';
+    const reqData = d.Requisition || {};
+    const vendorData = d.Vendor || {};
+
+    activities.push({
+      id: d.id,
+      type,
+      title: d.title || reqData.subject || 'Deal update',
+      description: `${vendorData.name || 'Vendor'} — ${d.status?.toLowerCase()?.replace('_', ' ') || 'updated'}`,
+      timestamp: d.updatedAt || d.createdAt,
+      entityType: 'deal',
+      rfqId: reqData.id || d.requisitionId,
+      vendorId: vendorData.id || d.vendorId,
+      dealId: d.id,
+    });
+  });
+
+  requisitions.forEach((req: any) => {
+    const r = req.get ? req.get({ plain: true }) : req;
+    activities.push({
+      id: `req-${r.id}`,
+      type: 'requisition_created',
+      title: r.subject || `RFQ ${r.rfqId}`,
+      description: `New requisition created — ${r.category || 'General'}`,
+      timestamp: r.createdAt,
+      entityType: 'requisition',
+      rfqId: r.id,
+    });
+  });
+
+  return activities
+    .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+    .slice(0, 15);
+};
+
+// ---- Needs attention ----
+
+const buildNeedsAttention = async (companyId: number) => {
+  const [stalledDeals, approachingDeals, escalatedDeals, unresponsiveContracts] = await Promise.all([
+    repo.findStalledDeals(companyId, 3),
+    repo.findApproachingDeadlines(companyId, 5),
+    repo.findEscalatedDeals(companyId),
+    repo.findUnresponsiveVendors(companyId, 2),
+  ]);
+
+  const stalledNegotiations = stalledDeals.map((deal: any) => {
+    const d = deal.get ? deal.get({ plain: true }) : deal;
+    const lastActivity = d.lastMessageAt || d.updatedAt;
+    const daysSince = Math.floor((Date.now() - new Date(lastActivity).getTime()) / (1000 * 60 * 60 * 24));
+    return {
+      dealId: d.id,
+      rfqId: d.Requisition?.id || d.requisitionId,
+      vendorId: d.Vendor?.id || d.vendorId,
+      title: d.title || d.Requisition?.subject || 'Untitled',
+      vendorName: d.Vendor?.name || 'Unknown vendor',
+      lastActivityAt: lastActivity,
+      daysSinceActivity: daysSince,
+    };
+  });
+
+  // Filter approaching deadlines by checking negotiationConfigJson
+  const now = new Date();
+  const futureDate = new Date();
+  futureDate.setDate(futureDate.getDate() + 5);
+
+  const approachingDeadlines = approachingDeals
+    .map((deal: any) => {
+      const d = deal.get ? deal.get({ plain: true }) : deal;
+      const config = d.negotiationConfigJson;
+      if (!config) return null;
+      const deadline = config.deadline || config.negotiationControl?.deadline;
+      if (!deadline) return null;
+      const deadlineDate = new Date(deadline);
+      if (isNaN(deadlineDate.getTime())) return null;
+      if (deadlineDate <= now || deadlineDate > futureDate) return null;
+      const daysRemaining = Math.ceil((deadlineDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+      return {
+        dealId: d.id,
+        rfqId: d.Requisition?.id || d.requisitionId,
+        vendorId: d.vendorId,
+        title: d.title || d.Requisition?.subject || 'Untitled',
+        deadline: deadline,
+        daysRemaining,
+      };
+    })
+    .filter(Boolean);
+
+  const escalatedDealsList = escalatedDeals.map((deal: any) => {
+    const d = deal.get ? deal.get({ plain: true }) : deal;
+    return {
+      dealId: d.id,
+      rfqId: d.Requisition?.id || d.requisitionId,
+      vendorId: d.Vendor?.id || d.vendorId,
+      title: d.title || d.Requisition?.subject || 'Untitled',
+      vendorName: d.Vendor?.name || 'Unknown vendor',
+      escalatedAt: d.updatedAt,
+      reason: 'Max rounds exceeded',
+    };
+  });
+
+  const unresponsiveVendors = unresponsiveContracts.map((contract: any) => {
+    const c = contract.get ? contract.get({ plain: true }) : contract;
+    const daysSince = Math.floor((Date.now() - new Date(c.createdAt).getTime()) / (1000 * 60 * 60 * 24));
+    return {
+      vendorId: c.vendorId,
+      vendorName: c.Vendor?.name || 'Unknown vendor',
+      dealId: c.chatbotDealId || '',
+      rfqId: c.Requisition?.id || c.requisitionId,
+      lastNotifiedAt: c.createdAt,
+      daysSinceNotification: daysSince,
+    };
+  });
+
+  return {
+    stalledNegotiations,
+    approachingDeadlines,
+    escalatedDeals: escalatedDealsList,
+    unresponsiveVendors,
+  };
+};
+
+// ============================================================================
+// Main getStats service
+// ============================================================================
+
+export const getStatsService = async (userId: number, period: Period = '30d') => {
+  try {
+    const user = await userRepo.getUserProfile(userId);
+    if (!user?.companyId) {
+      throw new CustomError('User company not found', 404);
+    }
+
+    const companyId = user.companyId;
+    const currentRange = getPeriodRange(period);
+    const previousRange = getPreviousPeriodRange(period);
+
+    // Fetch all data in parallel
+    const [
+      currentRequisitions,
+      previousRequisitions,
+      allDeals,
+      vendorBids,
+      recentDeals,
+      recentReqs,
+    ] = await Promise.all([
+      repo.findRequisitionsInPeriod(companyId, currentRange.from, currentRange.to),
+      previousRange
+        ? repo.findRequisitionsInPeriod(companyId, previousRange.from, previousRange.to)
+        : Promise.resolve([]),
+      repo.findDealsForCompany(companyId),
+      repo.findVendorBidsForCompany(companyId, currentRange.from, currentRange.to),
+      repo.findRecentDeals(companyId, 15),
+      repo.findRecentRequisitions(companyId, 10),
+    ]);
+
+    const plainCurrent = currentRequisitions.map((r) => r.get({ plain: true }));
+    const plainPrevious = previousRequisitions.map((r: any) => r.get({ plain: true }));
+    const plainBids = vendorBids.map((b) => b.get({ plain: true }));
+
+    // ---- KPIs ----
+    const currentSavings = computeSavings(plainCurrent);
+    const previousSavings = computeSavings(plainPrevious);
+    const savingsDelta = computeDelta(currentSavings, previousSavings, 'percent');
+
+    const activeNegotiations = allDeals.filter((d: any) => d.status === 'NEGOTIATING').length;
+    // For previous period active negotiations, we approximate with deals created in previous period
+    const prevActiveCount = previousRange
+      ? allDeals.filter((d: any) => {
+          const created = new Date(d.createdAt);
+          return created >= previousRange.from && created <= previousRange.to && d.status === 'NEGOTIATING';
+        }).length
+      : 0;
+    const activeNegDelta = computeDelta(activeNegotiations, prevActiveCount, 'absolute');
+
+    const totalRequisitions = plainCurrent.length;
+    const prevRequisitions = plainPrevious.length;
+    const reqDelta = computeDelta(totalRequisitions, prevRequisitions, 'percent');
+
+    const avgImprovement = computeAvgDealImprovement(plainCurrent, plainBids);
+    const prevAvgImprovement = computeAvgDealImprovement(plainPrevious, []);
+    const improvDelta = computeDelta(avgImprovement, prevAvgImprovement, 'absolute');
+
+    const kpis = {
+      totalSavings: { value: Math.round(currentSavings), ...savingsDelta },
+      activeNegotiations: { value: activeNegotiations, ...activeNegDelta },
+      totalRequisitions: { value: totalRequisitions, ...reqDelta },
+      avgDealImprovement: {
+        value: Math.round(avgImprovement * 10) / 10,
+        ...improvDelta,
+      },
+    };
+
+    // ---- Pipeline ----
+    const negotiationPipeline = buildPipeline(allDeals);
+
+    // ---- Savings timeline ----
+    const savingsTimeline = buildSavingsTimeline(plainCurrent, period);
+    const prevSavingsTimeline = previousRange
+      ? buildSavingsTimeline(plainPrevious, period)
+      : { labels: [], data: [], cumulative: [], summary: { total: 0, avgPerBucket: 0, peakValue: 0, peakLabel: '' } };
+
+    // Pad previous period cumulative to match current period length
+    const prevCumulative = prevSavingsTimeline.cumulative;
+    const paddedPrevCumulative = savingsTimeline.labels.map((_: any, i: number) => prevCumulative[i] ?? 0);
+
+    const savingsOverTime = {
+      labels: savingsTimeline.labels,
+      data: savingsTimeline.data,
+      cumulative: savingsTimeline.cumulative,
+      previousPeriodCumulative: paddedPrevCumulative,
+      summary: savingsTimeline.summary,
+    };
+
+    // ---- Spend by category ----
+    const spendByCategory = buildSpendByCategory(plainCurrent);
+
+    // ---- Activity feed ----
+    const recentActivity = buildActivityFeed(recentDeals, recentReqs);
+
+    // ---- Needs attention ----
+    const needsAttention = await buildNeedsAttention(companyId);
+
+    return {
+      kpis,
+      negotiationPipeline,
+      savingsOverTime,
+      spendByCategory,
+      recentActivity,
+      needsAttention,
+    };
+  } catch (error) {
+    if (error instanceof CustomError) throw error;
+    throw new CustomError(`Dashboard stats error: ${error}`, 400);
   }
 };
