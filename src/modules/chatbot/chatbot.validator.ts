@@ -84,8 +84,10 @@ export const createDealWithConfigSchema = Joi.object({
   delivery: Joi.object({
     requiredDate: Joi.string().isoDate().required().messages({
       'any.required': 'Required delivery date is required',
+      'string.isoDate': 'Required delivery date must be a valid date',
+      'string.empty': 'Required delivery date is required',
     }),
-    preferredDate: Joi.string().isoDate().allow(null).optional(),
+    preferredDate: Joi.string().isoDate().allow(null, '').optional(),
     locationId: Joi.string().allow(null, '').optional(),
     locationAddress: Joi.string().allow(null).optional(),
     partialDelivery: Joi.object({
@@ -122,11 +124,23 @@ export const createDealWithConfigSchema = Joi.object({
   }).required(),
 
   // Negotiation Control
+  // Note: maxRounds and walkawayThreshold were removed from frontend wizard UI (Feb 2026)
+  // Backend applies defaults when these are missing from the request body
   negotiationControl: Joi.object({
-    deadline: Joi.string().isoDate().allow(null).optional(),
-    maxRounds: Joi.number().integer().min(5).max(20).default(10),
-    walkawayThreshold: Joi.number().min(10).max(30).default(20),
+    deadline: Joi.string().isoDate().allow(null, '').optional().default(null),
+    maxRounds: Joi.number().integer().min(5).max(20).allow(null).default(10),
+    walkawayThreshold: Joi.number().min(10).max(30).allow(null).default(20),
   }).default({ deadline: null, maxRounds: 10, walkawayThreshold: 20 }),
+
+  // Parameter Weights (from Step 4 of wizard)
+  parameterWeights: Joi.object().pattern(
+    Joi.string(),
+    Joi.number().min(0).max(100)
+  ).optional().default({}),
+
+  // Optional: contract reference
+  contractId: Joi.number().integer().positive().allow(null).optional(),
+  previousContractId: Joi.number().integer().positive().allow(null).optional(),
 
   // Custom Parameters
   customParameters: Joi.array().items(
