@@ -139,6 +139,263 @@
  *         description: User company not found
  */
 
+// ==================== PRODUCT ====================
+
+/**
+ * @swagger
+ * /api/product/create:
+ *   post:
+ *     summary: Create a new product
+ *     tags: [Product]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - productName
+ *               - category
+ *               - brandName
+ *               - gstType
+ *               - tds
+ *               - type
+ *               - UOM
+ *             properties:
+ *               productName:
+ *                 type: string
+ *                 example: Laptop Stand
+ *               category:
+ *                 type: string
+ *                 example: IT/Electronics
+ *               brandName:
+ *                 type: string
+ *                 example: ErgoTech
+ *               gstType:
+ *                 type: string
+ *                 enum: [GST, Non-GST]
+ *                 example: GST
+ *               gstPercentage:
+ *                 type: number
+ *                 enum: [0, 5, 12, 18, 28]
+ *                 description: Required when gstType is GST
+ *                 example: 18
+ *               tds:
+ *                 type: number
+ *                 description: HSN Code
+ *                 example: 84713010
+ *               type:
+ *                 type: string
+ *                 enum: [Goods, Services]
+ *                 example: Goods
+ *               UOM:
+ *                 type: string
+ *                 enum: [units, kgs, liters, boxes, packs, tons, meters, lots, license]
+ *                 example: units
+ *     responses:
+ *       201:
+ *         description: Product created successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                   example: Product created successfully
+ *                 data:
+ *                   type: object
+ *       400:
+ *         description: Validation error
+ *       401:
+ *         description: Unauthorized
+ */
+
+/**
+ * @swagger
+ * /api/product/get-all:
+ *   get:
+ *     summary: List products with pagination and search
+ *     tags: [Product]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: search
+ *         schema:
+ *           type: string
+ *         description: Search by product name
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *           default: 1
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           default: 10
+ *     responses:
+ *       200:
+ *         description: Paginated list of products
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                   example: Products
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                 totalCount:
+ *                   type: integer
+ *                 page:
+ *                   type: integer
+ *                 limit:
+ *                   type: integer
+ *       401:
+ *         description: Unauthorized
+ */
+
+/**
+ * @swagger
+ * /api/product/getall:
+ *   get:
+ *     summary: List all products (no pagination)
+ *     tags: [Product]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: All products for the user's company
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                   example: Products
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *       401:
+ *         description: Unauthorized
+ */
+
+/**
+ * @swagger
+ * /api/product/get/{productid}:
+ *   get:
+ *     summary: Get product by ID
+ *     tags: [Product]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: productid
+ *         required: true
+ *         schema:
+ *           type: integer
+ *         description: Product ID
+ *     responses:
+ *       200:
+ *         description: Product details
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                   example: Product
+ *                 data:
+ *                   type: object
+ *       404:
+ *         description: Product not found
+ *       401:
+ *         description: Unauthorized
+ */
+
+/**
+ * @swagger
+ * /api/product/update/{productid}:
+ *   put:
+ *     summary: Update a product
+ *     tags: [Product]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: productid
+ *         required: true
+ *         schema:
+ *           type: integer
+ *         description: Product ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               productName:
+ *                 type: string
+ *               category:
+ *                 type: string
+ *               brandName:
+ *                 type: string
+ *               gstType:
+ *                 type: string
+ *                 enum: [GST, Non-GST]
+ *               gstPercentage:
+ *                 type: number
+ *                 enum: [0, 5, 12, 18, 28]
+ *               tds:
+ *                 type: number
+ *               type:
+ *                 type: string
+ *                 enum: [Goods, Services]
+ *               UOM:
+ *                 type: string
+ *                 enum: [units, kgs, liters, boxes, packs, tons, meters, lots, license]
+ *     responses:
+ *       200:
+ *         description: Product updated successfully
+ *       400:
+ *         description: Validation error
+ *       401:
+ *         description: Unauthorized
+ */
+
+/**
+ * @swagger
+ * /api/product/delete/{productid}:
+ *   delete:
+ *     summary: Delete a product
+ *     tags: [Product]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: productid
+ *         required: true
+ *         schema:
+ *           type: integer
+ *         description: Product ID
+ *     responses:
+ *       200:
+ *         description: Product deleted successfully
+ *       401:
+ *         description: Unauthorized
+ */
+
 // ==================== AUTH ====================
 
 /**
