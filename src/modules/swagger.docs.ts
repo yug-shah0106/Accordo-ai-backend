@@ -23,6 +23,122 @@
  *     description: Service health monitoring
  */
 
+// ==================== DASHBOARD ====================
+
+/**
+ * @swagger
+ * /api/dashboard/stats:
+ *   get:
+ *     summary: Get dashboard analytics and statistics
+ *     description: |
+ *       Returns comprehensive dashboard data for the authenticated user's company.
+ *       All sections are filtered by the selected time period.
+ *
+ *       **Sections included:**
+ *       - **KPIs** — Total savings, active negotiations, total requisitions, avg deal improvement (with delta vs previous period)
+ *       - **Negotiation Pipeline** — Count of deals by status (Negotiating, Accepted, Walked Away, Escalated)
+ *       - **Savings Over Time** — Per-bucket savings (bars), cumulative running total (line), and previous period overlay
+ *       - **Spend by Category** — Requisition spend grouped by category
+ *       - **Recent Activity** — Latest deal status changes and requisition creations
+ *       - **Needs Attention** — Stalled negotiations, approaching deadlines, escalated deals, unresponsive vendors
+ *     tags: [Dashboard]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: period
+ *         schema:
+ *           type: string
+ *           enum: [7d, 30d, 90d, 1y, all]
+ *           default: 30d
+ *         description: Time period filter. Controls date range for all dashboard sections.
+ *     responses:
+ *       200:
+ *         description: Dashboard statistics
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 data:
+ *                   $ref: '#/components/schemas/DashboardStatsData'
+ *       401:
+ *         description: Unauthorized — missing or invalid JWT
+ *       404:
+ *         description: User company not found
+ */
+
+/**
+ * @swagger
+ * /api/dashboard/get:
+ *   get:
+ *     summary: Get legacy dashboard data
+ *     description: |
+ *       Returns legacy dashboard data including budget totals, category summaries,
+ *       time-wise requisition counts, and RFQ price comparisons.
+ *       **Note:** Prefer `/api/dashboard/stats` for the redesigned dashboard.
+ *     tags: [Dashboard]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: dayYear
+ *         schema:
+ *           type: string
+ *           example: "30"
+ *         description: Time range filter (number of days, or 1 for 1 year, 5 for 5 years)
+ *     responses:
+ *       200:
+ *         description: Legacy dashboard data
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                   example: Dashboard Data
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     totalBudget:
+ *                       type: number
+ *                       example: 500000
+ *                     actualPrice:
+ *                       type: number
+ *                       example: 425000
+ *                     totalSaving:
+ *                       type: number
+ *                       example: 75000
+ *                     getCategoryWiseRequisitionTotalPrice:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *                         properties:
+ *                           category:
+ *                             type: string
+ *                           total_price:
+ *                             type: number
+ *                           actual_price:
+ *                             type: number
+ *                     statusWiseReqCount:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *                         properties:
+ *                           status:
+ *                             type: string
+ *                           requisition_count:
+ *                             type: integer
+ *       401:
+ *         description: Unauthorized
+ *       404:
+ *         description: User company not found
+ */
+
 // ==================== AUTH ====================
 
 /**
