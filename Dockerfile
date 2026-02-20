@@ -1,11 +1,21 @@
 # =============================================
-# Accordo Backend - Production Dockerfile
-# Multi-stage build optimized for layer caching
-# Supports: AMD64 and ARM64 (Apple Silicon)
+# Accordo Backend - Unified Dockerfile
+# Multi-stage build with dev and prod targets
+# =============================================
+#
+# Development (hot-reload with tsx watch):
+#   docker build --target dev -t accordo-backend:dev .
+#
+# Production (compiled TypeScript + migrations):
+#   docker build --target prod -t accordo-backend:prod .
+#
+# Or via Docker Compose profiles:
+#   docker compose --profile dev up -d --build
+#   docker compose --profile prod up -d --build
 # =============================================
 
 # ---------------------------------------------
-# Stage 1: Dependencies (cached layer)
+# Stage 1: Dependencies (shared by dev & prod)
 # ---------------------------------------------
 FROM node:20-alpine AS deps
 
@@ -19,16 +29,39 @@ RUN apk add --no-cache \
     jpeg-dev \
     giflib-dev \
     librsvg-dev \
-    pixman-dev
+    pixman-dev \
+    curl
 
 WORKDIR /app
 
 # Copy only package files first (better layer caching)
 COPY package*.json ./
 
-# Install ALL dependencies (including devDependencies for build)
-# Using npm install instead of npm ci for better network resilience in Docker
+# Install ALL dependencies (including devDependencies for build/dev)
 RUN npm install
+
+# =============================================
+# TARGET: dev — hot-reload with tsx watch
+# =============================================
+# Source code is mounted as a volume at runtime.
+# start.dev.sh handles: migrations → seed → tsx watch
+# ---------------------------------------------
+FROM deps AS dev
+
+ENV NODE_ENV=development
+ENV PORT=5002
+
+EXPOSE 5002
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=5 \
+    CMD curl -f http://localhost:5002/api/health || exit 1
+
+# start.dev.sh is volume-mounted from the host
+CMD ["/app/start.dev.sh"]
+
+# =============================================
+# TARGET: prod — compiled TypeScript
+# =============================================
 
 # ---------------------------------------------
 # Stage 2: Builder (TypeScript compilation)
@@ -53,7 +86,7 @@ RUN npm prune --production && npm install sequelize-cli
 # ---------------------------------------------
 # Stage 3: Production Runtime
 # ---------------------------------------------
-FROM node:20-alpine AS production
+FROM node:20-alpine AS prod
 
 # Install runtime dependencies for native modules
 RUN apk add --no-cache \
@@ -63,10 +96,8 @@ RUN apk add --no-cache \
     giflib \
     librsvg \
     pixman \
-    # Required for healthcheck
     curl
 
-# Set environment
 ENV NODE_ENV=production
 ENV PORT=5002
 
@@ -92,7 +123,6 @@ RUN echo 'const path = require("path");' > /app/.sequelizerc && \
     echo '};' >> /app/.sequelizerc
 
 # Create startup script for migrations + server
-# Migrations must succeed — fail loudly if the DB schema is not up to date
 RUN echo '#!/bin/sh' > /app/start.sh && \
     echo 'set -e' >> /app/start.sh && \
     echo 'echo "Running database migrations..."' >> /app/start.sh && \
@@ -101,12 +131,9 @@ RUN echo '#!/bin/sh' > /app/start.sh && \
     echo 'exec node dist/index.js' >> /app/start.sh && \
     chmod +x /app/start.sh
 
-# Expose the application port
 EXPOSE 5002
 
-# Health check for container orchestration
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
     CMD curl -f http://localhost:5002/api/health || exit 1
 
-# Start the application with migrations
 CMD ["/app/start.sh"]
