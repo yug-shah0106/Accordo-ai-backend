@@ -529,12 +529,12 @@ const buildActivityFeed = (deals: any[], requisitions: any[]) => {
 
 // ---- Needs attention ----
 
-const buildNeedsAttention = async (companyId: number) => {
+const buildNeedsAttention = async (companyId: number, fromDate?: Date) => {
   const [stalledDeals, approachingDeals, escalatedDeals, unresponsiveContracts] = await Promise.all([
-    repo.findStalledDeals(companyId, 3),
-    repo.findApproachingDeadlines(companyId, 5),
-    repo.findEscalatedDeals(companyId),
-    repo.findUnresponsiveVendors(companyId, 2),
+    repo.findStalledDeals(companyId, 3, fromDate),
+    repo.findApproachingDeadlines(companyId, 5, fromDate),
+    repo.findEscalatedDeals(companyId, fromDate),
+    repo.findUnresponsiveVendors(companyId, 2, fromDate),
   ]);
 
   const stalledNegotiations = stalledDeals.map((deal: any) => {
@@ -633,6 +633,7 @@ export const getStatsService = async (userId: number, period: Period = '30d') =>
       currentRequisitions,
       previousRequisitions,
       allDeals,
+      previousDeals,
       vendorBids,
       recentDeals,
       recentReqs,
@@ -641,10 +642,13 @@ export const getStatsService = async (userId: number, period: Period = '30d') =>
       previousRange
         ? repo.findRequisitionsInPeriod(companyId, previousRange.from, previousRange.to)
         : Promise.resolve([]),
-      repo.findDealsForCompany(companyId),
+      repo.findDealsForCompany(companyId, currentRange.from, currentRange.to),
+      previousRange
+        ? repo.findDealsForCompany(companyId, previousRange.from, previousRange.to)
+        : Promise.resolve([]),
       repo.findVendorBidsForCompany(companyId, currentRange.from, currentRange.to),
-      repo.findRecentDeals(companyId, 15),
-      repo.findRecentRequisitions(companyId, 10),
+      repo.findRecentDeals(companyId, 15, currentRange.from, currentRange.to),
+      repo.findRecentRequisitions(companyId, 10, currentRange.from, currentRange.to),
     ]);
 
     const plainCurrent = currentRequisitions.map((r) => r.get({ plain: true }));
@@ -657,13 +661,7 @@ export const getStatsService = async (userId: number, period: Period = '30d') =>
     const savingsDelta = computeDelta(currentSavings, previousSavings, 'percent');
 
     const activeNegotiations = allDeals.filter((d: any) => d.status === 'NEGOTIATING').length;
-    // For previous period active negotiations, we approximate with deals created in previous period
-    const prevActiveCount = previousRange
-      ? allDeals.filter((d: any) => {
-          const created = new Date(d.createdAt);
-          return created >= previousRange.from && created <= previousRange.to && d.status === 'NEGOTIATING';
-        }).length
-      : 0;
+    const prevActiveCount = previousDeals.filter((d: any) => d.status === 'NEGOTIATING').length;
     const activeNegDelta = computeDelta(activeNegotiations, prevActiveCount, 'absolute');
 
     const totalRequisitions = plainCurrent.length;
@@ -712,7 +710,7 @@ export const getStatsService = async (userId: number, period: Period = '30d') =>
     const recentActivity = buildActivityFeed(recentDeals, recentReqs);
 
     // ---- Needs attention ----
-    const needsAttention = await buildNeedsAttention(companyId);
+    const needsAttention = await buildNeedsAttention(companyId, currentRange.from);
 
     return {
       kpis,

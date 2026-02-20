@@ -81,17 +81,23 @@ const repo = {
   },
 
   /**
-   * Find all active (non-archived, non-deleted) ChatbotDeals for a company.
-   * Joins through Requisition -> Project to filter by companyId.
+   * Find active (non-archived, non-deleted) ChatbotDeals for a company.
+   * Optionally filtered by date range on createdAt.
    */
   findDealsForCompany: async (
-    companyId: number
+    companyId: number,
+    fromDate?: Date,
+    toDate?: Date
   ): Promise<ChatbotDeal[]> => {
+    const where: any = {
+      archivedAt: { [Op.is]: null as any },
+      deletedAt: { [Op.is]: null as any },
+    };
+    if (fromDate && toDate) {
+      where.createdAt = { [Op.gte]: fromDate, [Op.lte]: toDate };
+    }
     return models.ChatbotDeal.findAll({
-      where: {
-        archivedAt: { [Op.is]: null as any },
-        deletedAt: { [Op.is]: null as any },
-      },
+      where,
       include: [
         {
           model: models.Requisition,
@@ -159,12 +165,18 @@ const repo = {
    */
   findRecentDeals: async (
     companyId: number,
-    limit: number
+    limit: number,
+    fromDate?: Date,
+    toDate?: Date
   ): Promise<ChatbotDeal[]> => {
+    const where: any = {
+      deletedAt: { [Op.is]: null as any },
+    };
+    if (fromDate && toDate) {
+      where.updatedAt = { [Op.gte]: fromDate, [Op.lte]: toDate };
+    }
     return models.ChatbotDeal.findAll({
-      where: {
-        deletedAt: { [Op.is]: null as any },
-      },
+      where,
       include: [
         {
           model: models.Requisition,
@@ -194,9 +206,16 @@ const repo = {
 
   findRecentRequisitions: async (
     companyId: number,
-    limit: number
+    limit: number,
+    fromDate?: Date,
+    toDate?: Date
   ): Promise<Requisition[]> => {
+    const where: any = {};
+    if (fromDate && toDate) {
+      where.createdAt = { [Op.gte]: fromDate, [Op.lte]: toDate };
+    }
     return models.Requisition.findAll({
+      where,
       include: [
         {
           model: models.Project,
@@ -216,20 +235,24 @@ const repo = {
    */
   findStalledDeals: async (
     companyId: number,
-    staleDays: number
+    staleDays: number,
+    fromDate?: Date
   ): Promise<ChatbotDeal[]> => {
     const staleDate = new Date();
     staleDate.setDate(staleDate.getDate() - staleDays);
 
+    const where: any = {
+      status: 'NEGOTIATING',
+      archivedAt: { [Op.is]: null as any },
+      deletedAt: { [Op.is]: null as any },
+      lastMessageAt: { [Op.lt]: staleDate },
+    };
+    if (fromDate) {
+      where.createdAt = { [Op.gte]: fromDate };
+    }
+
     return models.ChatbotDeal.findAll({
-      where: {
-        status: 'NEGOTIATING',
-        archivedAt: { [Op.is]: null as any },
-        deletedAt: { [Op.is]: null as any },
-        lastMessageAt: {
-          [Op.lt]: staleDate,
-        },
-      },
+      where,
       include: [
         {
           model: models.Requisition,
@@ -261,18 +284,23 @@ const repo = {
    */
   findApproachingDeadlines: async (
     companyId: number,
-    withinDays: number
+    withinDays: number,
+    fromDate?: Date
   ): Promise<ChatbotDeal[]> => {
     const futureDate = new Date();
     futureDate.setDate(futureDate.getDate() + withinDays);
 
+    const where: any = {
+      status: 'NEGOTIATING',
+      archivedAt: { [Op.is]: null as any },
+      deletedAt: { [Op.is]: null as any },
+    };
+    if (fromDate) {
+      where.createdAt = { [Op.gte]: fromDate };
+    }
+
     return models.ChatbotDeal.findAll({
-      where: {
-        status: 'NEGOTIATING',
-        archivedAt: { [Op.is]: null as any },
-        deletedAt: { [Op.is]: null as any },
-        // negotiation_config_json->'deadline' is stored as part of the JSONB field
-      },
+      where,
       include: [
         {
           model: models.Requisition,
@@ -298,14 +326,20 @@ const repo = {
    * Escalated deals.
    */
   findEscalatedDeals: async (
-    companyId: number
+    companyId: number,
+    fromDate?: Date
   ): Promise<ChatbotDeal[]> => {
+    const where: any = {
+      status: 'ESCALATED',
+      archivedAt: { [Op.is]: null as any },
+      deletedAt: { [Op.is]: null as any },
+    };
+    if (fromDate) {
+      where.createdAt = { [Op.gte]: fromDate };
+    }
+
     return models.ChatbotDeal.findAll({
-      where: {
-        status: 'ESCALATED',
-        archivedAt: { [Op.is]: null as any },
-        deletedAt: { [Op.is]: null as any },
-      },
+      where,
       include: [
         {
           model: models.Requisition,
@@ -337,19 +371,25 @@ const repo = {
    */
   findUnresponsiveVendors: async (
     companyId: number,
-    staleDays: number
+    staleDays: number,
+    fromDate?: Date
   ): Promise<Contract[]> => {
     const staleDate = new Date();
     staleDate.setDate(staleDate.getDate() - staleDays);
 
-    return models.Contract.findAll({
-      where: {
-        companyId,
-        status: 'Created',
-        createdAt: {
-          [Op.lt]: staleDate,
-        },
+    const where: any = {
+      companyId,
+      status: 'Created',
+      createdAt: {
+        [Op.lt]: staleDate,
       },
+    };
+    if (fromDate) {
+      where.createdAt = { ...where.createdAt, [Op.gte]: fromDate };
+    }
+
+    return models.Contract.findAll({
+      where,
       include: [
         {
           model: models.User,
