@@ -44,7 +44,7 @@ RUN npm install
 # TARGET: dev — hot-reload with tsx watch
 # =============================================
 # Source code is mounted as a volume at runtime.
-# start.dev.sh handles: migrations → seed → tsx watch
+# start.dev.sh starts tsx watch; server handles migrations + seed internally
 # ---------------------------------------------
 FROM deps AS dev
 
@@ -122,12 +122,10 @@ RUN echo 'const path = require("path");' > /app/.sequelizerc && \
     echo '  migrationsPath: path.resolve(__dirname, "migrations"),' >> /app/.sequelizerc && \
     echo '};' >> /app/.sequelizerc
 
-# Create startup script for migrations + server
+# Create startup script (server handles migrations internally)
 RUN echo '#!/bin/sh' > /app/start.sh && \
     echo 'set -e' >> /app/start.sh && \
-    echo 'echo "Running database migrations..."' >> /app/start.sh && \
-    echo 'npx sequelize-cli db:migrate' >> /app/start.sh && \
-    echo 'echo "Migrations complete. Starting server..."' >> /app/start.sh && \
+    echo 'echo "Starting Accordo server..."' >> /app/start.sh && \
     echo 'exec node dist/index.js' >> /app/start.sh && \
     chmod +x /app/start.sh
 

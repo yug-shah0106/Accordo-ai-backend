@@ -1,6 +1,8 @@
 import { Sequelize, Options } from 'sequelize';
+import { execSync } from 'child_process';
 import pg from 'pg';
 import env from './env.js';
+import logger from './logger.js';
 
 interface SSLConfig {
   ssl?: {
@@ -103,11 +105,29 @@ export const sequelize = new Sequelize(
 
 export const connectDatabase = async (): Promise<void> => {
   await sequelize.authenticate();
-  // Auto-sync models to database (creates tables if they don't exist)
+  logger.info('Database authenticated');
+
+  // Run pending migrations
+  try {
+    logger.info('Running database migrations...');
+    execSync('npx sequelize-cli db:migrate', { stdio: 'inherit' });
+    logger.info('Migrations complete');
+  } catch (error) {
+    logger.error('Migration failed', error);
+    throw error;
+  }
+
+  // Sync models to create any tables not covered by migrations
   await sequelize.sync();
-  // Auto-seed essential data (uses findOrCreate, safe to run multiple times)
-  const { seedAll } = await import('../seeders/index.js');
-  await seedAll();
+
+  // Seed data only in development (or when explicitly forced)
+  if (env.nodeEnv === 'development' || process.env.FORCE_SEED === 'true') {
+    logger.info('Running seed data (development mode)...');
+    const { seedAll } = await import('../seeders/index.js');
+    await seedAll();
+  } else {
+    logger.info(`Skipping seed data (NODE_ENV=${env.nodeEnv})`);
+  }
 };
 
 export default sequelize;
