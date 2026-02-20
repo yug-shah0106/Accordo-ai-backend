@@ -70,31 +70,108 @@ npm run lint             # ESLint
 
 ## Docker
 
+The project uses a **single `Dockerfile`** with multi-stage build targets (`dev` and `prod`) and a **single `docker-compose.yml`** with Docker Compose profiles to switch between environments.
+
+### Development Mode
+
+Development mode runs `tsx watch` with volume-mounted source code for hot-reload. Changes you make on the host are reflected inside the container immediately. The startup script (`start.dev.sh`) automatically runs migrations, seeds the database, and starts the dev server.
+
 ```bash
-# Build and start (backend + PostgreSQL)
-docker compose up -d --build
+# Build and start (backend + PostgreSQL) in dev mode
+docker compose --profile dev up -d --build
 
-# Production with custom environment
-docker compose -f docker-compose.prod.yml up -d --build
+# Follow backend logs
+docker compose --profile dev logs -f backend
 
-# View logs
-docker compose logs -f
+# Rebuild after dependency changes (package.json)
+docker compose --profile dev up -d --build
 
 # Stop
-docker compose down
+docker compose --profile dev down
 
-# Stop and remove data
-docker compose down -v
+# Stop and remove all data (volumes)
+docker compose --profile dev down -v
+```
+
+### Production Mode
+
+Production mode compiles TypeScript, prunes dev dependencies, and runs the optimized `node dist/index.js` server. Resource limits and JSON log rotation are applied.
+
+```bash
+# Set required environment variables
+export DB_PASSWORD=your-secure-password
+export JWT_SECRET=your-jwt-secret
+export JWT_ACCESS_TOKEN_SECRET=your-access-secret
+export JWT_REFRESH_TOKEN_SECRET=your-refresh-secret
+
+# Build and start in production mode
+docker compose --profile prod up -d --build
+
+# Follow logs
+docker compose --profile prod logs -f backend-prod
+
+# Stop
+docker compose --profile prod down
+```
+
+### Building Images Directly
+
+You can also build Docker images without Compose:
+
+```bash
+# Build dev image
+docker build --target dev -t accordo-backend:dev .
+
+# Build production image
+docker build --target prod -t accordo-backend:prod .
+```
+
+### Docker Architecture
+
+The `Dockerfile` uses multi-stage builds with two targets:
+
+```
+┌─────────────────────────────────────────────────┐
+│  Stage: deps (shared)                           │
+│  node:20-alpine + native build tools + npm install │
+├──────────────────────┬──────────────────────────┤
+│  Target: dev         │  Stage: builder          │
+│  tsx watch           │  npm run build            │
+│  Volume-mounted src  │  npm prune --production   │
+│  start.dev.sh        │         │                │
+│  (migrations + seed  │  Target: prod            │
+│   + dev server)      │  node dist/index.js       │
+│                      │  start.sh (migrations)   │
+└──────────────────────┴──────────────────────────┘
 ```
 
 ### Docker Features
 
-- Multi-stage build (deps → builder → production)
-- Automatic database migrations on startup
+- **Unified Dockerfile** with `dev` and `prod` targets — no separate Dockerfile.dev
+- **Docker Compose profiles** — `--profile dev` or `--profile prod` in a single compose file
+- Multi-stage build optimized for layer caching
+- Automatic database migrations on startup (both modes)
+- Auto-seeding in dev mode via `start.dev.sh`
 - Health checks for both backend and PostgreSQL
 - Alpine-based images for minimal footprint
 - Native module support (cairo, pango) for PDF generation
-- Resource limits and logging configuration
+- Resource limits and JSON log rotation (production)
+- Volume-mounted source code with hot-reload (development)
+
+### Docker Environment Variables
+
+| Variable | Dev Default | Prod | Description |
+|----------|-------------|------|-------------|
+| `DB_PASSWORD` | `postgres` | **Required** | PostgreSQL password |
+| `DB_NAME` | `accordo` | `accordo` | Database name |
+| `DB_USERNAME` | `postgres` | `postgres` | Database user |
+| `DB_PORT` | `5432` | `5432` | PostgreSQL host port |
+| `JWT_SECRET` | `change-me-in-development` | **Required** | JWT signing secret |
+| `JWT_ACCESS_TOKEN_SECRET` | `change-me-access-secret` | **Required** | Access token secret |
+| `JWT_REFRESH_TOKEN_SECRET` | `change-me-refresh-secret` | **Required** | Refresh token secret |
+| `LLM_BASE_URL` | `http://host.docker.internal:11434` | same | Ollama endpoint |
+| `LLM_MODEL` | `qwen3` | `qwen3` | LLM model |
+| `PORT` | `5002` | `5002` | API server port |
 
 ## Architecture
 
