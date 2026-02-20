@@ -1,6 +1,17 @@
 # =============================================
-# Accordo Backend - Docker Compose
-# Express.js API with PostgreSQL
+# Accordo Backend - Docker Compose (Development)
+# Express.js API with PostgreSQL + hot-reload
+# =============================================
+#
+# Usage:
+#   docker compose up -d --build      # Build and start
+#   docker compose logs -f backend    # Follow backend logs
+#   docker compose down               # Stop
+#   docker compose down -v            # Stop and remove volumes
+#
+# The backend runs tsx watch with volume mounts so code
+# changes on the host are reflected immediately inside
+# the container (hot-reload).
 # =============================================
 
 services:
@@ -13,7 +24,7 @@ services:
       POSTGRES_USER: ${DB_USERNAME:-postgres}
       POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
     ports:
-      - "${DB_PORT:-5432}:5432"
+      - "${DB_PORT:-5433}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -23,29 +34,29 @@ services:
       retries: 5
     restart: unless-stopped
 
-  # Backend API
+  # Backend API (development — tsx watch with hot-reload)
   backend:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.dev
     container_name: accordo-backend
     environment:
-      NODE_ENV: ${NODE_ENV:-production}
-      PORT: ${PORT:-5002}
-      # Database
+      NODE_ENV: development
+      PORT: 5002
+      # Database (points to the postgres service above)
       DB_HOST: postgres
       DB_PORT: 5432
       DB_NAME: ${DB_NAME:-accordo}
       DB_USERNAME: ${DB_USERNAME:-postgres}
       DB_PASSWORD: ${DB_PASSWORD:-postgres}
-      DB_SSL: ${DB_SSL:-false}
+      DB_SSL: "false"
       # JWT
-      JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
+      JWT_SECRET: ${JWT_SECRET:-change-me-in-development}
       JWT_ACCESS_TOKEN_SECRET: ${JWT_ACCESS_TOKEN_SECRET:-change-me-access-secret}
       JWT_REFRESH_TOKEN_SECRET: ${JWT_REFRESH_TOKEN_SECRET:-change-me-refresh-secret}
       JWT_ACCESS_EXPIRY: ${JWT_ACCESS_EXPIRY:-1h}
       JWT_REFRESH_EXPIRY: ${JWT_REFRESH_EXPIRY:-7d}
-      # URLs
+      # URLs (host.docker.internal lets frontend on the host reach this container)
       VENDOR_PORTAL_URL: ${VENDOR_PORTAL_URL:-http://localhost:5001/vendor}
       CHATBOT_FRONTEND_URL: ${CHATBOT_FRONTEND_URL:-http://localhost:5001}
       CHATBOT_API_URL: ${CHATBOT_API_URL:-http://localhost:5002/api}
@@ -56,17 +67,28 @@ services:
       SMTP_USER: ${SMTP_USER:-}
       SMTP_PASS: ${SMTP_PASS:-}
       SMTP_FROM_EMAIL: ${SMTP_FROM_EMAIL:-}
-      # LLM (optional — defaults to Ollama on the host)
+      # LLM (Ollama on the host machine)
       LLM_BASE_URL: ${LLM_BASE_URL:-http://host.docker.internal:11434}
       LLM_MODEL: ${LLM_MODEL:-qwen3}
       LLM_TIMEOUT: ${LLM_TIMEOUT:-60000}
-      # Embedding (optional — local by default, no external service needed)
+      # Embedding
       EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-local}
     ports:
-      - "${PORT:-5002}:5002"
+      - "5002:5002"
     volumes:
+      # Mount source code for hot-reload (tsx watch detects changes)
+      - ./src:/app/src
+      - ./scripts:/app/scripts
+      - ./migrations:/app/migrations
+      - ./sequelize.config.cjs:/app/sequelize.config.cjs
+      - ./.sequelizerc:/app/.sequelizerc
+      - ./tsconfig.json:/app/tsconfig.json
+      - ./start.dev.sh:/app/start.dev.sh
+      # Persist uploads and logs
       - uploads_data:/app/uploads
       - logs_data:/app/logs
+      # Prevent host node_modules from overriding container's
+      - /app/node_modules
     depends_on:
       postgres:
         condition: service_healthy
@@ -74,28 +96,11 @@ services:
       test: ["CMD", "curl", "-f", "http://localhost:5002/api/health"]
       interval: 30s
       timeout: 10s
-      start_period: 40s
-      retries: 3
+      start_period: 60s
+      retries: 5
     restart: unless-stopped
 
 volumes:
   postgres_data:
   uploads_data:
   logs_data:
-
-# Usage:
-# ------
-# Build and start:
-#   docker compose up -d --build
-#
-# With custom environment:
-#   DB_PASSWORD=mysecret JWT_SECRET=myjwtsecret docker compose up -d --build
-#
-# View logs:
-#   docker compose logs -f
-#
-# Stop:
-#   docker compose down
-#
-# Stop and remove volumes:
-#   docker compose down -v

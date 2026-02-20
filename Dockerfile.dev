@@ -1,0 +1,39 @@
+# =============================================
+# Accordo Backend - Development Dockerfile
+# Runs tsx watch with hot-reload (mirrors local dev)
+# =============================================
+
+FROM node:20-alpine
+
+# Install build dependencies for native modules (bcrypt, canvas, etc.)
+RUN apk add --no-cache \
+    python3 \
+    make \
+    g++ \
+    cairo-dev \
+    pango-dev \
+    jpeg-dev \
+    giflib-dev \
+    librsvg-dev \
+    pixman-dev \
+    curl
+
+WORKDIR /app
+
+# Copy package files and install ALL dependencies (including devDependencies)
+COPY package*.json ./
+RUN npm install
+
+# Source code is mounted as a volume — not copied during build.
+# This enables hot-reload with tsx watch.
+
+ENV NODE_ENV=development
+ENV PORT=5002
+
+EXPOSE 5002
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=5 \
+    CMD curl -f http://localhost:5002/api/health || exit 1
+
+# start.dev.sh handles: migrations → seed → tsx watch
+CMD ["/app/start.dev.sh"]
