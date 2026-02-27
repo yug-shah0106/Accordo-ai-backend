@@ -73,6 +73,14 @@ export interface NegotiationIntent {
   allowedDelivery?: string;
 
   /**
+   * The primary parameter with the lowest utility score for COUNTER responses.
+   * Only 'price', 'terms', or 'delivery' — NEVER 'warranty' or 'quality'.
+   * Used to help the LLM address the weakest negotiation dimension naturally.
+   * Absent for non-COUNTER actions or when primary params are all strong.
+   */
+  weakestPrimaryParameter?: 'price' | 'terms' | 'delivery';
+
+  /**
    * MESO offer variants, passed through unchanged from the engine.
    * The LLM may only present these — never modify or invent them.
    */
@@ -218,6 +226,12 @@ export interface BuildIntentInput {
   targetPrice?: number;
   /** PM's maximum acceptable price — used to validate allowedPrice boundary */
   maxAcceptablePrice?: number;
+  /**
+   * The primary negotiation parameter with the lowest utility, for COUNTER responses only.
+   * Only 'price', 'terms', or 'delivery' — warranty/quality are NEVER surfaced to vendor.
+   * Computed in conversationService from parameterUtilities before calling buildNegotiationIntent.
+   */
+  weakestPrimaryParameter?: 'price' | 'terms' | 'delivery';
 }
 
 /**
@@ -238,6 +252,7 @@ export function buildNegotiationIntent(input: BuildIntentInput): NegotiationInte
     mesoOffers,
     targetPrice,
     maxAcceptablePrice,
+    weakestPrimaryParameter,
   } = input;
 
   // Determine if this is a MESO action (overrides base action when variants present)
@@ -255,7 +270,7 @@ export function buildNegotiationIntent(input: BuildIntentInput): NegotiationInte
     vendorTone: tone,
   };
 
-  // Only COUNTER gets pricing fields
+  // Only COUNTER gets pricing fields and weakest parameter signal
   if (finalAction === 'COUNTER' && counterPrice != null) {
     intent.allowedPrice = resolveAllowedPrice(counterPrice, targetPrice, maxAcceptablePrice);
     if (counterPaymentTerms) {
@@ -263,6 +278,11 @@ export function buildNegotiationIntent(input: BuildIntentInput): NegotiationInte
     }
     if (counterDelivery) {
       intent.allowedDelivery = counterDelivery;
+    }
+    // Pass weakest primary parameter only for COUNTER — helps LLM focus the response.
+    // Only 'price', 'terms', 'delivery' can appear here — warranty/quality are never surfaced.
+    if (weakestPrimaryParameter) {
+      intent.weakestPrimaryParameter = weakestPrimaryParameter;
     }
   }
 

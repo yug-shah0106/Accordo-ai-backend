@@ -814,23 +814,32 @@ export function calculateWeightedUtilityFromResolved(
     totalWeight += weights.targetUnitPrice;
   }
 
-  // Max Price Utility (penalty for exceeding)
-  if (weights.maxAcceptablePrice > 0 && vendorOffer.total_price != null) {
-    const maxPriceUtility = vendorOffer.total_price <= resolvedConfig.maxAcceptablePrice ? 1 : 0;
-    const contribution = maxPriceUtility * (weights.maxAcceptablePrice / 100);
-    parameterUtilities['maxAcceptablePrice'] = {
-      parameterId: 'maxAcceptablePrice',
-      parameterName: 'Max Acceptable Price',
-      utility: maxPriceUtility,
-      weight: weights.maxAcceptablePrice,
-      contribution,
-      currentValue: vendorOffer.total_price,
-      targetValue: resolvedConfig.maxAcceptablePrice,
-      status: getStatusFromScore(maxPriceUtility),
-      color: getColorFromScore(maxPriceUtility),
-    };
-    totalUtility += contribution;
-    totalWeight += weights.maxAcceptablePrice;
+  // Payment Terms Utility (longer terms = better for buyer)
+  // Only scored when vendor explicitly provides payment terms in their offer
+  if (weights.paymentTerms > 0 && vendorOffer.payment_terms != null) {
+    const vendorDays = vendorOffer.payment_terms_days
+      ?? (vendorOffer.payment_terms ? parseInt(vendorOffer.payment_terms.replace(/\D/g, ''), 10) || null : null);
+    if (vendorDays != null) {
+      const termsUtilityScore = calculatePaymentTermsUtility(
+        vendorDays,
+        resolvedConfig.paymentTermsMinDays,
+        resolvedConfig.paymentTermsMaxDays
+      );
+      const contribution = termsUtilityScore * (weights.paymentTerms / 100);
+      parameterUtilities['paymentTerms'] = {
+        parameterId: 'paymentTerms',
+        parameterName: 'Payment Terms',
+        utility: termsUtilityScore,
+        weight: weights.paymentTerms,
+        contribution,
+        currentValue: vendorOffer.payment_terms,
+        targetValue: `Net ${resolvedConfig.paymentTermsMaxDays}`,
+        status: getStatusFromScore(termsUtilityScore),
+        color: getColorFromScore(termsUtilityScore),
+      };
+      totalUtility += contribution;
+      totalWeight += weights.paymentTerms;
+    }
   }
 
   // ============================================
@@ -838,13 +847,26 @@ export function calculateWeightedUtilityFromResolved(
   // ============================================
 
   // Delivery Date Utility
+  // Only scored when vendor explicitly provides delivery info in their offer
   if (weights.deliveryDate > 0 && vendorOffer.delivery_days != null && resolvedConfig.deliveryDate) {
-    const targetDays = Math.ceil(
+    const requiredDays = Math.ceil(
       (resolvedConfig.deliveryDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24)
     );
-    const deliveryUtility = vendorOffer.delivery_days <= targetDays
+    // Derive tolerance from preferredDeliveryDate vs requiredDeliveryDate gap.
+    // preferredDate is always set (mandatory in wizard); difference gives natural tolerance.
+    const toleranceDays = resolvedConfig.preferredDeliveryDate && resolvedConfig.deliveryDate
+      ? Math.max(
+          7, // minimum 7-day tolerance
+          Math.ceil(
+            Math.abs(
+              resolvedConfig.preferredDeliveryDate.getTime() - resolvedConfig.deliveryDate.getTime()
+            ) / (1000 * 60 * 60 * 24)
+          )
+        )
+      : 30; // fallback only if preferredDate unexpectedly absent
+    const deliveryUtility = vendorOffer.delivery_days <= requiredDays
       ? 1
-      : Math.max(0, 1 - (vendorOffer.delivery_days - targetDays) / 30);
+      : Math.max(0, 1 - (vendorOffer.delivery_days - requiredDays) / toleranceDays);
     const contribution = deliveryUtility * (weights.deliveryDate / 100);
     parameterUtilities['deliveryDate'] = {
       parameterId: 'deliveryDate',
@@ -853,7 +875,7 @@ export function calculateWeightedUtilityFromResolved(
       weight: weights.deliveryDate,
       contribution,
       currentValue: vendorOffer.delivery_days,
-      targetValue: targetDays,
+      targetValue: requiredDays,
       status: getStatusFromScore(deliveryUtility),
       color: getColorFromScore(deliveryUtility),
     };
@@ -888,29 +910,37 @@ export function calculateWeightedUtilityFromResolved(
   }
 
   // Quality Standards Utility
+  // Only scored when:
+  // 1. qualityStandards weight is configured
+  // 2. Required certifications are actually specified in config (non-empty)
+  // 3. Vendor explicitly mentioned certifications in their offer
+  // Rationale: if no certs required, quality isn't a negotiation dimension; exclude from total weight
   if (weights.qualityStandards > 0 && vendorOffer.quality_certifications) {
     const requiredCerts = resolvedConfig.qualityStandards ?? [];
     const offeredCerts = vendorOffer.quality_certifications ?? [];
-    const matchCount = requiredCerts.length > 0 && offeredCerts.length > 0
-      ? requiredCerts.filter((c) =>
-          offeredCerts.some((o) => o.toLowerCase().includes(c.toLowerCase()))
-        ).length
-      : 0;
-    const qualityUtility = requiredCerts.length > 0 ? matchCount / requiredCerts.length : 1;
-    const contribution = qualityUtility * (weights.qualityStandards / 100);
-    parameterUtilities['qualityStandards'] = {
-      parameterId: 'qualityStandards',
-      parameterName: 'Quality Standards',
-      utility: qualityUtility,
-      weight: weights.qualityStandards,
-      contribution,
-      currentValue: offeredCerts.join(', '),
-      targetValue: requiredCerts.join(', '),
-      status: getStatusFromScore(qualityUtility),
-      color: getColorFromScore(qualityUtility),
-    };
-    totalUtility += contribution;
-    totalWeight += weights.qualityStandards;
+    // Skip entirely when no certs are configured — avoids phantom 100% score inflating utility
+    if (requiredCerts.length > 0) {
+      const matchCount = offeredCerts.length > 0
+        ? requiredCerts.filter((c) =>
+            offeredCerts.some((o) => o.toLowerCase().includes(c.toLowerCase()))
+          ).length
+        : 0;
+      const qualityUtility = matchCount / requiredCerts.length;
+      const contribution = qualityUtility * (weights.qualityStandards / 100);
+      parameterUtilities['qualityStandards'] = {
+        parameterId: 'qualityStandards',
+        parameterName: 'Quality Standards',
+        utility: qualityUtility,
+        weight: weights.qualityStandards,
+        contribution,
+        currentValue: offeredCerts.join(', '),
+        targetValue: requiredCerts.join(', '),
+        status: getStatusFromScore(qualityUtility),
+        color: getColorFromScore(qualityUtility),
+      };
+      totalUtility += contribution;
+      totalWeight += weights.qualityStandards;
+    }
   }
 
   // ============================================

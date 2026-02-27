@@ -4326,6 +4326,7 @@ export interface RequisitionForNegotiation {
   projectName: string;
   status: string;
   estimatedValue: number;  // Frontend expects this name
+  currency: string;        // Currency code for estimatedValue (e.g. "USD", "INR")
   negotiationClosureDate: string | null;
   createdAt: string;
   vendorCount: number;
@@ -4431,6 +4432,7 @@ export const getRequisitionsForNegotiationService = async (): Promise<{
         projectName: (req as any).Project?.projectName || 'Unknown Project',
         status: req.status || 'Open',
         estimatedValue: (req.totalPrice as number) || (req.totalEstimatedAmount as number) || 0,
+        currency: (req.typeOfCurrency as string) || 'USD',
         negotiationClosureDate: req.negotiationClosureDate?.toISOString() || null,
         createdAt: req.createdAt.toISOString(),
         vendorCount: Array.isArray(contracts) ? contracts.length : 1,
@@ -4544,6 +4546,9 @@ export const getRequisitionVendorsService = async (
     for (const contract of contracts) {
       const vendor = (contract as any).Vendor;
       if (!vendor) continue;
+
+      // Skip if this vendor was already added (multiple contracts per vendor on same RFQ)
+      if (processedVendorIds.has(vendor.id)) continue;
 
       processedVendorIds.add(vendor.id);
 

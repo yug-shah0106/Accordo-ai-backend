@@ -661,14 +661,15 @@ export const ACCORDO_DEFAULTS = {
 /**
  * Accordo default WEIGHTS from Step 4 of the Deal Wizard
  * Used when user keeps AI-suggested weights (aiSuggested = true)
- * Updated Feb 2026: Simplified to 7 core utility parameters
- * Removed: paymentTermsRange, partialDelivery, lateDeliveryPenalty, maxRounds, walkawayThreshold
+ * Updated Feb 2026: Simplified to 5 core utility parameters
+ * Primary (70-85%): targetUnitPrice(40) + paymentTerms(25) + deliveryDate(20)
+ * Secondary (15-20%): warrantyPeriod(10) + qualityStandards(5)
  */
 export const DEFAULT_WEIGHTS = {
   targetUnitPrice: 40,
-  maxAcceptablePrice: 25,
-  deliveryDate: 15,
-  warrantyPeriod: 15,
+  paymentTerms: 25,
+  deliveryDate: 20,
+  warrantyPeriod: 10,
   qualityStandards: 5,
 } as const;
 

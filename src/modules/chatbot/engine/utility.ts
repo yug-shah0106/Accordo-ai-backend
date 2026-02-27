@@ -65,16 +65,17 @@ export function priceUtility(config: NegotiationConfig, price: number) {
 /**
  * Calculate utility for payment terms
  * UPDATED January 2026: Now supports any "Net X" format with interpolation
+ * FIXED February 2026: Corrected direction — longer terms = BETTER for buyer (pays later)
  *
- * Standard terms use configured utility values:
- * - Net 30: 1.0 (best for buyer - shorter payment time)
- * - Net 60: 0.7
- * - Net 90: 0.5 (worst for buyer - longer payment time)
+ * Canonical utility values (buyer perspective: longer = better):
+ * - Net 30: 0.2 (worst for buyer — must pay quickly)
+ * - Net 60: 0.6
+ * - Net 90: 1.0 (best for buyer — maximum payment deferral)
  *
  * Non-standard terms are interpolated based on days:
- * - Net 45: interpolated between Net 30 (1.0) and Net 60 (0.7) = 0.85
- * - Net 21: extrapolated above Net 30 = ~1.0 (capped)
- * - Net 75: interpolated between Net 60 (0.7) and Net 90 (0.5) = 0.6
+ * - Net 45: interpolated between Net 30 (0.2) and Net 60 (0.6) = 0.4
+ * - Net 75: interpolated between Net 60 (0.6) and Net 90 (1.0) = 0.8
+ * - Net 21: extrapolated below Net 30 → ~0.0 (floored at 0)
  *
  * @param config - Negotiation configuration
  * @param terms - Payment terms string (e.g., "Net 45") or days number
@@ -85,8 +86,22 @@ export function termsUtility(
 ): number {
   if (terms === null || terms === undefined) return 0;
 
-  // If standard term string, use configured utility
-  const utils = config.parameters.payment_terms.utility;
+  // Canonical utility mapping (longer = better for buyer)
+  const canonicalUtils: Record<string, number> = {
+    'Net 30': 0.2,
+    'Net 60': 0.6,
+    'Net 90': 1.0,
+  };
+
+  // If a configured utility is present and different from canonical, use configured
+  const configUtils = config.parameters.payment_terms.utility;
+
+  // Use configured values IF they follow the correct direction (longer = higher)
+  // Otherwise fall back to canonical
+  const utils = configUtils['Net 30'] <= configUtils['Net 90']
+    ? configUtils   // correct direction — use configured
+    : canonicalUtils; // inverted config — use canonical
+
   if (typeof terms === 'string' && terms in utils) {
     return utils[terms as keyof typeof utils];
   }
@@ -95,12 +110,11 @@ export function termsUtility(
   const days = typeof terms === 'number' ? terms : extractPaymentDays(terms);
   if (days === null || days < 1 || days > 120) return 0;
 
-  // Reference points for interpolation
-  // Shorter payment time = better for buyer = higher utility
+  // Reference points for interpolation (longer = better for buyer)
   const points = [
-    { days: 30, utility: utils['Net 30'] },  // 1.0
-    { days: 60, utility: utils['Net 60'] },  // 0.7
-    { days: 90, utility: utils['Net 90'] },  // 0.5
+    { days: 30, utility: utils['Net 30'] ?? 0.2 },  // 0.2
+    { days: 60, utility: utils['Net 60'] ?? 0.6 },  // 0.6
+    { days: 90, utility: utils['Net 90'] ?? 1.0 },  // 1.0
   ];
 
   // If exactly matches a standard point
@@ -110,20 +124,20 @@ export function termsUtility(
 
   // Interpolate/extrapolate based on days
   if (days < 30) {
-    // Better than Net 30 - cap at 1.0
-    return Math.min(1.0, points[0].utility + (30 - days) * 0.01);
+    // Worse than Net 30 for buyer — extrapolate down, floor at 0
+    const ratio = days / 30;
+    return Math.max(0, points[0].utility * ratio);
   } else if (days < 60) {
     // Between Net 30 and Net 60
     const ratio = (days - 30) / (60 - 30);
-    return points[0].utility - ratio * (points[0].utility - points[1].utility);
+    return points[0].utility + ratio * (points[1].utility - points[0].utility);
   } else if (days < 90) {
     // Between Net 60 and Net 90
     const ratio = (days - 60) / (90 - 60);
-    return points[1].utility - ratio * (points[1].utility - points[2].utility);
+    return points[1].utility + ratio * (points[2].utility - points[1].utility);
   } else {
-    // Worse than Net 90 - continue linear decline but floor at 0.1
-    const decline = (days - 90) * 0.01;
-    return Math.max(0.1, points[2].utility - decline);
+    // Better than Net 90 for buyer — cap at 1.0
+    return Math.min(1.0, points[2].utility + (days - 90) * 0.004);
   }
 }
 

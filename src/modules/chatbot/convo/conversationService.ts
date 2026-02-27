@@ -22,10 +22,11 @@ import logger from '../../../config/logger.js';
 import models from '../../../models/index.js';
 import { parseOfferRegex } from '../engine/parseOffer.js';
 import { decideNextMove } from '../engine/decide.js';
-import { computeExplainability, totalUtility } from '../engine/utility.js';
+import { computeExplainability } from '../engine/utility.js';
+import { resolveNegotiationConfig, calculateWeightedUtilityFromResolved } from '../engine/weightedUtility.js';
 import { buildConfigFromRequisition } from '../chatbot.service.js';
 import type { NegotiationConfig } from '../engine/utility.js';
-import type { Offer, Decision, Explainability } from '../engine/types.js';
+import type { Offer, Decision, Explainability, ExtendedOffer } from '../engine/types.js';
 import type { ChatbotDeal } from '../../../models/chatbotDeal.js';
 import type { ChatbotMessage } from '../../../models/chatbotMessage.js';
 import type {
@@ -252,10 +253,57 @@ export async function processConversationMessage(
     // 7. Get decision from engine (if we have a complete offer)
     let decision: Decision;
     let explainability: Explainability | null = null;
+    let weakestPrimaryParameter: 'price' | 'terms' | 'delivery' | undefined;
 
     if (vendorOffer.total_price !== null && vendorOffer.payment_terms !== null) {
       decision = decideNextMove(config, vendorOffer, deal.round + 1);
       explainability = computeExplainability(config, vendorOffer, decision);
+
+      // Compute weakestPrimaryParameter using 5-param weighted utility
+      // Only computed for COUNTER decisions — no need for terminal actions
+      if (decision.action === 'COUNTER') {
+        try {
+          const wizardConfig = (deal.negotiationConfigJson as any)?.wizardConfig;
+          const resolvedConfig = resolveNegotiationConfig(wizardConfig, {
+            total_price: config.parameters.total_price,
+            accept_threshold: config.accept_threshold,
+            escalate_threshold: config.escalate_threshold,
+            walkaway_threshold: config.walkaway_threshold,
+            max_rounds: config.max_rounds,
+            priority: config.priority,
+          });
+          const extendedOffer: ExtendedOffer = {
+            total_price: vendorOffer.total_price,
+            payment_terms: vendorOffer.payment_terms,
+            payment_terms_days: vendorOffer.payment_terms_days ?? null,
+            delivery_date: vendorOffer.delivery_date ?? null,
+            delivery_days: vendorOffer.delivery_days ?? null,
+          };
+          const utilityResult = calculateWeightedUtilityFromResolved(extendedOffer, resolvedConfig);
+          const paramUtils = utilityResult.parameterUtilities;
+
+          // Identify weakest AMONG primary params only (price, terms, delivery)
+          // Warranty and quality are NEVER surfaced to vendor
+          const primaryParams: Array<{ key: string; label: 'price' | 'terms' | 'delivery' }> = [
+            { key: 'targetUnitPrice', label: 'price' },
+            { key: 'paymentTerms', label: 'terms' },
+            { key: 'deliveryDate', label: 'delivery' },
+          ];
+          // Only consider params that were actually scored (vendor mentioned them)
+          const scoredPrimary = primaryParams.filter(p => paramUtils[p.key] !== undefined);
+          if (scoredPrimary.length > 0) {
+            const weakest = scoredPrimary.reduce((min, p) =>
+              (paramUtils[p.key]?.utility ?? 1) < (paramUtils[min.key]?.utility ?? 1) ? p : min
+            );
+            // Only set if utility is below 0.7 (actually weak, not just slightly lower)
+            if ((paramUtils[weakest.key]?.utility ?? 1) < 0.7) {
+              weakestPrimaryParameter = weakest.label;
+            }
+          }
+        } catch {
+          // Non-critical — if resolution fails, proceed without weakestPrimaryParameter
+        }
+      }
     } else {
       // No complete offer, ask for clarification
       decision = {
@@ -317,6 +365,7 @@ export async function processConversationMessage(
       tone: toneResult.primaryTone,
       targetPrice,
       maxAcceptablePrice,
+      weakestPrimaryParameter,
     });
 
     // 13. Get non-commercial context for persona (safe to pass to LLM)
