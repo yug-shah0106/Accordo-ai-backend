@@ -38,3 +38,7 @@ yarn.lock
 
 CLAUDE.md
 .claude/
+
+# OpenMemory - IDE/Assistant specific rules
+.cursor/rules/openmemory.mdc
+openmemory.md
